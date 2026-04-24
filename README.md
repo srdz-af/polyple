@@ -9,15 +9,7 @@ Live demo:
 
 https://srdz-af.github.io/nd-viewer/
 
-## Why I built it
-
-I wanted a tool that makes high-dimensional geometry easier to explore.
-
-Most geometry viewers stop at 3D. This project keeps the object data in N dimensions, then projects it into 3D for interaction. That means you can rotate, move, edit, and inspect objects that live beyond the visible space.
-
-The goal was to build the full interaction system myself instead of only rendering static shapes.
-
-## What it does
+## Usage
 
 ND-Viewer supports:
 
@@ -172,54 +164,3 @@ Snapshots include:
 5. Object position.
 6. Object rotation.
 7. Object scale.
-
-The history has a fixed size to avoid unbounded memory growth.
-
-## Engineering notes
-
-This project is more than a Three.js scene.
-
-The hard parts were:
-
-1. Keeping N-dimensional data separate from the 3D view.
-2. Mapping 2D mouse interaction back into projected N-dimensional coordinates.
-3. Supporting object and vertex transforms without corrupting geometry.
-4. Recomputing projected edges and faces after edits.
-5. Keeping the UI state, selected object, selected vertex, and projection state consistent.
-6. Designing JSON import rules that support both generated and external geometry.
-7. Making undo and redo work across object-level and data-level changes.
-
-The viewer favors explicit geometry logic over hidden library behavior. That made the system easier to reason about and easier to extend.
-
-## Current status
-
-The project currently supports:
-
-1. N-dimensional primitive creation.
-2. Object selection.
-3. Vertex selection.
-4. Canonical projection.
-5. PCA projection.
-6. Object movement, rotation, and scaling.
-7. W rotation for higher-dimensional movement.
-8. Vertex movement.
-9. JSON import and export.
-10. Undo and redo.
-11. Wireframe, transparent, and solid rendering modes.
-
-## Future work
-
-I would improve the project by adding:
-
-1. More polytope types.
-2. Better face reconstruction for imported data.
-3. Saved scenes.
-4. Benchmarking for larger objects.
-5. More precise snapping and transform constraints.
-6. A small test suite for projection and JSON parsing.
-7. Export support for rendered images.
-8. Better mobile controls.
-
-## GitHub repo description
-
-Interactive N-dimensional geometry viewer with Three.js, canonical and PCA projection, N-D transforms, vertex editing, and JSON import/export.
