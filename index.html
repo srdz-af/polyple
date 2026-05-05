@@ -695,13 +695,26 @@
         right: 68px;
         bottom: 12px;
         z-index: 20;
-        font: 12px/1.2 system-ui,sans-serif;
-        color: var(--ui-text);
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
         background: var(--ui-bg);
-        padding: 6px 8px;
-        border-radius: 5px;
+        border-radius: 50%;
         text-decoration: none;
         border: 1px solid var(--ui-border);
+        box-shadow: var(--ui-shadow);
+        transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+      }
+      #github-link:hover {
+        background: var(--ui-bg-hover);
+        border-color: var(--ui-border);
+        transform: translateY(-1px);
+      }
+      #github-link img {
+        display: block;
+        width: 20px;
+        height: 20px;
       }
       @media (max-width: 920px) {
         #top-left-controls {
@@ -963,8 +976,10 @@
       href="https://github.com/srdz-af/BleND"
       target="_blank"
       rel="noopener noreferrer"
+      aria-label="GitHub repository"
+      title="GitHub repository"
     >
-      View code on GitHub
+      <img src="./github-white-icon.webp" alt="GitHub" />
     </a>
     <script type="module" src="/src/main.ts"></script>
   </body>
