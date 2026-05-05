@@ -15,9 +15,6 @@ It lets you create, inspect, transform, and edit high-dimensional objects, then 
 Live demo:
 https://srdz-af.github.io/BleND/
 
-Repository:
-https://github.com/srdz-af/BleND
-
 ## What It Supports
 
 - N-dimensional primitives (3D to 8D)
