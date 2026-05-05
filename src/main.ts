@@ -31,6 +31,7 @@ const editModeToggle = document.getElementById('edit-mode-toggle') as HTMLButton
 const transformMoveButton = document.getElementById('transform-move-button') as HTMLButtonElement | null;
 const transformRotateButton = document.getElementById('transform-rotate-button') as HTMLButtonElement | null;
 const transformScaleButton = document.getElementById('transform-scale-button') as HTMLButtonElement | null;
+const paneToggleButton = document.getElementById('pane-toggle') as HTMLButtonElement | null;
 const dimensionControl = document.getElementById('dimension-control') as HTMLDivElement | null;
 const dimensionValue = document.getElementById('dimension-value') as HTMLOutputElement | null;
 const dimensionDownButton = document.getElementById('dimension-down') as HTMLButtonElement | null;
@@ -79,9 +80,10 @@ type AxisGizmoPart = {
   line: SVGLineElement;
 };
 const axisGizmoParts: AxisGizmoPart[] = [];
-const axisGizmoCenter = 43;
+const GIZMO_VIEWBOX_SIZE = 86;
+const axisGizmoCenter = GIZMO_VIEWBOX_SIZE * 0.5;
 const axisGizmoRadius = 28;
-const wGizmoCenter = 43;
+const wGizmoCenter = GIZMO_VIEWBOX_SIZE * 0.5;
 const wGizmoRadius = 28;
 let wGizmoAngle = -Math.PI / 4;
 const axisGizmoDrag = {
@@ -338,6 +340,9 @@ function orbitCameraFromGizmo(dx: number, dy: number) {
 function updateAxisGizmo() {
   if (!axisGizmoParts.length) return;
 
+  const axisButtonScale = axisGizmoEl
+    ? (axisGizmoEl.clientWidth || GIZMO_VIEWBOX_SIZE) / GIZMO_VIEWBOX_SIZE
+    : 1;
   const inverseCamera = camera.quaternion.clone().invert();
   const activeDims = [PARAMS.axesX, PARAMS.axesY, PARAMS.axesZ];
   for (const part of axisGizmoParts) {
@@ -357,8 +362,8 @@ function updateAxisGizmo() {
     const y = axisGizmoCenter - viewVector.y * axisGizmoRadius;
     const isBack = viewVector.z > 0;
 
-    part.button.style.left = `${x}px`;
-    part.button.style.top = `${y}px`;
+    part.button.style.left = `${x * axisButtonScale}px`;
+    part.button.style.top = `${y * axisButtonScale}px`;
     part.button.style.zIndex = `${Math.round((1 - viewVector.z) * 100)}`;
     part.button.classList.toggle('back', isBack);
 
@@ -375,6 +380,7 @@ function updateAxisGizmo() {
 function updateWGizmo() {
   if (!wAxisGizmoEl || !wAxisGizmoLineEl || !wAxisGizmoLabelEl || !wAxisGizmoNegEl || !wAxisGizmoPosEl) return;
 
+  const wButtonScale = (wAxisGizmoEl.clientWidth || GIZMO_VIEWBOX_SIZE) / GIZMO_VIEWBOX_SIZE;
   const plane = currentWGizmoRotationPlane();
   const hasW = !!plane;
   const wColor = AXIS_PALETTE[(plane?.wDim ?? 3) % AXIS_PALETTE.length];
@@ -398,10 +404,10 @@ function updateWGizmo() {
     wAxisGizmoLineEl.setAttribute('x2', `${endX}`);
     wAxisGizmoLineEl.setAttribute('y2', `${endY}`);
     wAxisGizmoLineEl.style.opacity = '0.35';
-    wAxisGizmoNegEl.style.left = `${startX}px`;
-    wAxisGizmoNegEl.style.top = `${startY}px`;
-    wAxisGizmoPosEl.style.left = `${endX}px`;
-    wAxisGizmoPosEl.style.top = `${endY}px`;
+    wAxisGizmoNegEl.style.left = `${startX * wButtonScale}px`;
+    wAxisGizmoNegEl.style.top = `${startY * wButtonScale}px`;
+    wAxisGizmoPosEl.style.left = `${endX * wButtonScale}px`;
+    wAxisGizmoPosEl.style.top = `${endY * wButtonScale}px`;
     wAxisGizmoPosEl.textContent = 'W';
     wAxisGizmoPosEl.classList.add('back');
     wAxisGizmoNegEl.classList.add('back');
@@ -430,10 +436,10 @@ function updateWGizmo() {
   wAxisGizmoLineEl.setAttribute('y2', `${endY}`);
   wAxisGizmoLineEl.style.opacity = '0.9';
 
-  wAxisGizmoNegEl.style.left = `${startX}px`;
-  wAxisGizmoNegEl.style.top = `${startY}px`;
-  wAxisGizmoPosEl.style.left = `${endX}px`;
-  wAxisGizmoPosEl.style.top = `${endY}px`;
+  wAxisGizmoNegEl.style.left = `${startX * wButtonScale}px`;
+  wAxisGizmoNegEl.style.top = `${startY * wButtonScale}px`;
+  wAxisGizmoPosEl.style.left = `${endX * wButtonScale}px`;
+  wAxisGizmoPosEl.style.top = `${endY * wButtonScale}px`;
   wAxisGizmoPosEl.classList.remove('back');
   wAxisGizmoNegEl.classList.remove('back');
   wAxisGizmoPosEl.style.zIndex = '2';
@@ -553,6 +559,7 @@ const axisLegend = document.getElementById('axis-legend') as HTMLDivElement | nu
 const axisList = document.getElementById('axis-list') as HTMLDivElement | null;
 const statusBar = document.getElementById('status-bar') as HTMLDivElement | null;
 let lastPointer = { x: window.innerWidth - 180, y: window.innerHeight - 80 };
+let paneCollapsed = false;
 type AxisMap = number[];
 type SurfaceState = SurfaceMaterial;
 const DEFAULT_SURFACE: SurfaceState = {
@@ -647,6 +654,15 @@ const transformOp = {
   objectDataStart: null as Float32Array | null,
   wPlane: false,
   moveOffset: new THREE.Vector3(),
+};
+const toolbarTransformDrag = {
+  active: false,
+  started: false,
+  pointerId: -1,
+  mode: 'none' as TransformMode,
+  startX: 0,
+  startY: 0,
+  sourceButton: null as HTMLButtonElement | null,
 };
 const axisDrag = { active: false, lastX: 0, accum: 0, prevZoom: controls.enableZoom, prevPan: controls.enablePan };
 let axesOrder: number[] = Array.from({ length: N }, (_, i) => i);
@@ -815,11 +831,6 @@ function cycleAxes(step: number) {
   });
 }
 
-function startTransformFromToolbar(mode: TransformMode) {
-  if (transformOp.mode !== 'none') return;
-  const fakeEvent = new PointerEvent('pointerdown', { clientX: lastPointer.x, clientY: lastPointer.y });
-  startTransform(mode, fakeEvent);
-}
 function isTextEntryTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
   return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
@@ -1631,6 +1642,16 @@ function updateTransformActionButtons() {
   }
 }
 
+function setPaneCollapsed(collapsed: boolean) {
+  paneCollapsed = collapsed;
+  document.body.classList.toggle('pane-collapsed', paneCollapsed);
+  if (paneToggleButton) {
+    paneToggleButton.setAttribute('aria-expanded', String(!paneCollapsed));
+    paneToggleButton.setAttribute('aria-label', paneCollapsed ? 'Show panel details' : 'Hide panel details');
+    paneToggleButton.title = paneCollapsed ? 'Show panel details' : 'Hide panel details';
+  }
+}
+
 function applyProjectionMatrix() {
   if (PARAMS.projection === 'Canonical' || M === 0) {
     const nVis = visibleDims();
@@ -2180,9 +2201,14 @@ if (fileInput) {
 importJsonButton?.addEventListener('click', () => fileInput?.click());
 exportJsonButton?.addEventListener('click', () => exportProjectionJSON());
 editModeToggle?.addEventListener('click', () => setEditMode(!PARAMS.editMode));
-transformMoveButton?.addEventListener('click', () => startTransformFromToolbar('move'));
-transformRotateButton?.addEventListener('click', () => startTransformFromToolbar('rotate'));
-transformScaleButton?.addEventListener('click', () => startTransformFromToolbar('scale'));
+paneToggleButton?.addEventListener('click', () => setPaneCollapsed(!paneCollapsed));
+[
+  { el: transformMoveButton, mode: 'move' as TransformMode },
+  { el: transformRotateButton, mode: 'rotate' as TransformMode },
+  { el: transformScaleButton, mode: 'scale' as TransformMode },
+].forEach(entry => {
+  entry.el?.addEventListener('pointerdown', ev => beginToolbarTransformDrag(entry.mode, ev));
+});
 dimensionDownButton?.addEventListener('click', () => setNewPrimitiveDimension(PARAMS.N - 1));
 dimensionUpButton?.addEventListener('click', () => setNewPrimitiveDimension(PARAMS.N + 1));
 dimensionControl?.addEventListener('keydown', ev => {
@@ -2199,22 +2225,19 @@ dimensionControl?.addEventListener('keydown', ev => {
 autoRotateToggle?.addEventListener('click', () => setAutoRotation(!PARAMS.autoSpin));
 updateAutoRotateToggle();
 updateTransformActionButtons();
+setPaneCollapsed(false);
 
-// --- Animation ---
-const clock = new THREE.Clock();
-renderer.domElement.addEventListener('pointermove', handleHover);
-renderer.domElement.addEventListener('pointermove', (ev) => {
-  lastPointer = { x: ev.clientX, y: ev.clientY };
+function applyTransformPointer(clientX: number, clientY: number) {
   if (transformOp.mode === 'none') return;
-  ev.preventDefault();
-  const dx = ev.clientX - transformOp.startMouse.x;
-  const dy = ev.clientY - transformOp.startMouse.y;
+
+  const dx = clientX - transformOp.startMouse.x;
+  const dy = clientY - transformOp.startMouse.y;
   if (transformOp.targetVertex >= 0) {
     const inst = transformOp.instIdx === -1 ? null : extraInstances[transformOp.instIdx];
     const posArr = inst ? inst.renderer.positions : rendererND.positions;
     const idx = transformOp.targetVertex * 3;
     const rect = renderer.domElement.getBoundingClientRect();
-    ndc.set(((ev.clientX - rect.left) / rect.width) * 2 - 1, -((ev.clientY - rect.top) / rect.height) * 2 + 1);
+    ndc.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
     raycaster.setFromCamera(ndc, camera);
     // plane always facing camera through start point to follow cursor
     transformOp.plane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(tmpVec).normalize(), transformOp.planeHitStart);
@@ -2255,7 +2278,7 @@ renderer.domElement.addEventListener('pointermove', (ev) => {
     const refreshed = inst ? inst.renderer.positions : rendererND.positions;
     if (vertexMarker) vertexMarker.position.set(refreshed[idx], refreshed[idx + 1], refreshed[idx + 2]);
     if (statusBar) statusBar.textContent = `Vertex (${transformOp.targetVertex}): (${refreshed[idx].toFixed(3)}, ${refreshed[idx+1].toFixed(3)}, ${refreshed[idx+2].toFixed(3)})`;
-    } else {
+  } else {
     const target = transformOp.instIdx === -1 ? baseTransform : extraInstances[transformOp.instIdx].transform;
     if (transformOp.mode === 'move') {
       const src = transformOp.instIdx === -1 ? X : extraInstances[transformOp.instIdx].X;
@@ -2263,7 +2286,7 @@ renderer.domElement.addEventListener('pointermove', (ev) => {
       const count = transformOp.instIdx === -1 ? M : extraInstances[transformOp.instIdx].M;
       if (baseData && count > 0) {
         const rect = renderer.domElement.getBoundingClientRect();
-        ndc.set(((ev.clientX - rect.left) / rect.width) * 2 - 1, -((ev.clientY - rect.top) / rect.height) * 2 + 1);
+        ndc.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
         raycaster.setFromCamera(ndc, camera);
         const hit = raycaster.ray.intersectPlane(transformOp.plane, tmpVec);
         if (!hit) return;
@@ -2338,6 +2361,113 @@ renderer.domElement.addEventListener('pointermove', (ev) => {
   applySliceFilter();
   updateSelectionOutline();
   updateAxisGuide();
+}
+
+function finishTransformInteraction(commit: boolean) {
+  if (transformOp.mode === 'none') return;
+
+  if (commit) {
+    if (transformOp.targetVertex >= 0) {
+      const inst = transformOp.instIdx === -1 ? null : extraInstances[transformOp.instIdx];
+      const posArr = inst ? inst.renderer.positions : rendererND.positions;
+      const idx = transformOp.targetVertex * 3;
+      dragWorldTarget.set(posArr[idx], posArr[idx + 1], posArr[idx + 2]);
+      setDraggedVertexFromWorldPosition(transformOp.instIdx, transformOp.targetVertex, dragWorldTarget);
+    }
+    if (statusBar) {
+      if (transformOp.targetVertex >= 0) {
+        const inst = transformOp.instIdx === -1 ? null : extraInstances[transformOp.instIdx];
+        const posArr = inst ? inst.renderer.positions : rendererND.positions;
+        const idx = transformOp.targetVertex * 3;
+        statusBar.textContent = `Vertex (${transformOp.targetVertex}) commit: (${posArr[idx].toFixed(3)}, ${posArr[idx+1].toFixed(3)}, ${posArr[idx+2].toFixed(3)})`;
+      } else {
+        const target = transformOp.instIdx === -1 ? baseTransform : extraInstances[transformOp.instIdx].transform;
+        statusBar.textContent = `Object commit: pos(${target.pos.x.toFixed(3)}, ${target.pos.y.toFixed(3)}, ${target.pos.z.toFixed(3)})`;
+      }
+    }
+  } else {
+    if (transformOp.targetVertex >= 0) {
+      const inst = transformOp.instIdx === -1 ? null : extraInstances[transformOp.instIdx];
+      const posArr = inst ? inst.renderer.positions : rendererND.positions;
+      const idx = transformOp.targetVertex * 3;
+      posArr[idx] = transformOp.vertexStart.x;
+      posArr[idx + 1] = transformOp.vertexStart.y;
+      posArr[idx + 2] = transformOp.vertexStart.z;
+      const targetRenderer = inst ? inst.renderer : rendererND;
+      if (transformOp.vertexDataStart) {
+        const src = inst ? inst.X : X;
+        const mcount = inst ? inst.M : M;
+        for (let d = 0; d < N; d++) src[d * mcount + transformOp.targetVertex] = transformOp.vertexDataStart[d];
+      }
+      if (inst) {
+        projector.project(inst.X, inst.M, inst.Y);
+        inst.renderer.writeInterleavedFrom(inst.Y);
+        inst.renderer.filterEdgesByDimRange(inst.X, N, inst.M, PARAMS.sliceDim, PARAMS.sliceMin, PARAMS.sliceMax);
+      } else {
+        projector.project(X, M, Y);
+        rendererND.writeInterleavedFrom(Y);
+        rendererND.filterEdgesByDimRange(X, N, M, PARAMS.sliceDim, PARAMS.sliceMin, PARAMS.sliceMax);
+      }
+      (targetRenderer.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+      targetRenderer.geometry.computeBoundingBox();
+      targetRenderer.geometry.computeBoundingSphere();
+      if (vertexMarker) vertexMarker.position.set(posArr[idx], posArr[idx + 1], posArr[idx + 2]);
+    } else {
+      const target = transformOp.instIdx === -1 ? baseTransform : extraInstances[transformOp.instIdx].transform;
+      if (transformOp.objectDataStart) {
+        const src = transformOp.instIdx === -1 ? X : extraInstances[transformOp.instIdx].X;
+        src.set(transformOp.objectDataStart);
+        projectionDirty = true;
+      }
+      target.pos.copy(transformOp.startPos);
+      target.rot.copy(transformOp.startRot);
+      target.scale.set(transformOp.startScale, transformOp.startScale, transformOp.startScale);
+    }
+  }
+
+  transformOp.mode = 'none';
+  transformOp.vertexDataStart = null;
+  transformOp.lockAxis = -1;
+  transformOp.objectDataStart = null;
+  transformOp.wPlane = false;
+  clearAxisGuide();
+  transformOp.moveOffset.set(0, 0, 0);
+  projectAndRenderAll();
+  applySliceFilter();
+  if (PARAMS.editMode && selectedVertex >= 0) placeVertexMarker(selectedInstance, selectedVertex);
+  updateSelectionOutline();
+  updateTransformActionButtons();
+}
+
+function beginToolbarTransformDrag(mode: TransformMode, ev: PointerEvent) {
+  if (mode === 'none') return;
+  if (transformOp.mode !== 'none') return;
+  if (!getObjectVisible(selectedInstance)) return;
+
+  ev.preventDefault();
+  ev.stopPropagation();
+  toolbarTransformDrag.active = true;
+  toolbarTransformDrag.started = false;
+  toolbarTransformDrag.pointerId = ev.pointerId;
+  toolbarTransformDrag.mode = mode;
+  toolbarTransformDrag.startX = ev.clientX;
+  toolbarTransformDrag.startY = ev.clientY;
+  toolbarTransformDrag.sourceButton = ev.currentTarget as HTMLButtonElement | null;
+  try {
+    toolbarTransformDrag.sourceButton?.setPointerCapture(ev.pointerId);
+  } catch {
+    // Some browsers may reject capture when pointerdown starts from nested SVG nodes.
+  }
+}
+
+// --- Animation ---
+const clock = new THREE.Clock();
+renderer.domElement.addEventListener('pointermove', handleHover);
+renderer.domElement.addEventListener('pointermove', (ev) => {
+  lastPointer = { x: ev.clientX, y: ev.clientY };
+  if (transformOp.mode === 'none') return;
+  ev.preventDefault();
+  applyTransformPointer(ev.clientX, ev.clientY);
 });
 renderer.domElement.addEventListener('pointerleave', () => tooltipEl?.classList.remove('visible'));
 renderer.domElement.addEventListener('contextmenu', (ev) => {
@@ -2459,88 +2589,9 @@ renderer.domElement.addEventListener('pointerdown', (ev) => {
   if (transformOp.mode !== 'none') {
     if (ev.button === 0) {
       pushUndoSnapshot();
-      // rebase start point to current click for consistent deltas
-      transformOp.startMouse.set(ev.clientX, ev.clientY);
-      if (transformOp.targetVertex >= 0) {
-        transformOp.planeHitStart.copy(transformOp.vertexStart);
-        transformOp.plane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(tmpVec).normalize(), transformOp.planeHitStart);
-      }
-      if (transformOp.targetVertex >= 0) {
-        const instIdx = transformOp.instIdx;
-        const inst = instIdx === -1 ? null : extraInstances[instIdx];
-        const posArr = inst ? inst.renderer.positions : rendererND.positions;
-        const idx = transformOp.targetVertex * 3;
-        dragWorldTarget.set(posArr[idx], posArr[idx + 1], posArr[idx + 2]);
-        setDraggedVertexFromWorldPosition(transformOp.instIdx, transformOp.targetVertex, dragWorldTarget);
-      }
-      transformOp.mode = 'none';
-      transformOp.vertexDataStart = null;
-      transformOp.lockAxis = -1;
-      clearAxisGuide();
-      projectAndRenderAll();
-      applySliceFilter();
-      if (PARAMS.editMode && selectedVertex >= 0) placeVertexMarker(selectedInstance, selectedVertex);
-      updateSelectionOutline();
-      if (statusBar) {
-        if (transformOp.targetVertex >= 0) {
-          const inst = transformOp.instIdx === -1 ? null : extraInstances[transformOp.instIdx];
-          const posArr = inst ? inst.renderer.positions : rendererND.positions;
-          const idx = transformOp.targetVertex * 3;
-          statusBar.textContent = `Vertex (${transformOp.targetVertex}) commit: (${posArr[idx].toFixed(3)}, ${posArr[idx+1].toFixed(3)}, ${posArr[idx+2].toFixed(3)})`;
-        } else {
-          const target = transformOp.instIdx === -1 ? baseTransform : extraInstances[transformOp.instIdx].transform;
-          statusBar.textContent = `Object commit: pos(${target.pos.x.toFixed(3)}, ${target.pos.y.toFixed(3)}, ${target.pos.z.toFixed(3)})`;
-        }
-      }
+      finishTransformInteraction(true);
     } else if (ev.button === 2) {
-      // cancel, revert
-      if (transformOp.targetVertex >= 0) {
-        const inst = transformOp.instIdx === -1 ? null : extraInstances[transformOp.instIdx];
-        const posArr = inst ? inst.renderer.positions : rendererND.positions;
-        const idx = transformOp.targetVertex * 3;
-        posArr[idx] = transformOp.vertexStart.x;
-        posArr[idx+1] = transformOp.vertexStart.y;
-        posArr[idx+2] = transformOp.vertexStart.z;
-        const targetRenderer = inst ? inst.renderer : rendererND;
-        if (transformOp.vertexDataStart) {
-          const src = inst ? inst.X : X;
-          const mcount = inst ? inst.M : M;
-          for (let d = 0; d < N; d++) src[d * mcount + transformOp.targetVertex] = transformOp.vertexDataStart[d];
-        }
-        if (inst) {
-          projector.project(inst.X, inst.M, inst.Y);
-          inst.renderer.writeInterleavedFrom(inst.Y);
-          inst.renderer.filterEdgesByDimRange(inst.X, N, inst.M, PARAMS.sliceDim, PARAMS.sliceMin, PARAMS.sliceMax);
-        } else {
-          projector.project(X, M, Y);
-          rendererND.writeInterleavedFrom(Y);
-          rendererND.filterEdgesByDimRange(X, N, M, PARAMS.sliceDim, PARAMS.sliceMin, PARAMS.sliceMax);
-        }
-        (targetRenderer.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
-        targetRenderer.geometry.computeBoundingBox();
-        targetRenderer.geometry.computeBoundingSphere();
-        if (vertexMarker) vertexMarker.position.set(posArr[idx], posArr[idx+1], posArr[idx+2]);
-      } else {
-        const target = transformOp.instIdx === -1 ? baseTransform : extraInstances[transformOp.instIdx].transform;
-        // revert object translation snapshot if it exists
-        if (transformOp.objectDataStart) {
-          const src = transformOp.instIdx === -1 ? X : extraInstances[transformOp.instIdx].X;
-          src.set(transformOp.objectDataStart);
-          projectionDirty = true;
-        }
-        target.pos.copy(transformOp.startPos);
-        target.rot.copy(transformOp.startRot);
-        target.scale.set(transformOp.startScale, transformOp.startScale, transformOp.startScale);
-      }
-      transformOp.mode = 'none';
-      transformOp.vertexDataStart = null;
-      transformOp.lockAxis = -1;
-      transformOp.objectDataStart = null;
-      clearAxisGuide();
-      transformOp.moveOffset.set(0,0,0);
-      projectAndRenderAll();
-      applySliceFilter();
-      updateSelectionOutline();
+      finishTransformInteraction(false);
     }
     ev.preventDefault();
     return;
@@ -2649,6 +2700,26 @@ renderer.domElement.addEventListener('pointerdown', (ev) => {
 });
 
 window.addEventListener('pointermove', (ev) => {
+  if (toolbarTransformDrag.active && ev.pointerId === toolbarTransformDrag.pointerId) {
+    ev.preventDefault();
+    lastPointer = { x: ev.clientX, y: ev.clientY };
+    if (!toolbarTransformDrag.started) {
+      const moved = Math.hypot(ev.clientX - toolbarTransformDrag.startX, ev.clientY - toolbarTransformDrag.startY);
+      if (moved < 3) return;
+      pushUndoSnapshot();
+      startTransform(toolbarTransformDrag.mode, new PointerEvent('pointerdown', { clientX: ev.clientX, clientY: ev.clientY }));
+      toolbarTransformDrag.started = transformOp.mode !== 'none';
+      if (!toolbarTransformDrag.started) {
+        toolbarTransformDrag.active = false;
+        toolbarTransformDrag.pointerId = -1;
+        toolbarTransformDrag.mode = 'none';
+        return;
+      }
+      updateTransformActionButtons();
+    }
+    applyTransformPointer(ev.clientX, ev.clientY);
+    return;
+  }
   if (!axisDrag.active) return;
   ev.preventDefault();
   const dx = ev.clientX - axisDrag.lastX;
@@ -2662,11 +2733,40 @@ window.addEventListener('pointermove', (ev) => {
 });
 
 window.addEventListener('pointerup', (ev) => {
+  if (toolbarTransformDrag.active && ev.pointerId === toolbarTransformDrag.pointerId) {
+    if (toolbarTransformDrag.sourceButton?.hasPointerCapture(ev.pointerId)) {
+      toolbarTransformDrag.sourceButton.releasePointerCapture(ev.pointerId);
+    }
+    const shouldCommit = toolbarTransformDrag.started && transformOp.mode !== 'none';
+    if (shouldCommit) finishTransformInteraction(true);
+    toolbarTransformDrag.active = false;
+    toolbarTransformDrag.started = false;
+    toolbarTransformDrag.pointerId = -1;
+    toolbarTransformDrag.mode = 'none';
+    toolbarTransformDrag.sourceButton = null;
+    ev.preventDefault();
+    return;
+  }
   if (ev.button !== 1 || !axisDrag.active) return;
   axisDrag.active = false;
   axisDrag.accum = 0;
   controls.enableZoom = axisDrag.prevZoom;
   controls.enablePan = axisDrag.prevPan;
+});
+
+window.addEventListener('pointercancel', (ev) => {
+  if (toolbarTransformDrag.active && ev.pointerId === toolbarTransformDrag.pointerId) {
+    if (toolbarTransformDrag.sourceButton?.hasPointerCapture(ev.pointerId)) {
+      toolbarTransformDrag.sourceButton.releasePointerCapture(ev.pointerId);
+    }
+    const shouldCancel = toolbarTransformDrag.started && transformOp.mode !== 'none';
+    if (shouldCancel) finishTransformInteraction(false);
+    toolbarTransformDrag.active = false;
+    toolbarTransformDrag.started = false;
+    toolbarTransformDrag.pointerId = -1;
+    toolbarTransformDrag.mode = 'none';
+    toolbarTransformDrag.sourceButton = null;
+  }
 });
 
 window.addEventListener('keydown', (ev) => {

@@ -4,7 +4,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="icon" type="image/x-icon" href="./favicon.ico" />
     <title>BleND</title>
     <style>
       :root {
@@ -20,6 +20,10 @@
         --ui-blue-hover: #3b68d0;
         --ui-blue-soft: rgba(49,89,183,0.38);
         --ui-shadow: 0 8px 20px rgba(0,0,0,0.28);
+        --safe-top: env(safe-area-inset-top, 0px);
+        --safe-right: env(safe-area-inset-right, 0px);
+        --safe-bottom: env(safe-area-inset-bottom, 0px);
+        --safe-left: env(safe-area-inset-left, 0px);
       }
       html, body, #app { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#0f1117; color:var(--ui-text); }
       #pane {
@@ -47,23 +51,59 @@
         width: 100%;
         min-width: 0;
       }
-      .credit { position: absolute; left: 12px; bottom: 12px; font: 12px/1.2 system-ui, sans-serif; color: var(--ui-text); background: var(--ui-bg); padding: 6px 8px; border-radius: 5px; border: 1px solid var(--ui-border); min-width: 220px; box-shadow: var(--ui-shadow); }
-      #menu-toggle {
+      .credit {
         position: absolute;
-        top: 54px;
+        left: 12px;
+        bottom: 12px;
+        font: 12px/1.2 system-ui, sans-serif;
+        color: var(--ui-text);
+        background: var(--ui-bg);
+        padding: 6px 8px;
+        border-radius: 5px;
+        border: 1px solid var(--ui-border);
+        min-width: 220px;
+        max-width: min(54vw, 560px);
+        box-shadow: var(--ui-shadow);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      #pane-toggle {
+        position: absolute;
+        top: 12px;
         right: 12px;
         z-index: 20;
-        padding: 8px 10px;
-        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        border-radius: 6px;
         border: 1px solid var(--ui-border);
         background: var(--ui-bg);
         color: var(--ui-text);
-        font: 14px/1.2 system-ui, sans-serif;
         cursor: pointer;
         transition: background 120ms ease, border-color 120ms ease;
       }
-      #menu-toggle:hover { background: var(--ui-bg-hover); border-color: var(--ui-border); color: var(--ui-text-strong); }
-      #menu-toggle:active { transform: translateY(1px); }
+      #pane-toggle svg {
+        width: 16px;
+        height: 16px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.9;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      #pane-toggle .show-icon { display: none; }
+      body.pane-collapsed #pane-toggle .show-icon { display: block; }
+      body.pane-collapsed #pane-toggle .hide-icon { display: none; }
+      #pane-toggle:hover { background: var(--ui-bg-hover); border-color: var(--ui-border); color: var(--ui-text-strong); }
+      #pane-toggle:active { transform: translateY(1px); }
+      body.pane-collapsed #object-list,
+      body.pane-collapsed #dimension-control,
+      body.pane-collapsed #texture-panel {
+        display: none;
+      }
       #top-left-controls {
         position: absolute;
         top: 54px;
@@ -107,6 +147,9 @@
         color: var(--ui-text);
         cursor: pointer;
         transition: background 120ms ease, color 120ms ease;
+      }
+      #transform-actions button {
+        touch-action: none;
       }
       #view-toggle button.active,
       #scene-actions button.active,
@@ -662,8 +705,113 @@
         text-decoration: none;
         border: 1px solid var(--ui-border);
       }
-      @media (max-width: 560px) {
-        #github-link { display: none; }
+      @media (max-width: 920px) {
+        #pane-toggle {
+          top: calc(8px + var(--safe-top));
+          right: calc(8px + var(--safe-right));
+          width: 34px;
+          height: 34px;
+        }
+        #top-left-controls {
+          top: calc(8px + var(--safe-top));
+          left: calc(8px + var(--safe-left));
+          right: calc(48px + var(--safe-right));
+          max-width: none;
+        }
+        #pane {
+          top: calc(62px + var(--safe-top));
+          right: calc(8px + var(--safe-right));
+          width: min(360px, calc(100vw - 16px - var(--safe-left) - var(--safe-right)));
+          max-width: calc(100vw - 16px - var(--safe-left) - var(--safe-right));
+          max-height: calc(100vh - 126px - var(--safe-top) - var(--safe-bottom));
+          max-height: calc(100dvh - 126px - var(--safe-top) - var(--safe-bottom));
+          overflow-y: auto;
+          overscroll-behavior: contain;
+        }
+        #gizmo-dock {
+          position: static;
+          flex-direction: row;
+          justify-content: flex-end;
+          gap: 6px;
+          margin: 0 0 8px 0;
+        }
+        #axis-gizmo,
+        #w-axis-gizmo {
+          width: 74px;
+          height: 74px;
+        }
+        #auto-rotate-toggle {
+          right: calc(8px + var(--safe-right));
+          bottom: calc(8px + var(--safe-bottom));
+          width: 40px;
+          height: 40px;
+        }
+        #auto-rotate-toggle svg {
+          width: 18px;
+          height: 18px;
+        }
+        .credit {
+          left: calc(8px + var(--safe-left));
+          right: calc(56px + var(--safe-right));
+          bottom: calc(8px + var(--safe-bottom));
+          min-width: 0;
+          max-width: none;
+        }
+        #github-link {
+          display: none;
+        }
+      }
+      @media (max-width: 680px) {
+        #pane-toggle {
+          width: 36px;
+          height: 36px;
+        }
+        #top-left-controls {
+          gap: 2px;
+          padding: 3px;
+          border-radius: 6px;
+        }
+        #view-toggle,
+        #scene-actions,
+        #transform-actions {
+          gap: 1px;
+        }
+        #view-toggle button,
+        #scene-actions button,
+        #transform-actions button {
+          width: 30px;
+          height: 30px;
+        }
+        #pane {
+          left: calc(8px + var(--safe-left));
+          right: calc(8px + var(--safe-right));
+          width: auto;
+          max-width: none;
+        }
+        #gizmo-dock {
+          justify-content: flex-start;
+        }
+        #axis-list {
+          margin-bottom: 6px;
+        }
+        #object-list {
+          max-height: 146px;
+          margin-bottom: 6px;
+        }
+        #dimension-control {
+          margin-bottom: 6px;
+        }
+        #texture-preview-wrap {
+          height: 108px;
+        }
+        #texture-controls .texture-row {
+          grid-template-columns: 1fr;
+          gap: 4px;
+        }
+        #texture-controls output {
+          width: 100%;
+          text-align: left;
+        }
       }
     </style>
   </head>
@@ -747,6 +895,14 @@
         </button>
       </div>
     </div>
+    <button id="pane-toggle" type="button" aria-label="Hide panel details" aria-expanded="true" aria-controls="pane" title="Hide panel details">
+      <svg class="hide-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M15 5l-7 7 7 7"></path>
+      </svg>
+      <svg class="show-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M9 5l7 7-7 7"></path>
+      </svg>
+    </button>
     <div id="pane">
       <div id="gizmo-dock">
         <div id="axis-gizmo" aria-label="View axis gizmo"></div>
