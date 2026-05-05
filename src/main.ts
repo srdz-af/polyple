@@ -115,8 +115,9 @@ function applySceneBackground(useEditMode: boolean) {
   source.getHSL(sceneBackgroundHsl);
   let hue = (sceneBackgroundHsl.h + (wGizmoAngle / (Math.PI * 2))) % 1;
   if (hue < 0) hue += 1;
-  const saturationFloor = useEditMode ? 0.12 : 0.22;
-  const saturation = Math.max(sceneBackgroundHsl.s, saturationFloor);
+  const saturationFloor = useEditMode ? 0.02 : 0.03;
+  const saturationScale = useEditMode ? 0.22 : 0.26;
+  const saturation = Math.max(sceneBackgroundHsl.s * saturationScale, saturationFloor);
   sceneBackgroundColor.setHSL(hue, saturation, sceneBackgroundHsl.l);
   scene.background = sceneBackgroundColor;
   renderer.setClearColor(sceneBackgroundColor);
@@ -1783,6 +1784,8 @@ function resetAutoRotationState() {
     plane.theta = 0;
     plane._lastTheta = 0;
   });
+  wGizmoAngle = -Math.PI / 4;
+  applySceneBackground(PARAMS.editMode);
   projectionDirty = true;
 }
 
@@ -1802,6 +1805,8 @@ function applyAutoRotation(dt: number) {
 
   const nVis = visibleDims();
   let rotated = false;
+  let wDelta = 0;
+  const wPlane = currentWGizmoRotationPlane();
   for (const plane of planes) {
     if (!plane.auto || plane.speed === 0 || plane.i === plane.j) continue;
     if (plane.i >= nVis || plane.j >= nVis) continue;
@@ -1809,10 +1814,20 @@ function applyAutoRotation(dt: number) {
     const delta = plane.speed * dt;
     plane.theta += delta;
     rot.applyGivensLeft(plane.i, plane.j, delta);
+    if (wPlane && (plane.i === wPlane.wDim || plane.j === wPlane.wDim)) {
+      // Keep gizmo/hue in sync whenever auto-rotation spins through W.
+      wDelta += plane.i === wPlane.wDim ? -delta : delta;
+    }
     rotated = true;
   }
 
-  if (rotated) projectionDirty = true;
+  if (rotated) {
+    projectionDirty = true;
+    if (Math.abs(wDelta) > 1e-6) {
+      wGizmoAngle = normalizeSignedAngleDelta(wGizmoAngle + wDelta);
+      applySceneBackground(PARAMS.editMode);
+    }
+  }
 }
 
 function showDeleteConfirm(ev?: MouseEvent) {
