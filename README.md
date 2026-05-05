@@ -1,10 +1,16 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="public/logo_dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="public/logo_light.png">
+  <img alt="BleND logo" src="public/logo_light.png">
+</picture>
+
 # BleND
 
 BleND is an interactive N-dimensional geometry viewer built with **Three.js**, **TypeScript**, and **Vite**.
 
 It lets you create, inspect, transform, and edit high-dimensional objects, then project them into 3D.
 
-![preview](preview.gif)
+![preview](public/preview.gif)
 
 Live demo:
 https://srdz-af.github.io/BleND/

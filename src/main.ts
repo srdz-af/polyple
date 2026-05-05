@@ -830,6 +830,14 @@ function cycleAxes(step: number) {
   });
 }
 
+function endAxisShiftDrag() {
+  if (!axisDrag.active) return;
+  axisDrag.active = false;
+  axisDrag.accum = 0;
+  controls.enableZoom = axisDrag.prevZoom;
+  controls.enablePan = axisDrag.prevPan;
+}
+
 function isTextEntryTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
   return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
@@ -1954,7 +1962,7 @@ function addInstanceAt(offset: THREE.Vector3, recordUndo = true) {
 
 function rebuildState(newN: number, newX: Float32Array, newE: Uint32Array, source: 'primitive' | 'custom', localN?: number, axisMap?: AxisMap) {
   setAutoRotation(false);
-  axisDrag.active = false;
+  endAxisShiftDrag();
   controls.enableZoom = true;
   controls.enablePan = true;
   controls.enableRotate = true;
@@ -2733,6 +2741,10 @@ window.addEventListener('pointermove', (ev) => {
     return;
   }
   if (!axisDrag.active) return;
+  if ((ev.buttons & 4) === 0) {
+    endAxisShiftDrag();
+    return;
+  }
   ev.preventDefault();
   const dx = ev.clientX - axisDrag.lastX;
   axisDrag.lastX = ev.clientX;
@@ -2759,11 +2771,9 @@ window.addEventListener('pointerup', (ev) => {
     ev.preventDefault();
     return;
   }
-  if (ev.button !== 1 || !axisDrag.active) return;
-  axisDrag.active = false;
-  axisDrag.accum = 0;
-  controls.enableZoom = axisDrag.prevZoom;
-  controls.enablePan = axisDrag.prevPan;
+  if (axisDrag.active) {
+    endAxisShiftDrag();
+  }
 });
 
 window.addEventListener('pointercancel', (ev) => {
@@ -2779,6 +2789,12 @@ window.addEventListener('pointercancel', (ev) => {
     toolbarTransformDrag.mode = 'none';
     toolbarTransformDrag.sourceButton = null;
   }
+  if (axisDrag.active) {
+    endAxisShiftDrag();
+  }
+});
+window.addEventListener('blur', () => {
+  if (axisDrag.active) endAxisShiftDrag();
 });
 
 window.addEventListener('keydown', (ev) => {
