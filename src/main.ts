@@ -86,7 +86,8 @@ pmrem.dispose();
 scene.environment = environmentMap;
 
 const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.01, 100);
-camera.position.set(2.6, 1.8, 2.6);
+const DEFAULT_CAMERA_POSITION = new THREE.Vector3(3.9, 2.7, 3.9);
+camera.position.copy(DEFAULT_CAMERA_POSITION);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 const worldUp = new THREE.Vector3(0, 1, 0);
@@ -1583,7 +1584,7 @@ function restoreInstanceSnapshot(snap: InstanceSnapshot): Instance {
 const rendererND = new HypercubeRenderer(scene);
 if (M > 0) {
   rendererND.build(M, E);
-  rendererND.setMode('wireframe');
+  rendererND.setMode('faceted');
 }
 
 // --- UI state ---
@@ -1595,7 +1596,7 @@ const PARAMS = {
   sliceDim: -1,
   sliceMin: -0.5,
   sliceMax: 0.5,
-  renderMode: 'wireframe' as ViewMode,
+  renderMode: 'faceted' as ViewMode,
   editMode: false,
   autoSpin: false,
   axesX: 0,
@@ -1997,7 +1998,7 @@ function rebuildState(newN: number, newX: Float32Array, newE: Uint32Array, sourc
   controls.enableRotate = true;
   controls.enabled = true;
   controls.reset();
-  camera.position.set(2.6, 1.8, 2.6);
+  camera.position.copy(DEFAULT_CAMERA_POSITION);
   // ensure render mode persists
   const currentMode = PARAMS.renderMode;
   dataSource = source;
@@ -2178,7 +2179,7 @@ function resetToIsometric() {
   PARAMS.primitive = 'hypercube';
   PARAMS.projection = 'PCA';
   setAutoRotation(false);
-  PARAMS.renderMode = 'wireframe';
+  PARAMS.renderMode = 'faceted';
   PARAMS.sliceDim = -1;
   PARAMS.sliceMin = -0.5;
   PARAMS.sliceMax = 0.5;
@@ -2196,7 +2197,7 @@ function resetToIsometric() {
   });
 
   controls.reset();
-  camera.position.set(2.6, 1.8, 2.6);
+  camera.position.copy(DEFAULT_CAMERA_POSITION);
 }
 projectAndRenderAll();
 applySliceFilter();
