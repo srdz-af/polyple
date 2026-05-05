@@ -1,17 +1,17 @@
-# ND-Viewer
+# BleND
 
-`ND-Viewer` is an interactive N-dimensional geometry viewer built with Three.js and Tweakpane.
+`BleND` is an interactive N-dimensional geometry viewer built with Three.js and Tweakpane.
 ![til](preview.gif)
 
 It lets you create, inspect, transform, and edit high-dimensional objects, then project them into 3D for visualization. The project supports hypercubes, simplexes, cross polytopes, simplex prisms, custom JSON data, canonical projection, PCA projection, N-D rotation, vertex editing, and undo/redo.
 
 Live demo:
 
-https://srdz-af.github.io/nd-viewer/
+https://srdz-af.github.io/BleND/
 
 ## Usage
 
-ND-Viewer supports:
+BleND supports:
 
 1. Interactive creation of N-dimensional polytopes.
 2. Projection from N dimensions into 3D.
@@ -19,10 +19,11 @@ ND-Viewer supports:
 4. PCA projection from object data.
 5. Object movement, rotation, and scaling.
 6. Higher-dimensional rotation using W rotation.
-7. Vertex-level editing in N-dimensional space.
-8. JSON import and export.
-9. Undo and redo for key editing operations.
-10. Multiple display modes for the same geometry.
+7. Auto-rotation through N-D rotation planes.
+8. Vertex-level editing in N-dimensional space.
+9. JSON import and export.
+10. Undo and redo for key editing operations.
+11. Multiple display modes for the same geometry.
 
 ## Supported objects
 
@@ -69,7 +70,7 @@ This helps when the interesting structure is spread across several dimensions in
 
 ## Interaction model
 
-ND-Viewer behaves like a small modeling tool for high-dimensional objects.
+BleND behaves like a small modeling tool for high-dimensional objects.
 
 Camera controls use OrbitControls:
 
@@ -77,6 +78,7 @@ Camera controls use OrbitControls:
 Left mouse button: orbit
 Mouse wheel: zoom
 Middle mouse button drag: cycle projected dimensions
+Bottom-right play button: toggle N-D auto-rotation
 ```
 
 Object controls:
@@ -125,7 +127,7 @@ Wireframe is useful for structure. Transparent mode helps you see faces and dept
 
 ## JSON import and export
 
-ND-Viewer can load external geometry from JSON.
+BleND can load external geometry from JSON.
 
 Example format:
 
