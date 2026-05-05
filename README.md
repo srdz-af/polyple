@@ -1,135 +1,124 @@
 # BleND
 
-`BleND` is an interactive N-dimensional geometry viewer built with Three.js and Tweakpane.
-![til](preview.gif)
+BleND is an interactive N-dimensional geometry viewer built with **Three.js**, **TypeScript**, and **Vite**.
 
-It lets you create, inspect, transform, and edit high-dimensional objects, then project them into 3D for visualization. The project supports hypercubes, simplexes, cross polytopes, simplex prisms, custom JSON data, canonical projection, PCA projection, N-D rotation, vertex editing, and undo/redo.
+It lets you create, inspect, transform, and edit high-dimensional objects, then project them into 3D.
+
+![preview](preview.gif)
 
 Live demo:
-
 https://srdz-af.github.io/BleND/
 
-## Usage
+Repository:
+https://github.com/srdz-af/BleND
 
-BleND supports:
+## What It Supports
 
-1. Interactive creation of N-dimensional polytopes.
-2. Projection from N dimensions into 3D.
-3. Canonical projection using selected axes.
-4. PCA projection from object data.
-5. Object movement, rotation, and scaling.
-6. Higher-dimensional rotation using W rotation.
-7. Auto-rotation through N-D rotation planes.
-8. Vertex-level editing in N-dimensional space.
-9. JSON import and export.
-10. Undo and redo for key editing operations.
-11. Multiple display modes for the same geometry.
+- N-dimensional primitives (3D to 8D)
+- Canonical projection using selected axes
+- Global N-D rotation and auto-rotation
+- Object transforms (move/rotate/scale)
+- Vertex edit mode (move vertex)
+- Multiple objects, per-object visibility, rename, delete
+- Per-object surface settings (base color, metallic, roughness, alpha)
+- View modes: wireframe, transparent, solid
+- JSON import/export
+- Undo/redo
 
-## Supported objects
+## Quick Start
 
-You can create these objects from the context menu or with `Shift + A`:
+Requirements:
+- Node.js 18+ (recommended)
 
-1. Hypercube.
-2. Cross polytope.
-3. Simplex.
-4. Simplex prism.
+Install and run:
 
-Each object owns its own vertices, edges, faces, and transform state. This makes it possible to instantiate, edit, select, and delete objects independently.
-
-## Core idea
-
-Internally, the viewer stores object coordinates in up to 8 dimensions.
-
-When you create a primitive with fewer dimensions, the viewer embeds its coordinates into the internal 8D representation. The unused dimensions stay at zero.
-
-The renderer then projects the selected dimensions into 3D. You can change which dimensions appear as X, Y, and Z, or let PCA choose a projection based on the data.
-
-## Projection modes
-
-### Canonical projection
-
-Canonical projection maps three selected dimensions directly into the visible 3D axes.
-
-For example:
-
-```text
-d0 -> X
-d1 -> Y
-d2 -> Z
+```bash
+npm install
+npm run dev
 ```
 
-You can reorder the axis list in the control panel. The first three dimensions in that order define the visible projection.
+Build:
 
-You can also drag with the middle mouse button to cycle through projected dimension triples.
+```bash
+npm run build
+npm run preview
+```
 
-### PCA projection
+## Core Model
 
-PCA projection computes a 3 by N projection matrix from the object data.
+- Internal max dimension is **8** (`MAX_N`).
+- Primitives are generated at the selected dimension and embedded into the internal 8D storage.
+- Rendering projects current selected dimensions into 3D.
+- Axis ordering determines which dimensions appear as X/Y/Z.
 
-This helps when the interesting structure is spread across several dimensions instead of being visible from a fixed axis selection.
+## Main Controls
 
-## Interaction model
-
-BleND behaves like a small modeling tool for high-dimensional objects.
-
-Camera controls use OrbitControls:
+Camera:
 
 ```text
-Left mouse button: orbit
+Left mouse drag: orbit
 Mouse wheel: zoom
-Middle mouse button drag: cycle projected dimensions
-Bottom-right play button: toggle N-D auto-rotation
+Middle mouse drag: cycle projected axis triples
+Axis gizmo drag: orbit camera
+Axis gizmo endpoint click: snap view to axis
 ```
 
-Object controls:
+Global N-D rotation:
 
 ```text
-G: move
-R: rotate
-S: scale
-X, Y, Z: lock transform to the projected axis
-W during rotation: rotate through the last N-D dimension
-Left click: confirm transform
-Right click: cancel transform
+Bottom-right play button: toggle auto-rotation
+W gizmo (purple dial): rotate global space on the active W plane (4D+)
 ```
 
-Editing controls:
+Object operations:
+
+```text
+Shift + A: add object menu
+G: move selected object
+R: rotate selected object
+S: scale selected object
+X: delete selected object (with confirm)
+Right click: context menu (add/transform/delete depending selection)
+```
+
+While a transform is active:
+
+```text
+X / Y / Z: lock transform axis
+W (during rotate): toggle W-plane rotation mode
+Left click: confirm
+Right click: cancel
+```
+
+Edit mode:
 
 ```text
 Tab: toggle edit mode
 Left click vertex: select vertex
-Right click vertex: open vertex transform menu
-Ctrl+Z or Cmd+Z: undo
-Ctrl+Y or Cmd+Y: redo
+Right click selected vertex: open vertex move action
 ```
 
-## N-D transformations
+History:
 
-Object transforms happen through the current 3D projection, but they update the underlying N-dimensional data.
+```text
+Ctrl+Z / Cmd+Z: undo
+Ctrl+Y / Cmd+Y: redo
+Ctrl+Shift+Z / Cmd+Shift+Z: redo
+```
 
-Movement updates the selected projected dimensions.
+## UI Overview
 
-Rotation supports normal projected-space rotation and W rotation. W rotation mixes one projected dimension with the last active N-dimensional axis. This makes the object appear to turn through a higher dimension instead of only spinning in visible 3D space.
+- **View mode buttons**: Wireframe / Transparent / Solid
+- **Scene actions**: Import JSON, Export JSON, Edit mode
+- **Axis order panel**: drag to reorder active dimensions
+- **Object list**: select, rename, hide/show objects
+- **Dimension selector**: sets dimension for newly created primitives
+- **Texture panel**: per-selected-object surface controls and preview cube
+- **W gizmo**: global W-axis rotation dial (enabled in 4D+)
 
-Vertex editing works the same way. When you move a vertex, the viewer updates its N-dimensional coordinates, recomputes affected geometry, and redraws the object.
+## JSON Import / Export
 
-## Display modes
-
-The viewer supports three display modes:
-
-1. Wireframe.
-2. Transparent.
-3. Solid.
-
-The selected mode applies to the base object and its instances.
-
-Wireframe is useful for structure. Transparent mode helps you see faces and depth at the same time. Solid mode gives a cleaner view when you care about the final shape.
-
-## JSON import and export
-
-BleND can load external geometry from JSON.
-
-Example format:
+Accepted import format:
 
 ```json
 {
@@ -137,32 +126,20 @@ Example format:
     { "d0": 0.0, "d1": 0.5, "d2": -0.5 },
     { "d0": 1.0, "d1": 0.5, "d2": 0.0 }
   ],
-  "edges": [
-    [0, 1]
-  ],
-  "adjacency": {
-    "0": [1],
-    "1": [0]
-  }
+  "edges": [[0, 1]],
+  "adjacency": { "0": [1], "1": [0] }
 }
 ```
 
-`points` can use arrays or objects with dimension keys.
+Notes:
+- `points` are required and can be arrays or keyed objects (`d0`, `d1`, ...).
+- `edges` and `adjacency` are optional.
+- Imported datasets must be between **3 and 8 dimensions** to visualize in the app.
+- Import replaces the base object and clears extra instances.
+- Export writes geometry only (textures/material settings are not serialized).
 
-`edges` and `adjacency` are optional, but at least one of them should exist if you want real connectivity.
+## Current Scope Notes
 
-When you import JSON, the viewer replaces the current base object with the imported object and clears existing instances.
-
-## Undo and redo
-
-The viewer stores snapshots for key state changes.
-
-Snapshots include:
-
-1. Active dimension count.
-2. Point matrix.
-3. Number of points.
-4. Projected axes.
-5. Object position.
-6. Object rotation.
-7. Object scale.
+- The current UI exposes **canonical axis projection workflow**.
+- PCA projection code exists in the codebase but is not currently exposed as a direct UI mode toggle.
+- No Tweakpane dependency is used in the current app.
