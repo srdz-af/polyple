@@ -3,6 +3,19 @@ import { ConvexHull } from 'three/examples/jsm/math/ConvexHull.js';
 import type { ViewMode } from '../constants';
 
 type VertexPoint = THREE.Vector3 & { __vertexId: number };
+export type SurfaceMaterial = {
+  color: number;
+  metalness: number;
+  roughness: number;
+  alpha: number;
+};
+const DEFAULT_SURFACE: SurfaceMaterial = {
+  color: 0xbfc7d5,
+  metalness: 1.0,
+  roughness: 0.05,
+  alpha: 1.0,
+};
+const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
 
 export class HypercubeRenderer {
   scene: THREE.Scene;
@@ -23,6 +36,7 @@ export class HypercubeRenderer {
   private visibleVertexMask?: Uint8Array;
   private transform = new THREE.Matrix4();
   private tmp = new THREE.Vector3();
+  private surface: SurfaceMaterial = { ...DEFAULT_SURFACE };
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -30,11 +44,11 @@ export class HypercubeRenderer {
     this.scene.add(this.group);
     this.lineMaterial = new THREE.LineBasicMaterial({ color: 0xe5efff, transparent: true, opacity: 0.95 });
     this.solidMaterial = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      metalness: 1.0,
-      roughness: 0.05,
+      color: this.surface.color,
+      metalness: this.surface.metalness,
+      roughness: this.surface.roughness,
       transparent: false,
-      opacity: 1,
+      opacity: this.surface.alpha,
       envMapIntensity: 1.8,
       side: THREE.DoubleSide,
       depthWrite: true,
@@ -111,16 +125,27 @@ export class HypercubeRenderer {
     }
 
     if (this.mesh) {
-      this.solidMaterial.transparent = mode === 'transparent';
-      this.solidMaterial.opacity = mode === 'transparent' ? 0.5 : 1;
-      this.solidMaterial.depthWrite = mode !== 'transparent';
-      this.solidMaterial.needsUpdate = true;
       this.mesh.material = this.solidMaterial;
       this.mesh.visible = mode !== 'wireframe' && this.mesh.geometry.attributes.position !== undefined;
+      this.applySurfaceMaterial();
     }
 
     this.hullNeedsUpdate = mode !== 'wireframe';
     if (mode !== 'wireframe') this.updateHullGeometry();
+  }
+
+  setSurface(surface: SurfaceMaterial): void {
+    this.surface = {
+      color: Math.max(0, Math.min(0xffffff, surface.color >>> 0)),
+      metalness: clamp01(surface.metalness),
+      roughness: clamp01(surface.roughness),
+      alpha: clamp01(surface.alpha),
+    };
+    this.applySurfaceMaterial();
+  }
+
+  getSurface(): SurfaceMaterial {
+    return { ...this.surface };
   }
 
   filterEdgesByDimRange(X: Float32Array, N: number, M: number, dim: number, minV: number, maxV: number): void {
@@ -176,6 +201,23 @@ export class HypercubeRenderer {
 
   private setIndexAttribute(array: Uint32Array): void {
     this.geometry.setIndex(new THREE.BufferAttribute(array, 1));
+  }
+
+  private applySurfaceMaterial(): void {
+    const material = this.solidMaterial;
+    material.color.setHex(this.surface.color);
+    material.metalness = this.surface.metalness;
+    material.roughness = this.surface.roughness;
+    if (this.mode === 'transparent') {
+      material.transparent = true;
+      material.opacity = 0.5;
+      material.depthWrite = false;
+    } else {
+      material.transparent = this.surface.alpha < 0.999;
+      material.opacity = this.surface.alpha;
+      material.depthWrite = !material.transparent;
+    }
+    material.needsUpdate = true;
   }
 
   private updateHullGeometry(): void {

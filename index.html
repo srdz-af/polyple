@@ -1,19 +1,52 @@
 
 <!doctype html>
-<html lang="es">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Visor N-D con WebGL (Three.js)</title>
+    <title>BleND</title>
     <style>
-      html, body, #app { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#0b0f16; color:#dbe4ff; }
+      :root {
+        --ui-bg: rgba(34,36,42,0.92);
+        --ui-bg-soft: rgba(42,45,53,0.88);
+        --ui-bg-hover: rgba(255,255,255,0.1);
+        --ui-border: rgba(255,255,255,0.13);
+        --ui-border-soft: rgba(255,255,255,0.08);
+        --ui-text: #c4ccd8;
+        --ui-text-strong: #ffffff;
+        --ui-muted: #8d96a5;
+        --ui-blue: #3159b7;
+        --ui-blue-hover: #3b68d0;
+        --ui-blue-soft: rgba(49,89,183,0.38);
+        --ui-shadow: 0 8px 20px rgba(0,0,0,0.28);
+      }
+      html, body, #app { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#0f1117; color:var(--ui-text); }
       #pane {
         position: absolute;
         top: 12px;
         right: 12px;
         z-index: 10;
+        width: min(320px, calc(100vw - 24px));
+        max-width: calc(100vw - 24px);
       }
-      .credit { position: absolute; left: 12px; bottom: 12px; font: 12px/1.2 system-ui, sans-serif; color: #d1d8e5; background: rgba(0,0,0,.45); padding: 6px 8px; border-radius: 6px; min-width: 220px; }
+      #gizmo-dock {
+        position: absolute;
+        right: calc(100% + 10px);
+        top: 0;
+        z-index: 10;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        align-items: center;
+      }
+      #axis-list,
+      #object-list,
+      #dimension-control {
+        box-sizing: border-box;
+        width: 100%;
+        min-width: 0;
+      }
+      .credit { position: absolute; left: 12px; bottom: 12px; font: 12px/1.2 system-ui, sans-serif; color: var(--ui-text); background: var(--ui-bg); padding: 6px 8px; border-radius: 5px; border: 1px solid var(--ui-border); min-width: 220px; box-shadow: var(--ui-shadow); }
       #menu-toggle {
         position: absolute;
         top: 54px;
@@ -21,94 +54,477 @@
         z-index: 20;
         padding: 8px 10px;
         border-radius: 8px;
-        border: 1px solid rgba(255,255,255,0.12);
-        background: rgba(0,0,0,0.55);
-        color: #dbe4ff;
+        border: 1px solid var(--ui-border);
+        background: var(--ui-bg);
+        color: var(--ui-text);
         font: 14px/1.2 system-ui, sans-serif;
         cursor: pointer;
         transition: background 120ms ease, border-color 120ms ease;
       }
-      #menu-toggle:hover { background: rgba(0,0,0,0.7); border-color: rgba(255,255,255,0.2); }
+      #menu-toggle:hover { background: var(--ui-bg-hover); border-color: var(--ui-border); color: var(--ui-text-strong); }
       #menu-toggle:active { transform: translateY(1px); }
-      #view-toggle {
+      #top-left-controls {
         position: absolute;
         top: 54px;
         left: 12px;
         z-index: 20;
+        display: flex;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        gap: 4px;
+        padding: 4px;
+        border: 1px solid var(--ui-border);
+        border-radius: 5px;
+        background: var(--ui-bg);
+        box-shadow: var(--ui-shadow);
+        max-width: calc(100vw - 24px);
+      }
+      #view-toggle,
+      #scene-actions {
         display: inline-flex;
-        gap: 6px;
-        padding: 6px 8px;
-        border-radius: 10px;
-        background: rgba(0,0,0,0.55);
-        border: 1px solid rgba(255,255,255,0.12);
-        box-shadow: 0 8px 20px rgba(0,0,0,0.25);
+        flex-wrap: wrap;
+        gap: 2px;
       }
-      #view-toggle button {
-        border: 1px solid rgba(255,255,255,0.1);
-        background: rgba(255,255,255,0.04);
-        color: #e8f0ff;
-        padding: 6px 10px;
-        border-radius: 8px;
+      #scene-actions {
+        margin-left: 3px;
+        padding-left: 5px;
+        border-left: 1px solid var(--ui-border);
+      }
+      #view-toggle button,
+      #scene-actions button {
+        display: grid;
+        place-items: center;
+        width: 27px;
+        height: 27px;
+        padding: 0;
+        border: 0;
+        border-radius: 3px;
+        background: transparent;
+        color: var(--ui-text);
         cursor: pointer;
-        font: 12px/1.2 system-ui, sans-serif;
-        transition: background 120ms ease, border-color 120ms ease;
+        transition: background 120ms ease, color 120ms ease;
       }
-      #view-toggle button.active {
-        background: rgba(255,255,255,0.12);
-        border-color: rgba(255,255,255,0.3);
+      #view-toggle button.active,
+      #scene-actions button.active {
+        background: var(--ui-blue);
+        color: var(--ui-text-strong);
       }
-      #view-toggle button:hover { background: rgba(255,255,255,0.08); }
+      #view-toggle button:hover,
+      #scene-actions button:hover { background: var(--ui-bg-hover); color: var(--ui-text-strong); }
+      #view-toggle button.active:hover,
+      #scene-actions button.active:hover { background: var(--ui-blue-hover); }
+      #view-toggle svg,
+      #scene-actions svg {
+        width: 16px;
+        height: 16px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      #view-toggle .icon-fill {
+        fill: currentColor;
+        stroke: none;
+      }
+      #view-toggle .icon-soft-fill {
+        fill: currentColor;
+        opacity: 0.36;
+        stroke: none;
+      }
+      #axis-gizmo {
+        position: relative;
+        width: 86px;
+        height: 86px;
+        cursor: grab;
+        pointer-events: auto;
+        touch-action: none;
+        user-select: none;
+      }
+      #axis-gizmo.dragging { cursor: grabbing; }
+      #axis-gizmo svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+      }
+      #axis-gizmo line {
+        stroke: rgba(219,231,255,0.46);
+        stroke-width: 1.4;
+      }
+      #axis-gizmo button {
+        position: absolute;
+        display: grid;
+        place-items: center;
+        width: 22px;
+        height: 22px;
+        margin: -11px 0 0 -11px;
+        padding: 0;
+        border: 2px solid var(--axis-color);
+        border-radius: 50%;
+        background: var(--axis-color);
+        color: #11141a;
+        cursor: pointer;
+        font: 700 12px/1 system-ui, sans-serif;
+        pointer-events: auto;
+        box-shadow: var(--ui-shadow);
+      }
+      #axis-gizmo button.negative {
+        background: rgba(34,36,42,0.72);
+        color: var(--axis-color);
+      }
+      #axis-gizmo button.back {
+        opacity: 0.42;
+      }
+      #axis-gizmo button:hover {
+        filter: brightness(1.18);
+        transform: scale(1.08);
+      }
+      #w-axis-gizmo {
+        position: relative;
+        width: 86px;
+        height: 86px;
+        border: none;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+        cursor: grab;
+        touch-action: none;
+        user-select: none;
+        transition: opacity 120ms ease;
+      }
+      #w-axis-gizmo.dragging {
+        cursor: grabbing;
+      }
+      #w-axis-gizmo svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      #w-axis-gizmo .ring {
+        fill: none;
+        stroke: rgba(176,121,255,0.28);
+        stroke-width: 1.4;
+      }
+      #w-axis-gizmo line {
+        stroke: #b079ff;
+        stroke-width: 2.4;
+        stroke-linecap: round;
+      }
+      #w-axis-gizmo:hover:not(.disabled) .ring {
+        stroke: rgba(176,121,255,0.42);
+      }
+      #w-axis-gizmo:hover:not(.disabled) line {
+        stroke: #c292ff;
+      }
+      #w-axis-gizmo.dragging .ring {
+        stroke: rgba(176,121,255,0.52);
+      }
+      #w-axis-gizmo.dragging line {
+        stroke: #d2acff;
+      }
+      #w-axis-gizmo button {
+        position: absolute;
+        display: grid;
+        place-items: center;
+        width: 20px;
+        height: 20px;
+        margin: -10px 0 0 -10px;
+        padding: 0;
+        border-radius: 50%;
+        border: 2px solid #b079ff;
+        box-shadow: var(--ui-shadow);
+        font: 700 9px/1 system-ui, sans-serif;
+        pointer-events: auto;
+      }
+      #w-axis-gizmo button.positive {
+        background: #b079ff;
+        color: #11141a;
+      }
+      #w-axis-gizmo button.negative {
+        background: rgba(24, 20, 34, 0.72);
+        color: #b079ff;
+      }
+      #w-axis-gizmo button.back {
+        opacity: 0.45;
+      }
+      #w-axis-gizmo button:hover {
+        filter: brightness(1.16);
+        transform: scale(1.06);
+      }
+      #w-axis-gizmo .w-axis-label {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 4px;
+        text-align: center;
+        color: #d2b3ff;
+        font: 700 10px/1 system-ui, sans-serif;
+        letter-spacing: 0.2px;
+      }
+      #w-axis-gizmo.disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
+      #w-axis-gizmo.disabled button {
+        pointer-events: none;
+      }
       #axis-list {
-        background: rgba(20,24,32,0.92);
-        color: #e6ecf5;
-        padding: 8px;
-        border-radius: 8px;
-        border: 1px solid rgba(255,255,255,0.08);
+        background: transparent;
+        color: var(--ui-text);
+        padding: 0;
+        border: none;
         font: 12px/1.4 system-ui, sans-serif;
         max-height: 220px;
-        overflow-y: auto;
+        overflow: visible;
         margin-bottom: 8px;
       }
-      #axis-list h4 { margin: 0 0 6px 0; font-size: 12px; font-weight: 700; letter-spacing: 0.2px; color: #f5f7fb; }
-      #axis-list ul { margin: 0; padding: 0; list-style: none; }
+      #axis-list h4 { margin: 0 0 6px 0; font-size: 12px; font-weight: 700; letter-spacing: 0.2px; color: var(--ui-text-strong); }
+      #axis-list ul {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
       #axis-list li {
-        margin: 2px 0;
+        min-width: 28px;
+        margin: 0;
         padding: 6px 8px;
         border-radius: 6px;
-        background: rgba(255,255,255,0.02);
-        border: 1px solid rgba(255,255,255,0.05);
+        background: var(--ui-bg-soft);
+        border: 1px solid var(--ui-border-soft);
         cursor: grab;
+        text-align: center;
         user-select: none;
       }
       #axis-list li.active {
-        background: rgba(142,203,255,0.1);
-        border-color: rgba(142,203,255,0.35);
-        color: #8ecbff;
+        background: transparent;
+        border-color: var(--axis-color);
+        color: var(--axis-color);
+        box-shadow: inset 0 0 0 1px var(--axis-color);
       }
       #object-list {
-        background: rgba(20,24,32,0.92);
-        color: #e6ecf5;
+        background: var(--ui-bg);
+        color: var(--ui-text);
         padding: 8px;
-        border-radius: 8px;
-        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 5px;
+        border: 1px solid var(--ui-border);
         font: 12px/1.4 system-ui, sans-serif;
+        margin-bottom: 8px;
+        box-shadow: var(--ui-shadow);
+      }
+      #dimension-control {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        background: var(--ui-bg);
+        color: var(--ui-text);
+        padding: 6px;
+        border-radius: 5px;
+        border: 1px solid var(--ui-border);
+        font: 12px/1.4 system-ui, sans-serif;
+        margin-bottom: 8px;
+        box-shadow: var(--ui-shadow);
+      }
+      #object-list {
         max-height: 180px;
         overflow-y: auto;
+      }
+      #object-list h4 { margin: 0 0 6px 0; font-size: 12px; font-weight: 700; letter-spacing: 0.2px; color: var(--ui-text-strong); }
+      #dimension-control .dimension-label {
+        color: var(--ui-muted);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.45px;
+        text-transform: uppercase;
+      }
+      #dimension-control .dimension-stepper {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+      }
+      #dimension-control button,
+      #dimension-value {
+        height: 28px;
+        border-radius: 3px;
+        background: var(--ui-bg-soft);
+        border: 1px solid var(--ui-border-soft);
+        color: var(--ui-text-strong);
+      }
+      #dimension-control button {
+        display: grid;
+        place-items: center;
+        width: 28px;
+        padding: 0;
+        cursor: pointer;
+        transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+      }
+      #dimension-control button:hover:not(:disabled) {
+        background: var(--ui-bg-hover);
+        border-color: var(--ui-border);
+      }
+      #dimension-control button:disabled {
+        cursor: not-allowed;
+        opacity: 0.36;
+      }
+      #dimension-control button svg {
+        width: 14px;
+        height: 14px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      #dimension-value {
+        box-sizing: border-box;
+        min-width: 44px;
+        padding: 5px 8px;
+        text-align: center;
+        font: 700 13px/1.2 system-ui, sans-serif;
+      }
+      #texture-panel {
+        background: var(--ui-bg);
+        color: var(--ui-text);
+        padding: 8px;
+        border-radius: 5px;
+        border: 1px solid var(--ui-border);
+        font: 12px/1.4 system-ui, sans-serif;
+        margin-bottom: 8px;
+        box-shadow: var(--ui-shadow);
+      }
+      #texture-panel h4 {
+        margin: 0 0 8px 0;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.2px;
+        color: var(--ui-text-strong);
+      }
+      #texture-panel.disabled {
+        opacity: 0.62;
+      }
+      #texture-preview-wrap {
+        width: 100%;
+        height: 132px;
+        border-radius: 5px;
+        border: 1px solid var(--ui-border-soft);
+        background: var(--ui-bg-soft);
+        overflow: hidden;
         margin-bottom: 8px;
       }
-      #object-list h4 { margin: 0 0 6px 0; font-size: 12px; font-weight: 700; letter-spacing: 0.2px; color: #f5f7fb; }
-      #object-list ul { margin: 0; padding: 0; list-style: none; }
-      #object-list li { margin: 2px 0; cursor: pointer; padding: 4px 6px; border-radius: 6px; color: #e6ecf5; border: 1px solid transparent; }
-      #object-list li:hover { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.06); }
-      #object-list li.active { font-weight: 700; color: #8ecbff; background: rgba(142,203,255,0.1); border: 1px solid rgba(142,203,255,0.3); }
+      #texture-preview {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      #texture-empty {
+        display: none;
+        margin: 0;
+        padding: 14px 8px;
+        color: var(--ui-muted);
+        text-align: center;
+      }
+      #texture-panel.empty #texture-empty {
+        display: block;
+      }
+      #texture-panel.empty #texture-controls,
+      #texture-panel.empty #texture-preview-wrap {
+        display: none;
+      }
+      #texture-controls {
+        display: grid;
+        gap: 7px;
+      }
+      #texture-controls .texture-row {
+        display: grid;
+        grid-template-columns: 82px 1fr auto;
+        align-items: center;
+        gap: 8px;
+      }
+      #texture-controls label {
+        color: var(--ui-text);
+      }
+      #texture-controls input[type="color"] {
+        width: 100%;
+        height: 26px;
+        padding: 0;
+        border: 1px solid var(--ui-border-soft);
+        border-radius: 4px;
+        background: var(--ui-bg-soft);
+      }
+      #texture-controls input[type="range"] {
+        width: 100%;
+        accent-color: var(--ui-blue-hover);
+      }
+      #texture-controls output {
+        width: 36px;
+        text-align: right;
+        color: var(--ui-muted);
+        font-variant-numeric: tabular-nums;
+      }
+      #object-list table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+      #object-list th {
+        color: var(--ui-muted);
+        font-size: 10px;
+        font-weight: 700;
+        padding: 2px 4px 5px;
+        text-align: left;
+        text-transform: uppercase;
+      }
+      #object-list th:first-child,
+      #object-list td:first-child { width: 26px; }
+      #object-list th:last-child,
+      #object-list td:last-child { width: 38px; text-align: right; }
+      #object-list tr.object-row { cursor: pointer; border-radius: 6px; }
+      #object-list tr.object-row:hover { background: var(--ui-bg-hover); }
+      #object-list tr.object-row.active { background: var(--ui-blue-soft); }
+      #object-list tr.object-row.hidden { opacity: 0.52; }
+      #object-list td { min-width: 0; overflow: hidden; padding: 2px 4px; vertical-align: middle; }
+      #object-list .object-eye {
+        display: inline-grid;
+        place-items: center;
+        width: 22px;
+        height: 22px;
+        padding: 0;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--ui-text);
+        cursor: pointer;
+      }
+      #object-list .object-eye:hover { background: var(--ui-bg-hover); border-color: var(--ui-border); color: var(--ui-text-strong); }
+      #object-list .object-eye svg { width: 15px; height: 15px; stroke: currentColor; }
+      #object-list .object-name {
+        box-sizing: border-box;
+        display: block;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        padding: 3px 5px;
+        border: 1px solid transparent;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--ui-text);
+        font: inherit;
+      }
+      #object-list .object-name:focus {
+        background: var(--ui-bg-soft);
+        border-color: var(--ui-blue-hover);
+        outline: none;
+      }
       #context-menu {
         position: fixed;
         z-index: 25;
-        background: rgba(10, 12, 18, 0.95);
-        color: #e8f0ff;
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 8px;
-        box-shadow: 0 12px 30px rgba(0,0,0,0.35);
+        background: var(--ui-bg);
+        color: var(--ui-text);
+        border: 1px solid var(--ui-border);
+        border-radius: 5px;
+        box-shadow: var(--ui-shadow);
         display: none;
         min-width: 160px;
         font: 13px/1.4 system-ui, sans-serif;
@@ -122,18 +538,18 @@
         text-align: left;
         cursor: pointer;
       }
-      #context-menu button:hover { background: rgba(255,255,255,0.08); }
+      #context-menu button:hover { background: var(--ui-bg-hover); color: var(--ui-text-strong); }
       #tooltip {
         position: fixed;
         z-index: 30;
         pointer-events: none;
-        background: rgba(0, 0, 0, 0.8);
-        color: #e8f0ff;
+        background: var(--ui-bg);
+        color: var(--ui-text);
         font: 12px/1.3 system-ui, sans-serif;
         padding: 6px 8px;
-        border-radius: 8px;
-        border: 1px solid rgba(255,255,255,0.12);
-        box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+        border-radius: 5px;
+        border: 1px solid var(--ui-border);
+        box-shadow: var(--ui-shadow);
         transform: translate(-50%, -140%);
         min-width: 120px;
         white-space: nowrap;
@@ -141,32 +557,191 @@
         transition: opacity 80ms ease;
       }
       #tooltip.visible { opacity: 1; }
+      #auto-rotate-toggle {
+        position: absolute;
+        right: 12px;
+        bottom: 12px;
+        z-index: 20;
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        border: 1px solid var(--ui-border);
+        border-radius: 50%;
+        background: var(--ui-bg);
+        color: var(--ui-text);
+        cursor: pointer;
+        box-shadow: var(--ui-shadow);
+        transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+      }
+      #auto-rotate-toggle:hover {
+        background: var(--ui-bg-hover);
+        border-color: var(--ui-border);
+        color: var(--ui-text-strong);
+        transform: translateY(-1px);
+      }
+      #auto-rotate-toggle.active {
+        background: var(--ui-blue);
+        border-color: var(--ui-blue-hover);
+        color: var(--ui-text-strong);
+      }
+      #auto-rotate-toggle svg {
+        width: 22px;
+        height: 22px;
+        fill: currentColor;
+      }
+      #auto-rotate-toggle .stop-icon { display: none; }
+      #auto-rotate-toggle.active .play-icon { display: none; }
+      #auto-rotate-toggle.active .stop-icon { display: block; }
+      #github-link {
+        position: absolute;
+        right: 68px;
+        bottom: 12px;
+        z-index: 20;
+        font: 12px/1.2 system-ui,sans-serif;
+        color: var(--ui-text);
+        background: var(--ui-bg);
+        padding: 6px 8px;
+        border-radius: 5px;
+        text-decoration: none;
+        border: 1px solid var(--ui-border);
+      }
+      @media (max-width: 560px) {
+        #github-link { display: none; }
+      }
     </style>
   </head>
   <body>
-    <div id="view-toggle" aria-label="Modo de vista">
-      <button data-mode="wireframe" class="active">Wireframe</button>
-      <button data-mode="transparent">Transparente</button>
-      <button data-mode="solid">Sólido</button>
+    <div id="top-left-controls">
+      <div id="view-toggle" aria-label="View mode">
+        <button data-mode="wireframe" class="active" aria-label="Wireframe mode" title="Wireframe">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="7"></circle>
+            <path d="M5.8 9h12.4"></path>
+            <path d="M5.8 15h12.4"></path>
+            <path d="M9 5.8v12.4"></path>
+            <path d="M15 5.8v12.4"></path>
+          </svg>
+        </button>
+        <button data-mode="transparent" aria-label="Transparent mode" title="Transparent">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle class="icon-soft-fill" cx="12" cy="12" r="7"></circle>
+            <circle cx="12" cy="12" r="7"></circle>
+            <path d="M12 5v14"></path>
+          </svg>
+        </button>
+        <button data-mode="solid" aria-label="Solid mode" title="Solid">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle class="icon-fill" cx="12" cy="12" r="7"></circle>
+            <path d="M15.5 8.5a5 5 0 0 0-7 7" opacity="0.35"></path>
+          </svg>
+        </button>
+      </div>
+      <div id="scene-actions" aria-label="Scene actions">
+        <button id="import-json-button" type="button" aria-label="Import JSON" title="Import JSON">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3v12"></path>
+            <path d="M7 8l5-5 5 5"></path>
+            <path d="M5 15v4h14v-4"></path>
+          </svg>
+        </button>
+        <button id="export-json-button" type="button" aria-label="Export JSON" title="Export JSON">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 21V9"></path>
+            <path d="M7 16l5 5 5-5"></path>
+            <path d="M5 9V5h14v4"></path>
+          </svg>
+        </button>
+        <button id="edit-mode-toggle" type="button" aria-label="Toggle edit mode" aria-pressed="false" title="Edit mode">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 20l4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20z"></path>
+            <path d="M13.5 6.5l4 4"></path>
+          </svg>
+        </button>
+      </div>
     </div>
     <div id="pane">
+      <div id="gizmo-dock">
+        <div id="axis-gizmo" aria-label="View axis gizmo"></div>
+        <div id="w-axis-gizmo" aria-label="W axis gizmo">
+          <svg viewBox="0 0 86 86" aria-hidden="true">
+            <circle class="ring" cx="43" cy="43" r="31"></circle>
+            <line id="w-axis-gizmo-line" x1="43" y1="43" x2="43" y2="43"></line>
+          </svg>
+          <button id="w-axis-gizmo-neg" class="negative" type="button" aria-label="Negative W handle"></button>
+          <button id="w-axis-gizmo-pos" class="positive" type="button" aria-label="Positive W handle">W</button>
+          <span id="w-axis-gizmo-label" class="w-axis-label">W</span>
+        </div>
+      </div>
       <div id="axis-legend" style="display:none;"></div>
       <div id="axis-list"></div>
       <div id="object-list"></div>
-      <div id="panel-container"></div>
+      <div id="dimension-control" role="group" aria-label="New object dimension">
+        <span class="dimension-label">Dimension</span>
+        <div class="dimension-stepper">
+          <button id="dimension-down" type="button" aria-label="Dimension down" title="Dimension down">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 9l6 6 6-6"></path>
+            </svg>
+          </button>
+          <output id="dimension-value" aria-live="polite">4D</output>
+          <button id="dimension-up" type="button" aria-label="Dimension up" title="Dimension up">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 15l6-6 6 6"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div id="texture-panel" role="group" aria-label="Texture controls" class="empty disabled">
+        <h4>Texture</h4>
+        <div id="texture-preview-wrap">
+          <canvas id="texture-preview" aria-label="Texture preview"></canvas>
+        </div>
+        <p id="texture-empty">No object selected</p>
+        <div id="texture-controls">
+          <div class="texture-row">
+            <label for="texture-base-color">Base color</label>
+            <input id="texture-base-color" type="color" value="#bfc7d5" />
+            <output id="texture-base-color-value">#bfc7d5</output>
+          </div>
+          <div class="texture-row">
+            <label for="texture-metallic">Metallic</label>
+            <input id="texture-metallic" type="range" min="0" max="1" step="0.001" value="1" />
+            <output id="texture-metallic-value">1.000</output>
+          </div>
+          <div class="texture-row">
+            <label for="texture-roughness">Roughness</label>
+            <input id="texture-roughness" type="range" min="0" max="1" step="0.001" value="0.05" />
+            <output id="texture-roughness-value">0.050</output>
+          </div>
+          <div class="texture-row">
+            <label for="texture-alpha">Alpha</label>
+            <input id="texture-alpha" type="range" min="0" max="1" step="0.001" value="1" />
+            <output id="texture-alpha-value">1.000</output>
+          </div>
+        </div>
+      </div>
     </div>
     <input id="file-input" type="file" accept=".json" style="display:none" />
     <div id="app"></div>
     <div id="tooltip"></div>
     <div id="context-menu"></div>
     <div class="credit" id="status-bar"></div>
+    <button id="auto-rotate-toggle" type="button" aria-label="Start auto rotation" aria-pressed="false" title="Start auto rotation">
+      <svg class="play-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M8 5v14l11-7z"></path>
+      </svg>
+      <svg class="stop-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M7 7h10v10H7z"></path>
+      </svg>
+    </button>
     <a
-      href="https://github.com/srdz-af/nd-viewer"
+      id="github-link"
+      href="https://github.com/srdz-af/BleND"
       target="_blank"
       rel="noopener noreferrer"
-      style="position:absolute; right:12px; bottom:12px; font:12px/1.2 system-ui,sans-serif; color:#dbe4ff; background:rgba(0,0,0,.45); padding:6px 8px; border-radius:6px; text-decoration:none; border:1px solid rgba(255,255,255,0.15);"
     >
-      Ver código en GitHub
+      View code on GitHub
     </a>
     <script type="module" src="/src/main.ts"></script>
   </body>

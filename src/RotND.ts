@@ -28,23 +28,6 @@ export class RotND {
       this.R[j * N + k] = s * Rik + c * Rjk;
     }
   }
-
-  reorthonormalize(): void {
-    const N = this.N, R = this.R;
-    for (let i = 0; i < N; i++) {
-      for (let j = 0; j < i; j++) {
-        let dot = 0;
-        for (let k = 0; k < N; k++) dot += R[i * N + k] * R[j * N + k];
-        for (let k = 0; k < N; k++) R[i * N + k] -= dot * R[j * N + k];
-      }
-
-      let norm = 0;
-      for (let k = 0; k < N; k++) norm += R[i * N + k] * R[i * N + k];
-      norm = Math.sqrt(norm);
-      const inv = norm > 1e-8 ? 1 / norm : 1;
-      for (let k = 0; k < N; k++) R[i * N + k] *= inv;
-    }
-  }
 }
 
 export type Plane = {
