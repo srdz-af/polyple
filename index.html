@@ -799,6 +799,179 @@
       #help-content strong {
         color: var(--ui-text-strong);
       }
+      #mobile-onboarding-open {
+        width: 100%;
+        margin-top: 2px;
+        padding: 8px 10px;
+        border: 1px solid var(--ui-border);
+        border-radius: 7px;
+        background: var(--ui-bg-soft);
+        color: var(--ui-text);
+        text-align: left;
+        font: 600 12px/1.2 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        cursor: pointer;
+      }
+      #mobile-onboarding-open:hover {
+        background: var(--ui-bg-hover);
+        color: var(--ui-text-strong);
+      }
+      #mobile-onboarding-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 70;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding-top: calc(18px + var(--safe-top));
+        padding-right: calc(18px + var(--safe-right));
+        padding-bottom: calc(18px + var(--safe-bottom));
+        padding-left: calc(18px + var(--safe-left));
+        background: rgba(8, 11, 17, 0.76);
+        backdrop-filter: blur(3px);
+      }
+      #mobile-onboarding-overlay.open {
+        display: flex;
+      }
+      #mobile-onboarding-dialog {
+        box-sizing: border-box;
+        width: min(520px, calc(100vw - 24px - var(--safe-left) - var(--safe-right)));
+        max-height: calc(100vh - 30px - var(--safe-top) - var(--safe-bottom));
+        max-height: calc(100dvh - 30px - var(--safe-top) - var(--safe-bottom));
+        overflow: hidden;
+        border: 1px solid var(--ui-border);
+        border-radius: 12px;
+        background:
+          radial-gradient(120% 90% at 100% 0%, rgba(83, 127, 255, 0.2), transparent 52%),
+          radial-gradient(100% 90% at 0% 100%, rgba(155, 89, 182, 0.16), transparent 58%),
+          var(--ui-bg);
+        box-shadow: 0 14px 36px rgba(0, 0, 0, 0.44);
+        padding: 14px;
+      }
+      #mobile-onboarding-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+      #mobile-onboarding-title {
+        margin: 0;
+        font: 700 17px/1.2 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        color: var(--ui-text-strong);
+      }
+      #mobile-onboarding-close {
+        display: grid;
+        place-items: center;
+        width: 30px;
+        height: 30px;
+        padding: 0;
+        border: 1px solid var(--ui-border);
+        border-radius: 50%;
+        background: var(--ui-bg-soft);
+        color: var(--ui-text);
+        font: 700 18px/1 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        cursor: pointer;
+      }
+      #mobile-onboarding-close:hover {
+        background: var(--ui-bg-hover);
+        color: var(--ui-text-strong);
+      }
+      #mobile-onboarding-track-wrap {
+        overflow: hidden;
+        border: 1px solid var(--ui-border-soft);
+        border-radius: 9px;
+        background: rgba(18, 22, 30, 0.84);
+      }
+      #mobile-onboarding-track {
+        display: flex;
+        width: 100%;
+        transition: transform 180ms ease;
+      }
+      .mobile-onboarding-step {
+        box-sizing: border-box;
+        min-width: 100%;
+        padding: 12px 12px 11px;
+      }
+      .mobile-onboarding-step h3 {
+        margin: 0 0 6px 0;
+        font: 700 14px/1.2 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        color: var(--ui-text-strong);
+      }
+      .mobile-onboarding-step p {
+        margin: 0 0 8px 0;
+        font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        color: var(--ui-text);
+      }
+      .mobile-onboarding-step ul {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--ui-text);
+        font: 12.5px/1.42 ui-sans-serif, system-ui, -apple-system, sans-serif;
+      }
+      .mobile-onboarding-step li {
+        margin-bottom: 5px;
+      }
+      #mobile-onboarding-progress {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        margin: 10px 0;
+      }
+      #mobile-onboarding-progress button {
+        width: 8px;
+        height: 8px;
+        padding: 0;
+        border: 0;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.22);
+        cursor: pointer;
+      }
+      #mobile-onboarding-progress button.active {
+        width: 18px;
+        background: var(--ui-blue-hover);
+      }
+      #mobile-onboarding-actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      #mobile-onboarding-actions button {
+        min-width: 74px;
+        height: 34px;
+        padding: 0 12px;
+        border: 1px solid var(--ui-border);
+        border-radius: 7px;
+        background: var(--ui-bg-soft);
+        color: var(--ui-text);
+        font: 600 12px/1 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        cursor: pointer;
+      }
+      #mobile-onboarding-actions button:hover:not(:disabled) {
+        background: var(--ui-bg-hover);
+        color: var(--ui-text-strong);
+      }
+      #mobile-onboarding-actions button:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      #mobile-onboarding-next,
+      #mobile-onboarding-finish {
+        border-color: rgba(63, 107, 210, 0.74);
+        background: rgba(49, 89, 183, 0.84);
+        color: #fff;
+      }
+      #mobile-onboarding-next:hover,
+      #mobile-onboarding-finish:hover {
+        background: var(--ui-blue-hover);
+      }
+      #mobile-onboarding-finish {
+        display: none;
+      }
+      #mobile-onboarding-finish.visible {
+        display: inline-block;
+      }
       @media (max-width: 920px) {
         #top-left-controls {
           top: calc(8px + var(--safe-top));
@@ -1112,8 +1285,73 @@
           <li><strong>Delete selected object:</strong> <code>X</code>.</li>
           <li><strong>Edit mode:</strong> <code>Tab</code>. Select vertex with left click.</li>
           <li><strong>Undo/Redo:</strong> <code>Ctrl/Cmd + Z</code>, <code>Ctrl/Cmd + Y</code>.</li>
+          <li>
+            <button id="mobile-onboarding-open" type="button" aria-label="Open mobile onboarding">
+              Open mobile onboarding guide
+            </button>
+          </li>
           <li><strong>Close this panel:</strong> close button, tap outside, or <code>Esc</code>.</li>
         </ul>
+      </section>
+    </div>
+    <div id="mobile-onboarding-overlay" role="dialog" aria-modal="true" aria-labelledby="mobile-onboarding-title" aria-hidden="true">
+      <section id="mobile-onboarding-dialog">
+        <div id="mobile-onboarding-header">
+          <h2 id="mobile-onboarding-title">Mobile Controls Guide</h2>
+          <button id="mobile-onboarding-close" type="button" aria-label="Close mobile onboarding" title="Close">&times;</button>
+        </div>
+        <div id="mobile-onboarding-track-wrap">
+          <div id="mobile-onboarding-track">
+            <article class="mobile-onboarding-step" data-step="0">
+              <h3>1. Move Through The Scene</h3>
+              <p>Use touch gestures and the XYZ gizmo to orient your camera quickly.</p>
+              <ul>
+                <li><strong>Drag on canvas:</strong> orbit around the model.</li>
+                <li><strong>Pinch:</strong> zoom in or out.</li>
+                <li><strong>XYZ gizmo:</strong> drag it to orbit, or tap an endpoint to snap to that axis.</li>
+              </ul>
+            </article>
+            <article class="mobile-onboarding-step" data-step="1">
+              <h3>2. Understand N-D Gizmos</h3>
+              <p>The two gizmos in the panel control projected and high-dimensional orientation.</p>
+              <ul>
+                <li><strong>Axis order row:</strong> shift which dimensions are projected as X/Y/Z.</li>
+                <li><strong>W gizmo ring:</strong> rotate through the 4th dimension and beyond (only in 4D+).</li>
+                <li><strong>Purple W handle:</strong> drag to sweep the active W plane.</li>
+              </ul>
+            </article>
+            <article class="mobile-onboarding-step" data-step="2">
+              <h3>3. Transform Objects On Touch</h3>
+              <p>Tap an object, then use toolbar transform buttons with a drag gesture.</p>
+              <ul>
+                <li><strong>Move / Rotate / Scale buttons:</strong> touch, drag, and release to commit.</li>
+                <li><strong>Edit mode:</strong> toggle with the pencil button, then tap vertices.</li>
+                <li><strong>Dimension stepper:</strong> sets dimension for newly created primitives.</li>
+              </ul>
+            </article>
+            <article class="mobile-onboarding-step" data-step="3">
+              <h3>4. Quick Actions</h3>
+              <p>Use the bottom-right controls for playback and help.</p>
+              <ul>
+                <li><strong>Play button:</strong> starts/stops global auto-rotation.</li>
+                <li><strong>Question button:</strong> opens the full controls reference.</li>
+                <li><strong>You can reopen this guide anytime:</strong> from the Controls help panel.</li>
+              </ul>
+            </article>
+          </div>
+        </div>
+        <div id="mobile-onboarding-progress" aria-label="Mobile onboarding steps">
+          <button type="button" data-step="0" aria-label="Step 1"></button>
+          <button type="button" data-step="1" aria-label="Step 2"></button>
+          <button type="button" data-step="2" aria-label="Step 3"></button>
+          <button type="button" data-step="3" aria-label="Step 4"></button>
+        </div>
+        <div id="mobile-onboarding-actions">
+          <button id="mobile-onboarding-skip" type="button">Skip</button>
+          <button id="mobile-onboarding-prev" type="button">Back</button>
+          <button id="mobile-onboarding-next" type="button">Next</button>
+          <button id="mobile-onboarding-finish" type="button">Start</button>
+        </div>
       </section>
     </div>
     <script type="module" src="/src/main.ts"></script>

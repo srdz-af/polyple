@@ -28,6 +28,17 @@ const autoRotateToggle = document.getElementById('auto-rotate-toggle') as HTMLBu
 const helpToggleButton = document.getElementById('help-toggle') as HTMLButtonElement | null;
 const helpOverlay = document.getElementById('help-overlay') as HTMLDivElement | null;
 const helpCloseButton = document.getElementById('help-close') as HTMLButtonElement | null;
+const mobileOnboardingOpenButton = document.getElementById('mobile-onboarding-open') as HTMLButtonElement | null;
+const mobileOnboardingOpenListItem = mobileOnboardingOpenButton?.closest('li') as HTMLLIElement | null;
+const mobileOnboardingOverlay = document.getElementById('mobile-onboarding-overlay') as HTMLDivElement | null;
+const mobileOnboardingTrack = document.getElementById('mobile-onboarding-track') as HTMLDivElement | null;
+const mobileOnboardingCloseButton = document.getElementById('mobile-onboarding-close') as HTMLButtonElement | null;
+const mobileOnboardingSkipButton = document.getElementById('mobile-onboarding-skip') as HTMLButtonElement | null;
+const mobileOnboardingPrevButton = document.getElementById('mobile-onboarding-prev') as HTMLButtonElement | null;
+const mobileOnboardingNextButton = document.getElementById('mobile-onboarding-next') as HTMLButtonElement | null;
+const mobileOnboardingFinishButton = document.getElementById('mobile-onboarding-finish') as HTMLButtonElement | null;
+const mobileOnboardingProgressButtons = Array.from(document.querySelectorAll('#mobile-onboarding-progress button[data-step]')) as HTMLButtonElement[];
+const mobileOnboardingSteps = Array.from(document.querySelectorAll('#mobile-onboarding-track .mobile-onboarding-step')) as HTMLElement[];
 const importJsonButton = document.getElementById('import-json-button') as HTMLButtonElement | null;
 const exportJsonButton = document.getElementById('export-json-button') as HTMLButtonElement | null;
 const editModeToggle = document.getElementById('edit-mode-toggle') as HTMLButtonElement | null;
@@ -49,10 +60,21 @@ const textureRoughnessValue = document.getElementById('texture-roughness-value')
 const textureAlphaInput = document.getElementById('texture-alpha') as HTMLInputElement | null;
 const textureAlphaValue = document.getElementById('texture-alpha-value') as HTMLOutputElement | null;
 const getPaneToggleButton = () => document.getElementById('pane-toggle') as HTMLButtonElement | null;
+const MOBILE_ONBOARDING_SEEN_KEY = 'blend.mobileOnboardingSeen.v1';
+const MOBILE_ONBOARDING_BREAKPOINT = 920;
 let helpLastFocusedEl: HTMLElement | null = null;
+let mobileOnboardingLastFocusedEl: HTMLElement | null = null;
+let mobileOnboardingStep = 0;
+
+const isHelpOverlayOpen = () => helpOverlay?.classList.contains('open') ?? false;
+const isMobileOnboardingOpen = () => mobileOnboardingOverlay?.classList.contains('open') ?? false;
+const isModalUIOpen = () => isHelpOverlayOpen() || isMobileOnboardingOpen();
 
 function setHelpOverlayOpen(open: boolean) {
   if (!helpOverlay) return;
+  if (open && isMobileOnboardingOpen()) {
+    setMobileOnboardingOpen(false);
+  }
   helpOverlay.classList.toggle('open', open);
   helpOverlay.setAttribute('aria-hidden', open ? 'false' : 'true');
   if (open) {
@@ -63,6 +85,89 @@ function setHelpOverlayOpen(open: boolean) {
   if (helpLastFocusedEl && document.contains(helpLastFocusedEl)) {
     helpLastFocusedEl.focus();
   }
+}
+
+function isMobileOnboardingViewport() {
+  return window.innerWidth <= MOBILE_ONBOARDING_BREAKPOINT || window.matchMedia('(pointer: coarse)').matches;
+}
+
+function hasSeenMobileOnboarding() {
+  try {
+    return window.localStorage.getItem(MOBILE_ONBOARDING_SEEN_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function markMobileOnboardingSeen() {
+  try {
+    window.localStorage.setItem(MOBILE_ONBOARDING_SEEN_KEY, '1');
+  } catch {
+    // Storage may be unavailable in private sessions.
+  }
+}
+
+function setMobileOnboardingStep(step: number) {
+  if (!mobileOnboardingTrack || mobileOnboardingSteps.length === 0) return;
+  const maxStep = mobileOnboardingSteps.length - 1;
+  mobileOnboardingStep = Math.max(0, Math.min(maxStep, step));
+  mobileOnboardingTrack.style.transform = `translateX(${-mobileOnboardingStep * 100}%)`;
+
+  mobileOnboardingSteps.forEach((stepEl, idx) => {
+    stepEl.setAttribute('aria-hidden', idx === mobileOnboardingStep ? 'false' : 'true');
+  });
+
+  mobileOnboardingProgressButtons.forEach((button, idx) => {
+    const active = idx === mobileOnboardingStep;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-current', active ? 'step' : 'false');
+  });
+
+  const isLastStep = mobileOnboardingStep >= maxStep;
+  if (mobileOnboardingPrevButton) mobileOnboardingPrevButton.disabled = mobileOnboardingStep === 0;
+  if (mobileOnboardingNextButton) mobileOnboardingNextButton.style.display = isLastStep ? 'none' : 'inline-block';
+  if (mobileOnboardingFinishButton) mobileOnboardingFinishButton.classList.toggle('visible', isLastStep);
+}
+
+function setMobileOnboardingOpen(open: boolean) {
+  if (!mobileOnboardingOverlay) return;
+  if (open && isHelpOverlayOpen()) {
+    setHelpOverlayOpen(false);
+  }
+  mobileOnboardingOverlay.classList.toggle('open', open);
+  mobileOnboardingOverlay.setAttribute('aria-hidden', open ? 'false' : 'true');
+  if (open) {
+    mobileOnboardingLastFocusedEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setMobileOnboardingStep(mobileOnboardingStep);
+    mobileOnboardingCloseButton?.focus();
+    return;
+  }
+  if (mobileOnboardingLastFocusedEl && document.contains(mobileOnboardingLastFocusedEl)) {
+    mobileOnboardingLastFocusedEl.focus();
+  }
+}
+
+function closeMobileOnboarding(markSeen = true) {
+  if (!isMobileOnboardingOpen()) return;
+  if (markSeen) markMobileOnboardingSeen();
+  setMobileOnboardingOpen(false);
+}
+
+function openMobileOnboarding(step = 0) {
+  setMobileOnboardingStep(step);
+  setMobileOnboardingOpen(true);
+}
+
+function syncMobileOnboardingHintVisibility() {
+  if (!mobileOnboardingOpenListItem) return;
+  mobileOnboardingOpenListItem.hidden = !isMobileOnboardingViewport();
+}
+
+function maybeOpenMobileOnboarding() {
+  if (!mobileOnboardingOverlay || mobileOnboardingSteps.length === 0) return;
+  if (!isMobileOnboardingViewport()) return;
+  if (hasSeenMobileOnboarding()) return;
+  openMobileOnboarding(0);
 }
 
 // --- Three.js setup ---
@@ -2260,6 +2365,26 @@ helpCloseButton?.addEventListener('click', () => setHelpOverlayOpen(false));
 helpOverlay?.addEventListener('click', ev => {
   if (ev.target === helpOverlay) setHelpOverlayOpen(false);
 });
+mobileOnboardingOpenButton?.addEventListener('click', ev => {
+  ev.preventDefault();
+  setHelpOverlayOpen(false);
+  openMobileOnboarding(0);
+});
+mobileOnboardingCloseButton?.addEventListener('click', () => closeMobileOnboarding(true));
+mobileOnboardingSkipButton?.addEventListener('click', () => closeMobileOnboarding(true));
+mobileOnboardingPrevButton?.addEventListener('click', () => setMobileOnboardingStep(mobileOnboardingStep - 1));
+mobileOnboardingNextButton?.addEventListener('click', () => setMobileOnboardingStep(mobileOnboardingStep + 1));
+mobileOnboardingFinishButton?.addEventListener('click', () => closeMobileOnboarding(true));
+mobileOnboardingOverlay?.addEventListener('click', ev => {
+  if (ev.target === mobileOnboardingOverlay) closeMobileOnboarding(true);
+});
+mobileOnboardingProgressButtons.forEach(button => {
+  button.addEventListener('click', () => {
+    const step = Number.parseInt(button.dataset.step ?? '', 10);
+    if (Number.isNaN(step)) return;
+    setMobileOnboardingStep(step);
+  });
+});
 [
   { el: transformMoveButton, mode: 'move' as TransformMode },
   { el: transformRotateButton, mode: 'rotate' as TransformMode },
@@ -2284,6 +2409,9 @@ autoRotateToggle?.addEventListener('click', () => setAutoRotation(!PARAMS.autoSp
 updateAutoRotateToggle();
 updateTransformActionButtons();
 syncPaneCollapsedToViewport(true);
+syncMobileOnboardingHintVisibility();
+setMobileOnboardingStep(0);
+maybeOpenMobileOnboarding();
 
 function applyTransformPointer(clientX: number, clientY: number) {
   if (transformOp.mode === 'none') return;
@@ -2837,12 +2965,18 @@ window.addEventListener('blur', () => {
 
 window.addEventListener('keydown', (ev) => {
   if (ev.key !== 'Escape') return;
-  if (!helpOverlay?.classList.contains('open')) return;
+  if (isMobileOnboardingOpen()) {
+    ev.preventDefault();
+    closeMobileOnboarding(true);
+    return;
+  }
+  if (!isHelpOverlayOpen()) return;
   ev.preventDefault();
   setHelpOverlayOpen(false);
 });
 
 window.addEventListener('keydown', (ev) => {
+  if (isModalUIOpen()) return;
   const key = ev.key.toLowerCase();
   const hasMod = ev.ctrlKey || ev.metaKey;
   if (!hasMod) return;
@@ -2869,6 +3003,7 @@ window.addEventListener('keydown', (ev) => {
 });
 
 window.addEventListener('keydown', (ev) => {
+  if (isModalUIOpen()) return;
   if (isTextEntryTarget(ev.target)) return;
   if (transformOp.mode === 'none') return;
   const key = ev.key.toLowerCase();
@@ -2887,6 +3022,7 @@ window.addEventListener('keydown', (ev) => {
 });
 
 window.addEventListener('keydown', (ev) => {
+  if (isModalUIOpen()) return;
   if (isTextEntryTarget(ev.target)) return;
   if (ev.key === 'Tab') {
     ev.preventDefault();
@@ -3040,5 +3176,6 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
   syncPaneCollapsedToViewport();
+  syncMobileOnboardingHintVisibility();
   updateTexturePanel();
 });
