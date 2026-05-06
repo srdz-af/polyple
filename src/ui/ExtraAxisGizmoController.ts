@@ -67,6 +67,7 @@ type ExtraAxisOrderDragState = {
 export class ExtraAxisGizmoController {
   private readonly uis = new Map<number, ExtraAxisGizmoUI>();
   private readonly angles = new Map<number, number>();
+  private readonly anglePlaneKeys = new Map<number, string>();
   private readonly selectedPerspectiveDims = new Set<number>([3]);
   private readonly autoRotateSpeeds = new Map<number, number>();
   private readonly drag = {
@@ -208,6 +209,7 @@ export class ExtraAxisGizmoController {
   clearDynamicState() {
     this.autoRotateSpeeds.clear();
     this.angles.clear();
+    this.anglePlaneKeys.clear();
   }
 
   perspectiveDimsFor(localN: number, axisMap: AxisMap): number[] {
@@ -237,11 +239,12 @@ export class ExtraAxisGizmoController {
       if (plane.planeAxis < 0 || plane.planeAxis === plane.depthDim) continue;
       const delta = EXTRA_AXIS_AUTO_ROTATE_SPEED * speed * dt;
       this.options.getRot().applyGivensLeft(plane.planeAxis, plane.depthDim, delta);
+      this.offsetAngle(plane, delta);
       rotated = true;
     }
 
     if (!rotated) return;
-    this.syncAnglesFromRotation(gizmoPlanes);
+    this.sync();
     this.options.applySceneBackground();
   }
 
@@ -249,19 +252,19 @@ export class ExtraAxisGizmoController {
     const planes = this.currentPlanes();
     if (planes.length < 2) return;
 
+    this.ensureAnglesForPlanes(planes);
     const targetAngle = this.getAngle(planes[0].depthDim);
     let rotated = false;
     for (const plane of planes.slice(1)) {
       if (plane.planeAxis < 0 || plane.planeAxis === plane.depthDim) continue;
       const currentAngle = this.getAngle(plane.depthDim);
       const delta = normalizeSignedAngleDelta(targetAngle - currentAngle);
-      this.angles.set(plane.depthDim, targetAngle);
+      this.setAngle(plane, targetAngle);
       if (Math.abs(delta) < 1e-4) continue;
       this.options.getRot().applyGivensLeft(plane.planeAxis, plane.depthDim, delta);
       rotated = true;
     }
 
-    this.syncAnglesFromRotation(planes);
     this.sync();
     if (!rotated) return;
     this.options.applySceneBackground();
@@ -271,7 +274,7 @@ export class ExtraAxisGizmoController {
   sync() {
     if (!this.options.rootEl) return;
     const planes = this.currentPlanes();
-    this.syncAnglesFromRotation(planes);
+    this.ensureAnglesForPlanes(planes);
     const activeDepthDims = new Set(planes.map(plane => plane.depthDim));
     const freezeDomOrder = this.orderDrag.active;
 
@@ -282,6 +285,7 @@ export class ExtraAxisGizmoController {
         ui.root.remove();
         this.uis.delete(depthDim);
         this.angles.delete(depthDim);
+        this.anglePlaneKeys.delete(depthDim);
       }
     }
 
@@ -411,7 +415,7 @@ export class ExtraAxisGizmoController {
     return EXTRA_GIZMO_BASE_ANGLE;
   }
 
-  private syncAnglesFromRotation(planes = this.currentPlanes()) {
+  private ensureAnglesForPlanes(planes = this.currentPlanes()) {
     const rot = this.options.getRot();
     const R = rot.matrix;
     const N = rot.N;
@@ -419,13 +423,34 @@ export class ExtraAxisGizmoController {
     for (const plane of planes) {
       if (plane.planeAxis < 0 || plane.depthDim < 0 || plane.planeAxis >= N || plane.depthDim >= N) continue;
       activeDepthDims.add(plane.depthDim);
-      const x = R[plane.planeAxis * N + plane.planeAxis] ?? 1;
-      const y = R[plane.depthDim * N + plane.planeAxis] ?? 0;
-      this.angles.set(plane.depthDim, normalizeSignedAngleDelta(EXTRA_GIZMO_BASE_ANGLE + Math.atan2(y, x)));
+      const key = this.planeKey(plane);
+      if (this.angles.has(plane.depthDim) && this.anglePlaneKeys.get(plane.depthDim) === key) continue;
+      this.setAngle(plane, this.angleFromRotationMatrix(plane, R, N));
     }
     for (const dim of Array.from(this.angles.keys())) {
-      if (!activeDepthDims.has(dim)) this.angles.delete(dim);
+      if (activeDepthDims.has(dim)) continue;
+      this.angles.delete(dim);
+      this.anglePlaneKeys.delete(dim);
     }
+  }
+
+  private planeKey(plane: ExtraAxisGizmoPlane) {
+    return `${plane.planeAxis}:${plane.depthDim}`;
+  }
+
+  private angleFromRotationMatrix(plane: ExtraAxisGizmoPlane, R: Float32Array, N: number) {
+    const x = R[plane.planeAxis * N + plane.planeAxis] ?? 1;
+    const y = R[plane.depthDim * N + plane.planeAxis] ?? 0;
+    return normalizeSignedAngleDelta(EXTRA_GIZMO_BASE_ANGLE + Math.atan2(y, x));
+  }
+
+  private setAngle(plane: ExtraAxisGizmoPlane, angle: number) {
+    this.angles.set(plane.depthDim, normalizeSignedAngleDelta(angle));
+    this.anglePlaneKeys.set(plane.depthDim, this.planeKey(plane));
+  }
+
+  private offsetAngle(plane: ExtraAxisGizmoPlane, delta: number) {
+    this.setAngle(plane, this.getAngle(plane.depthDim) + delta);
   }
 
   private setAutoRotateSpeed(depthDim: number, speed: number) {
@@ -884,7 +909,8 @@ export class ExtraAxisGizmoController {
     if (this.drag.planeAxis < 0 || this.drag.depthAxis < 0 || this.drag.planeAxis === this.drag.depthAxis) return;
 
     this.options.getRot().applyGivensLeft(this.drag.planeAxis, this.drag.depthAxis, delta);
-    this.syncAnglesFromRotation();
+    this.offsetAngle({ planeAxis: this.drag.planeAxis, depthDim: this.drag.depthAxis }, delta);
+    this.sync();
     this.options.applySceneBackground();
   }
 }
