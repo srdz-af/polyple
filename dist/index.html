@@ -145,6 +145,9 @@
         padding-left: 5px;
         border-left: 1px solid var(--ui-border);
       }
+      #scene-actions {
+        align-items: center;
+      }
       #view-toggle button,
       #scene-actions button,
       #transform-actions button {
@@ -179,6 +182,24 @@
       #scene-actions button.recording:hover {
         background: rgba(201, 56, 56, 0.86);
         color: #fff;
+      }
+      #record-viewport-timer {
+        display: none;
+        margin-left: 2px;
+        padding: 0 6px;
+        height: 27px;
+        border-radius: 3px;
+        border: 1px solid rgba(201, 56, 56, 0.42);
+        background: rgba(201, 56, 56, 0.18);
+        color: #ffd7d7;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 27px;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.2px;
+      }
+      #record-viewport-timer.active {
+        display: inline-block;
       }
       #view-toggle button:disabled,
       #scene-actions button:disabled,
@@ -349,6 +370,10 @@
       .extra-axis-gizmo button.auto-toggle .material-symbols-rounded {
         font-size: 12px;
         line-height: 1;
+      }
+      .extra-axis-gizmo button.auto-toggle .auto-speed-label {
+        display: block;
+        font: 800 8px/1 system-ui, sans-serif;
       }
       .extra-axis-gizmo button.auto-toggle .stop-icon {
         display: none;
@@ -553,7 +578,11 @@
       #texture-panel h4,
       #texture-empty,
       #texture-controls label,
-      #texture-controls output {
+      #texture-controls output,
+      #texture-preset-controls label,
+      #texture-preset-select,
+      #texture-preset-save,
+      #record-viewport-timer {
         user-select: none;
         -webkit-user-select: none;
         -moz-user-select: none;
@@ -823,6 +852,55 @@
       #texture-base-color-value {
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
         font-size: 11px;
+      }
+      #texture-preset-controls {
+        margin-top: 8px;
+        display: grid;
+        gap: 6px;
+      }
+      #texture-preset-controls label {
+        color: var(--ui-text);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+        line-height: 1.2;
+      }
+      #texture-preset-controls .texture-preset-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 8px;
+      }
+      #texture-preset-select {
+        width: 100%;
+        min-width: 0;
+        height: 28px;
+        padding: 0 8px;
+        border: 1px solid var(--ui-border-soft);
+        border-radius: 4px;
+        background: var(--ui-bg-soft);
+        color: var(--ui-text-strong);
+        font: inherit;
+      }
+      #texture-preset-save {
+        height: 28px;
+        padding: 0 10px;
+        border: 1px solid var(--ui-border-soft);
+        border-radius: 4px;
+        background: var(--ui-bg-soft);
+        color: var(--ui-text-strong);
+        font: 600 11px/1 system-ui, sans-serif;
+        cursor: pointer;
+        transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+      }
+      #texture-preset-save:hover:not(:disabled) {
+        background: var(--ui-bg-hover);
+        border-color: var(--ui-border);
+      }
+      #texture-preset-select:disabled,
+      #texture-preset-save:disabled {
+        opacity: 0.5;
+        cursor: default;
       }
       #object-list table { width: 100%; border-collapse: collapse; table-layout: fixed; }
       #object-list th {
@@ -1289,6 +1367,11 @@
           width: 30px;
           height: 30px;
         }
+        #record-viewport-timer {
+          height: 30px;
+          line-height: 30px;
+          font-size: 10px;
+        }
         #pane {
           left: calc(8px + var(--safe-left));
           right: calc(8px + var(--safe-right));
@@ -1332,7 +1415,7 @@
         }
       }
     </style>
-    <script type="module" crossorigin src="/BleND/assets/index-CxP7D8Q1.js"></script>
+    <script type="module" crossorigin src="/BleND/assets/index-rZdstY3-.js"></script>
   </head>
   <body>
     <div id="top-left-controls">
@@ -1354,10 +1437,11 @@
         <button id="import-json-button" type="button" aria-label="Import JSON" title="Import JSON">
           <span class="material-symbols-rounded" aria-hidden="true">file_upload</span>
         </button>
-        <button id="record-viewport-button" type="button" aria-label="Record viewport" title="Record viewport">
+        <button id="record-viewport-button" type="button" aria-label="Record viewport (Shift+R)" title="Record viewport (Shift+R)">
           <span class="material-symbols-rounded" aria-hidden="true">movie</span>
         </button>
-        <button id="capture-frame-button" type="button" aria-label="Download current frame" title="Download current frame">
+        <span id="record-viewport-timer" aria-live="polite" aria-hidden="true">00:00</span>
+        <button id="capture-frame-button" type="button" aria-label="Download current frame (Shift+S)" title="Download current frame (Shift+S)">
           <span class="material-symbols-rounded" aria-hidden="true">photo_camera</span>
         </button>
         <button id="export-json-button" type="button" aria-label="Export JSON" title="Export JSON">
@@ -1479,6 +1563,15 @@
             <output id="texture-alpha-value">1.000</output>
           </div>
         </div>
+        <div id="texture-preset-controls">
+          <label for="texture-preset-select">Saved texture</label>
+          <div class="texture-preset-row">
+            <select id="texture-preset-select">
+              <option value="">Select preset…</option>
+            </select>
+            <button id="texture-preset-save" type="button">Save</button>
+          </div>
+        </div>
       </div>
     </div>
     <input id="file-input" type="file" accept=".json" style="display:none" />
@@ -1511,7 +1604,7 @@
           <li><strong>Perspective depth:</strong> use the depth button on an extra-axis gizmo to include/exclude that axis from perspective depth.</li>
           <li><strong>XYZ gizmo:</strong> drag the gizmo to move/orbit the view, or tap an endpoint to snap the camera to that axis.</li>
           <li><strong>Extra-axis gizmos:</strong> double click/tap an axis chip to add or remove its gizmo.</li>
-          <li><strong>Axis auto-rotate:</strong> use the tiny play/stop button on a gizmo to toggle continuous rotation for that axis plane.</li>
+          <li><strong>Axis auto-rotate:</strong> use the tiny play button on a gizmo to cycle 1x, 2x, 3x, then stop for that axis plane.</li>
           <li><strong>Remove from gizmo dock:</strong> double click/tap a gizmo to remove it directly.</li>
           <li><strong>Faceted mode:</strong> every object uses the same solid multicolor material with one color per coplanar outer face region.</li>
           <li><strong>Add object:</strong> <code>Shift + A</code>.</li>
@@ -1554,7 +1647,7 @@
                 <li><strong>Add/remove by chip:</strong> double click/tap a chip to toggle its gizmo.</li>
                 <li><strong>Remove by gizmo:</strong> double click/tap a gizmo in the dock.</li>
                 <li><strong>Gizmo use:</strong> drag a gizmo to rotate through that axis plane.</li>
-                <li><strong>Auto rotate by axis:</strong> tap the small play/stop button on a gizmo to animate that axis plane.</li>
+                <li><strong>Auto rotate by axis:</strong> tap the small play button on a gizmo to cycle 1x, 2x, 3x, then stop.</li>
                 <li><strong>Depth button:</strong> tap the depth icon on a gizmo to toggle that axis in perspective depth.</li>
               </ul>
             </article>

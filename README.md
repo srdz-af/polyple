@@ -63,7 +63,7 @@ Global N-D rotation:
 
 ```text
 W gizmo (purple dial): rotate global space on the active W plane (4D+)
-Extra-axis gizmo mini play/stop: toggle auto-rotation for that axis plane
+Extra-axis gizmo mini play button: cycle auto-rotation through 1x, 2x, 3x, then stop
 Extra-axis gizmo depth icon: include/exclude that axis from perspective depth
 ```
 
@@ -118,7 +118,7 @@ Ctrl+Shift+Z / Cmd+Shift+Z: redo
 - **Object list**: select, rename, hide/show objects
 - **Dimension selector**: sets dimension for newly created primitives
 - **Texture panel**: per-selected-object surface controls and preview cube
-- **Extra-axis gizmos**: per-axis high-dimensional rotation dials with mini play/stop auto-rotate toggles
+- **Extra-axis gizmos**: per-axis high-dimensional rotation dials with mini play, 2x, 3x, stop auto-rotate toggles
 
 ## JSON Import / Export
 

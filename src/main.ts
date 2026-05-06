@@ -37,12 +37,12 @@ const mobileOnboardingSteps = Array.from(document.querySelectorAll('#mobile-onbo
 const importJsonButton = document.getElementById('import-json-button') as HTMLButtonElement | null;
 const exportJsonButton = document.getElementById('export-json-button') as HTMLButtonElement | null;
 const recordViewportButton = document.getElementById('record-viewport-button') as HTMLButtonElement | null;
+const recordViewportTimer = document.getElementById('record-viewport-timer') as HTMLSpanElement | null;
 const captureFrameButton = document.getElementById('capture-frame-button') as HTMLButtonElement | null;
 const editModeToggle = document.getElementById('edit-mode-toggle') as HTMLButtonElement | null;
 const transformMoveButton = document.getElementById('transform-move-button') as HTMLButtonElement | null;
 const transformRotateButton = document.getElementById('transform-rotate-button') as HTMLButtonElement | null;
 const transformScaleButton = document.getElementById('transform-scale-button') as HTMLButtonElement | null;
-const dimensionControl = document.getElementById('dimension-control') as HTMLDivElement | null;
 const dimensionValue = document.getElementById('dimension-value') as HTMLOutputElement | null;
 const dimensionDownButton = document.getElementById('dimension-down') as HTMLButtonElement | null;
 const dimensionUpButton = document.getElementById('dimension-up') as HTMLButtonElement | null;
@@ -63,11 +63,14 @@ const textureRoughnessInput = document.getElementById('texture-roughness') as HT
 const textureRoughnessValue = document.getElementById('texture-roughness-value') as HTMLOutputElement | null;
 const textureAlphaInput = document.getElementById('texture-alpha') as HTMLInputElement | null;
 const textureAlphaValue = document.getElementById('texture-alpha-value') as HTMLOutputElement | null;
+const texturePresetSelect = document.getElementById('texture-preset-select') as HTMLSelectElement | null;
+const texturePresetSaveButton = document.getElementById('texture-preset-save') as HTMLButtonElement | null;
 const getPaneToggleButton = () => document.getElementById('pane-toggle') as HTMLButtonElement | null;
 const MOBILE_ONBOARDING_SEEN_KEY = 'blend.mobileOnboardingSeen.v1';
 const HDR_BACKGROUND_SELECTION_KEY = 'blend.hdriSelection.v1';
 const HDR_BACKGROUND_BLUR_KEY = 'blend.hdriBlur.v1';
 const HDR_BACKGROUND_LIGHTNESS_KEY = 'blend.hdriLightness.v1';
+const TEXTURE_PRESETS_KEY = 'blend.texturePresets.v1';
 let helpLastFocusedEl: HTMLElement | null = null;
 let mobileOnboardingLastFocusedEl: HTMLElement | null = null;
 let mobileOnboardingStep = 0;
@@ -188,7 +191,16 @@ const HDR_BACKGROUND_BLUR_DEFAULT = 0.35;
 const HDR_BACKGROUND_LIGHTNESS_DEFAULT = 1.0;
 const PLAIN_BACKGROUND_KEY = 'plain' as const;
 const DEFAULT_SOLID_BACKGROUND_KEY = 'ferndale' as const;
+const VITE_BASE_URL = (() => {
+  const env = (import.meta as { env?: { BASE_URL?: unknown } }).env;
+  if (typeof env?.BASE_URL !== 'string') return '';
+  const trimmed = env.BASE_URL.trim();
+  if (!trimmed) return '';
+  const withLeadingSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return withLeadingSlash.endsWith('/') ? withLeadingSlash : `${withLeadingSlash}/`;
+})();
 const APP_BASE_URL = (() => {
+  if (VITE_BASE_URL) return VITE_BASE_URL;
   try {
     const path = new URL('.', document.baseURI).pathname;
     return path.endsWith('/') ? path : `${path}/`;
@@ -302,7 +314,7 @@ const extraAxisGizmoUIs = new Map<number, ExtraAxisGizmoUI>();
 const extraAxisGizmoAngles = new Map<number, number>();
 const selectedExtraAxisGizmoDims = new Set<number>([3]);
 const selectedPerspectiveDims = new Set<number>([3]);
-const autoRotateExtraAxisDims = new Set<number>();
+const autoRotateExtraAxisSpeeds = new Map<number, number>();
 const EXTRA_AXIS_AUTO_ROTATE_SPEED = 0.45;
 const axisChipDoubleTapState = { dim: -1, ts: 0, x: 0, y: 0 };
 const gizmoDoubleTapState = { dim: -1, ts: 0, x: 0, y: 0 };
@@ -662,7 +674,7 @@ function removeExtraAxisGizmo(depthDim: number) {
   }
   selectedExtraAxisGizmoDims.delete(depthDim);
   selectedPerspectiveDims.delete(depthDim);
-  autoRotateExtraAxisDims.delete(depthDim);
+  autoRotateExtraAxisSpeeds.delete(depthDim);
   extraAxisGizmoAngles.delete(depthDim);
   const ui = extraAxisGizmoUIs.get(depthDim);
   if (ui) {
@@ -678,19 +690,49 @@ function toggleExtraAxisGizmo(depthDim: number) {
   else addExtraAxisGizmo(depthDim);
 }
 
-function setExtraAxisAutoRotate(depthDim: number, active: boolean) {
-  if (active) autoRotateExtraAxisDims.add(depthDim);
-  else autoRotateExtraAxisDims.delete(depthDim);
+function setExtraAxisAutoRotateSpeed(depthDim: number, speed: number) {
+  const normalizedSpeed = Number.isFinite(speed) ? Math.max(0, Math.min(3, Math.round(speed))) : 0;
+  if (normalizedSpeed > 0) autoRotateExtraAxisSpeeds.set(depthDim, normalizedSpeed);
+  else autoRotateExtraAxisSpeeds.delete(depthDim);
+
   const ui = extraAxisGizmoUIs.get(depthDim);
   if (ui) {
+    const active = normalizedSpeed > 0;
     ui.autoToggleButton.classList.toggle('active', active);
+    const speedKey = String(normalizedSpeed);
+    if (ui.autoToggleButton.dataset.autoSpeed !== speedKey) {
+      ui.autoToggleButton.dataset.autoSpeed = speedKey;
+      ui.autoToggleButton.replaceChildren();
+      if (normalizedSpeed === 0 || normalizedSpeed === 3) {
+        const icon = document.createElement('span');
+        icon.className = 'material-symbols-rounded';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.textContent = normalizedSpeed === 0 ? 'play_arrow' : 'stop';
+        ui.autoToggleButton.appendChild(icon);
+      } else {
+        const speedLabel = document.createElement('span');
+        speedLabel.className = 'auto-speed-label';
+        speedLabel.textContent = `x${normalizedSpeed + 1}`;
+        ui.autoToggleButton.appendChild(speedLabel);
+      }
+    }
     const label = axisLabel(depthDim);
-    const action = active ? 'Stop auto-rotate' : 'Start auto-rotate';
+    const action = normalizedSpeed === 0
+      ? 'Start auto-rotate'
+      : normalizedSpeed < 3
+        ? `Set auto-rotate ${normalizedSpeed + 1}x`
+        : 'Stop auto-rotate';
     const title = `${action} ${label} axis`;
     ui.autoToggleButton.title = title;
     ui.autoToggleButton.setAttribute('aria-label', title);
     ui.autoToggleButton.setAttribute('aria-pressed', String(active));
   }
+}
+
+function advanceExtraAxisAutoRotate(depthDim: number) {
+  const currentSpeed = autoRotateExtraAxisSpeeds.get(depthDim) ?? 0;
+  const nextSpeed = currentSpeed >= 3 ? 0 : currentSpeed + 1;
+  setExtraAxisAutoRotateSpeed(depthDim, nextSpeed);
 }
 
 function setExtraAxisPerspectiveDepth(depthDim: number, active: boolean) {
@@ -821,12 +863,12 @@ function createExtraAxisGizmoUI(depthDim: number): ExtraAxisGizmoUI {
     if (ev.pointerType !== 'mouse') ev.preventDefault();
     ev.stopPropagation();
     if (ev.button !== 0) return;
-    setExtraAxisAutoRotate(depthDim, !autoRotateExtraAxisDims.has(depthDim));
+    advanceExtraAxisAutoRotate(depthDim);
   });
   autoToggleButton.addEventListener('keydown', ev => {
     if (ev.key !== 'Enter' && ev.key !== ' ') return;
     ev.preventDefault();
-    setExtraAxisAutoRotate(depthDim, !autoRotateExtraAxisDims.has(depthDim));
+    advanceExtraAxisAutoRotate(depthDim);
   });
   autoToggleButton.addEventListener('pointerup', ev => {
     ev.preventDefault();
@@ -963,7 +1005,7 @@ function syncExtraAxisGizmos() {
     ui.negButton.classList.remove('back');
     ui.posButton.style.zIndex = '2';
     ui.negButton.style.zIndex = '1';
-    setExtraAxisAutoRotate(plane.depthDim, autoRotateExtraAxisDims.has(plane.depthDim));
+    setExtraAxisAutoRotateSpeed(plane.depthDim, autoRotateExtraAxisSpeeds.get(plane.depthDim) ?? 0);
     setExtraAxisPerspectiveDepth(plane.depthDim, selectedPerspectiveDims.has(plane.depthDim));
   }
 }
@@ -1095,6 +1137,147 @@ function orbitCameraFromGizmo(dx: number, dy: number) {
   camera.lookAt(controls.target);
   controls.update();
   updateAxisGizmo();
+}
+
+const KEYBOARD_ORBIT_TARGET = new THREE.Vector3(0, 0, 0);
+const KEYBOARD_ORBIT_RATE = 1.9;
+const KEYBOARD_ZOOM_RATE = 2.6;
+const KEYBOARD_ZOOM_MIN_DISTANCE = 0.2;
+const KEYBOARD_ZOOM_MAX_DISTANCE = 80;
+const keyboardOrbitOffset = new THREE.Vector3();
+const keyboardOrbitSpherical = new THREE.Spherical();
+const keyboardCameraTargetOffset = new THREE.Vector3();
+const keyboardCameraCurrentOffset = new THREE.Vector3();
+const keyboardCameraKeys = {
+  left: false,
+  right: false,
+  up: false,
+  down: false,
+  ctrl: false,
+};
+let keyboardCameraSmoothingActive = false;
+
+function setCameraToOriginOffset(offset: THREE.Vector3) {
+  controls.target.copy(KEYBOARD_ORBIT_TARGET);
+  camera.up.copy(worldUp);
+  camera.position.copy(KEYBOARD_ORBIT_TARGET).add(offset);
+  camera.lookAt(KEYBOARD_ORBIT_TARGET);
+  controls.update();
+  updateAxisGizmo();
+}
+
+function queueKeyboardCameraOffset(offset: THREE.Vector3) {
+  keyboardCameraTargetOffset.copy(offset);
+  keyboardCameraSmoothingActive = true;
+}
+
+function getKeyboardCameraPlanningOffset() {
+  if (keyboardCameraSmoothingActive) {
+    keyboardOrbitOffset.copy(keyboardCameraTargetOffset);
+  } else {
+    keyboardOrbitOffset.copy(camera.position).sub(KEYBOARD_ORBIT_TARGET);
+  }
+  if (keyboardOrbitOffset.lengthSq() < 1e-8) {
+    keyboardOrbitOffset.copy(DEFAULT_CAMERA_POSITION);
+  }
+  return keyboardOrbitOffset;
+}
+
+function applyKeyboardCameraSmoothing(dt: number) {
+  if (!keyboardCameraSmoothingActive) return;
+  keyboardOrbitOffset.copy(camera.position).sub(KEYBOARD_ORBIT_TARGET);
+  if (keyboardOrbitOffset.lengthSq() < 1e-8) {
+    keyboardOrbitOffset.copy(DEFAULT_CAMERA_POSITION);
+  }
+  const alpha = 1 - Math.exp(-dt * 14);
+  keyboardCameraCurrentOffset.copy(keyboardOrbitOffset).lerp(keyboardCameraTargetOffset, alpha);
+  if (keyboardCameraCurrentOffset.distanceToSquared(keyboardCameraTargetOffset) < 0.00001) {
+    keyboardCameraCurrentOffset.copy(keyboardCameraTargetOffset);
+    keyboardCameraSmoothingActive = false;
+  }
+  setCameraToOriginOffset(keyboardCameraCurrentOffset);
+}
+
+function applyKeyboardCameraInput(dt: number) {
+  if (transformOp.mode !== 'none') return;
+  const horizontal = Number(keyboardCameraKeys.left) - Number(keyboardCameraKeys.right);
+  const vertical = Number(keyboardCameraKeys.down) - Number(keyboardCameraKeys.up);
+
+  if (keyboardCameraKeys.ctrl) {
+    if (vertical === 0) return;
+    zoomCameraTowardOrigin(Math.exp(vertical * KEYBOARD_ZOOM_RATE * dt));
+    return;
+  }
+
+  if (horizontal === 0 && vertical === 0) return;
+  orbitCameraAroundOrigin(horizontal * KEYBOARD_ORBIT_RATE * dt, vertical * KEYBOARD_ORBIT_RATE * dt);
+}
+
+function orbitCameraAroundOrigin(thetaDelta: number, phiDelta: number) {
+  const offset = getKeyboardCameraPlanningOffset();
+  keyboardOrbitSpherical.setFromVector3(offset);
+  keyboardOrbitSpherical.theta += thetaDelta;
+  keyboardOrbitSpherical.phi = Math.max(0.01, Math.min(Math.PI - 0.01, keyboardOrbitSpherical.phi + phiDelta));
+  offset.setFromSpherical(keyboardOrbitSpherical);
+  queueKeyboardCameraOffset(offset);
+}
+
+function zoomCameraTowardOrigin(scale: number) {
+  const offset = getKeyboardCameraPlanningOffset();
+  const distance = Math.max(KEYBOARD_ZOOM_MIN_DISTANCE, Math.min(KEYBOARD_ZOOM_MAX_DISTANCE, offset.length() * scale));
+  offset.normalize().multiplyScalar(distance);
+  queueKeyboardCameraOffset(offset);
+}
+
+function clearKeyboardCameraKeys() {
+  keyboardCameraKeys.left = false;
+  keyboardCameraKeys.right = false;
+  keyboardCameraKeys.up = false;
+  keyboardCameraKeys.down = false;
+  keyboardCameraKeys.ctrl = false;
+}
+
+function setKeyboardCameraArrowKey(key: string, pressed: boolean) {
+  if (key === 'arrowleft') {
+    keyboardCameraKeys.left = pressed;
+    return true;
+  }
+  if (key === 'arrowright') {
+    keyboardCameraKeys.right = pressed;
+    return true;
+  }
+  if (key === 'arrowup') {
+    keyboardCameraKeys.up = pressed;
+    return true;
+  }
+  if (key === 'arrowdown') {
+    keyboardCameraKeys.down = pressed;
+    return true;
+  }
+  return false;
+}
+
+function handleKeyboardCameraShortcut(ev: KeyboardEvent, key: string) {
+  if (transformOp.mode !== 'none') return false;
+  if (ev.metaKey || ev.altKey || ev.shiftKey) return false;
+  if (key === 'control') {
+    keyboardCameraKeys.ctrl = true;
+    return false;
+  }
+  if (setKeyboardCameraArrowKey(key, true)) {
+    keyboardCameraKeys.ctrl = ev.ctrlKey;
+    ev.preventDefault();
+    return true;
+  }
+  return false;
+}
+
+function viewModeShortcutIndex(ev: KeyboardEvent) {
+  const keyMatch = /^[1-4]$/.test(ev.key) ? Number.parseInt(ev.key, 10) - 1 : -1;
+  if (keyMatch >= 0) return keyMatch;
+
+  const codeMatch = /^(?:Digit|Numpad)([1-4])$/.exec(ev.code);
+  return codeMatch ? Number.parseInt(codeMatch[1], 10) - 1 : -1;
 }
 
 function updateAxisGizmo() {
@@ -1256,6 +1439,11 @@ let paneCollapsed = isMobilePaneViewport();
 let paneViewportWasMobile = isMobilePaneViewport();
 type AxisMap = number[];
 type SurfaceState = SurfaceMaterial;
+type TexturePreset = {
+  id: string;
+  name: string;
+  surface: SurfaceState;
+};
 const DEFAULT_SURFACE: SurfaceState = {
   color: 0xbfc7d5,
   metalness: 1,
@@ -1270,7 +1458,15 @@ const normalizeSurface = (surface: SurfaceState | undefined): SurfaceState => ({
   alpha: clamp01(surface?.alpha ?? DEFAULT_SURFACE.alpha),
 });
 const cloneSurface = (surface: SurfaceState): SurfaceState => ({ ...surface });
+const surfacesEqual = (a: SurfaceState, b: SurfaceState) => (
+  a.color === b.color
+  && Math.abs(a.metalness - b.metalness) <= 1e-6
+  && Math.abs(a.roughness - b.roughness) <= 1e-6
+  && Math.abs(a.alpha - b.alpha) <= 1e-6
+);
 let syncingTextureUI = false;
+let syncingTexturePresetUI = false;
+let texturePresets: TexturePreset[] = [];
 let texturePreviewRenderer: THREE.WebGLRenderer | null = null;
 let texturePreviewScene: THREE.Scene | null = null;
 let texturePreviewCamera: THREE.PerspectiveCamera | null = null;
@@ -1715,11 +1911,97 @@ function getSurfaceTarget(idx: number): { surface: SurfaceState; renderer: Hyper
   return inst ? { surface: inst.surface, renderer: inst.renderer } : null;
 }
 
+function texturePresetLabel(name: string, idx: number) {
+  const clean = name.trim();
+  if (clean.length > 0) return clean;
+  return `Texture ${idx + 1}`;
+}
+
+function createTexturePresetId() {
+  return `tx_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function loadTexturePresets() {
+  try {
+    const raw = window.localStorage.getItem(TEXTURE_PRESETS_KEY);
+    if (!raw) return [] as TexturePreset[];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [] as TexturePreset[];
+
+    const presets: TexturePreset[] = [];
+    parsed.forEach((entry, idx) => {
+      if (!entry || typeof entry !== 'object') return;
+      const record = entry as { id?: unknown; name?: unknown; surface?: SurfaceState | undefined; };
+      const name = typeof record.name === 'string' ? record.name : '';
+      const id = typeof record.id === 'string' && record.id.length > 0 ? record.id : createTexturePresetId();
+      presets.push({
+        id,
+        name: texturePresetLabel(name, idx),
+        surface: normalizeSurface(record.surface),
+      });
+    });
+    return presets;
+  } catch {
+    return [] as TexturePreset[];
+  }
+}
+
+function persistTexturePresets() {
+  try {
+    window.localStorage.setItem(TEXTURE_PRESETS_KEY, JSON.stringify(texturePresets));
+  } catch {
+    // Storage may be unavailable in private sessions.
+  }
+}
+
+function findTexturePresetById(id: string) {
+  return texturePresets.find(preset => preset.id === id) ?? null;
+}
+
+function findMatchingTexturePresetId(surface: SurfaceState | null) {
+  if (!surface) return '';
+  const match = texturePresets.find(preset => surfacesEqual(preset.surface, surface));
+  return match?.id ?? '';
+}
+
+function updateTexturePresetSelect(selectedId = '') {
+  if (!texturePresetSelect) return;
+  const previous = selectedId || texturePresetSelect.value;
+  syncingTexturePresetUI = true;
+  texturePresetSelect.replaceChildren();
+
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Select preset...';
+  texturePresetSelect.appendChild(placeholder);
+
+  texturePresets.forEach((preset, idx) => {
+    const option = document.createElement('option');
+    option.value = preset.id;
+    option.textContent = texturePresetLabel(preset.name, idx);
+    texturePresetSelect.appendChild(option);
+  });
+
+  texturePresetSelect.value = findTexturePresetById(previous) ? previous : '';
+  syncingTexturePresetUI = false;
+}
+
+function syncTexturePresetSelection(surface: SurfaceState | null) {
+  if (!texturePresetSelect) return;
+  const matchingId = findMatchingTexturePresetId(surface);
+  if (texturePresetSelect.value === matchingId) return;
+  syncingTexturePresetUI = true;
+  texturePresetSelect.value = matchingId;
+  syncingTexturePresetUI = false;
+}
+
 function setTextureInputsEnabled(enabled: boolean) {
   if (textureBaseColorInput) textureBaseColorInput.disabled = !enabled;
   if (textureMetallicInput) textureMetallicInput.disabled = !enabled;
   if (textureRoughnessInput) textureRoughnessInput.disabled = !enabled;
   if (textureAlphaInput) textureAlphaInput.disabled = !enabled;
+  if (texturePresetSaveButton) texturePresetSaveButton.disabled = !enabled;
+  if (texturePresetSelect) texturePresetSelect.disabled = !enabled || texturePresets.length === 0;
 }
 
 function syncTextureControls(surface: SurfaceState) {
@@ -1821,47 +2103,92 @@ function updateTexturePanel() {
   if (target) {
     syncTextureControls(target.surface);
     renderTexturePreview(target.surface);
+    syncTexturePresetSelection(target.surface);
   } else {
     syncTextureControls(DEFAULT_SURFACE);
     renderTexturePreview(DEFAULT_SURFACE);
+    syncTexturePresetSelection(null);
   }
 }
 
-function applyTextureFromInputs(recordUndo: boolean) {
-  if (syncingTextureUI) return;
-  const target = getSurfaceTarget(selectedInstance);
-  if (!target) return;
+function readSurfaceFromTextureInputs() {
   if (!textureBaseColorInput || !textureMetallicInput || !textureRoughnessInput || !textureAlphaInput) return;
-
-  const surface = normalizeSurface({
+  return normalizeSurface({
     color: Number.parseInt(textureBaseColorInput.value.replace('#', ''), 16),
     metalness: Number.parseFloat(textureMetallicInput.value),
     roughness: Number.parseFloat(textureRoughnessInput.value),
     alpha: Number.parseFloat(textureAlphaInput.value),
   });
+}
 
-  const prev = target.surface;
-  const changed = prev.color !== surface.color
-    || Math.abs(prev.metalness - surface.metalness) > 1e-6
-    || Math.abs(prev.roughness - surface.roughness) > 1e-6
-    || Math.abs(prev.alpha - surface.alpha) > 1e-6;
-  if (!changed) return;
+function applySurfaceToSelection(surface: SurfaceState, recordUndo: boolean) {
+  const target = getSurfaceTarget(selectedInstance);
+  if (!target) return false;
+  const nextSurface = normalizeSurface(surface);
+  const changed = !surfacesEqual(target.surface, nextSurface);
+  if (changed && recordUndo) pushUndoSnapshot();
 
-  if (recordUndo) pushUndoSnapshot();
-  if (selectedInstance === BASE_SELECTION) {
-    baseSurface = surface;
-    rendererND.setSurface(baseSurface);
-    rendererND.refreshSurface();
-  } else {
-    const inst = extraInstances[selectedInstance];
-    if (!inst) return;
-    inst.surface = surface;
-    inst.renderer.setSurface(inst.surface);
-    inst.renderer.refreshSurface();
+  if (changed) {
+    if (selectedInstance === BASE_SELECTION) {
+      baseSurface = nextSurface;
+      rendererND.setSurface(baseSurface);
+      rendererND.refreshSurface();
+    } else {
+      const inst = extraInstances[selectedInstance];
+      if (!inst) return false;
+      inst.surface = nextSurface;
+      inst.renderer.setSurface(inst.surface);
+      inst.renderer.refreshSurface();
+    }
   }
 
-  syncTextureControls(surface);
-  renderTexturePreview(surface);
+  syncTextureControls(nextSurface);
+  renderTexturePreview(nextSurface);
+  syncTexturePresetSelection(nextSurface);
+  return changed;
+}
+
+function applyTextureFromInputs(recordUndo: boolean) {
+  if (syncingTextureUI) return;
+  const surface = readSurfaceFromTextureInputs();
+  if (!surface) return;
+  applySurfaceToSelection(surface, recordUndo);
+}
+
+function saveTexturePreset() {
+  const target = getSurfaceTarget(selectedInstance);
+  if (!target) return;
+
+  const fallbackName = `Texture ${texturePresets.length + 1}`;
+  const rawName = window.prompt('Texture preset name', fallbackName);
+  if (rawName == null) return;
+  const name = rawName.trim();
+  if (!name) return;
+
+  const existingIdx = texturePresets.findIndex(preset => preset.name.toLowerCase() === name.toLowerCase());
+  const surface = cloneSurface(target.surface);
+  let selectedId = '';
+  if (existingIdx >= 0) {
+    texturePresets[existingIdx] = {
+      ...texturePresets[existingIdx],
+      name,
+      surface,
+    };
+    selectedId = texturePresets[existingIdx].id;
+  } else {
+    const nextPreset: TexturePreset = {
+      id: createTexturePresetId(),
+      name,
+      surface,
+    };
+    texturePresets.push(nextPreset);
+    selectedId = nextPreset.id;
+  }
+
+  persistTexturePresets();
+  updateTexturePresetSelect(selectedId);
+  setTextureInputsEnabled(true);
+  syncTexturePresetSelection(surface);
 }
 
 function bindTextureControls() {
@@ -1888,6 +2215,15 @@ function bindTextureControls() {
   textureMetallicInput?.addEventListener('change', () => applyTextureFromInputs(true));
   textureRoughnessInput?.addEventListener('change', () => applyTextureFromInputs(true));
   textureAlphaInput?.addEventListener('change', () => applyTextureFromInputs(true));
+  texturePresetSaveButton?.addEventListener('click', saveTexturePreset);
+  texturePresetSelect?.addEventListener('change', () => {
+    if (syncingTexturePresetUI) return;
+    const presetId = texturePresetSelect.value;
+    if (!presetId) return;
+    const preset = findTexturePresetById(presetId);
+    if (!preset) return;
+    applySurfaceToSelection(preset.surface, true);
+  });
 }
 
 function updateAxesHelperColors() {
@@ -2669,13 +3005,14 @@ function projectAndRenderAll() {
 
 function applyAutoRotation(dt: number) {
   const gizmoPlanes = currentExtraAxisGizmoPlanes();
-  if (!gizmoPlanes.length || autoRotateExtraAxisDims.size === 0) return;
+  if (!gizmoPlanes.length || autoRotateExtraAxisSpeeds.size === 0) return;
 
   let rotated = false;
   for (const plane of gizmoPlanes) {
-    if (!autoRotateExtraAxisDims.has(plane.depthDim)) continue;
+    const speed = autoRotateExtraAxisSpeeds.get(plane.depthDim) ?? 0;
+    if (speed <= 0) continue;
     if (plane.planeAxis < 0 || plane.planeAxis === plane.depthDim) continue;
-    const delta = EXTRA_AXIS_AUTO_ROTATE_SPEED * dt;
+    const delta = EXTRA_AXIS_AUTO_ROTATE_SPEED * speed * dt;
     rot.applyGivensLeft(plane.planeAxis, plane.depthDim, delta);
     const prev = getExtraAxisGizmoAngle(plane.depthDim);
     extraAxisGizmoAngles.set(plane.depthDim, normalizeSignedAngleDelta(prev + delta));
@@ -2776,7 +3113,7 @@ function addInstanceAt(offset: THREE.Vector3, recordUndo = true) {
 }
 
 function rebuildState(newN: number, newX: Float32Array, newE: Uint32Array, source: 'primitive' | 'custom', localN?: number, axisMap?: AxisMap) {
-  autoRotateExtraAxisDims.clear();
+  autoRotateExtraAxisSpeeds.clear();
   extraAxisGizmoAngles.clear();
   endAxisShiftDrag();
   controls.enableZoom = true;
@@ -2870,6 +3207,8 @@ let viewportRecorderMimeType = 'video/webm';
 let viewportGridVisibleBeforeCapture = true;
 let viewportAxesVisibleBeforeCapture = true;
 let viewportRecordingFinalized = false;
+let viewportRecordingStartedAt = 0;
+let viewportRecordingTimerIntervalId: number | null = null;
 
 function captureTimestamp() {
   const now = new Date();
@@ -2882,11 +3221,50 @@ function recordingFileExtensionFromMime(mimeType: string) {
   return 'webm';
 }
 
+function formatRecordingElapsed(ms: number) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function updateViewportRecordingTimer() {
+  if (!recordViewportTimer || viewportRecordingStartedAt <= 0) return;
+  const elapsed = performance.now() - viewportRecordingStartedAt;
+  recordViewportTimer.textContent = formatRecordingElapsed(elapsed);
+}
+
+function stopViewportRecordingTimer() {
+  if (viewportRecordingTimerIntervalId != null) {
+    window.clearInterval(viewportRecordingTimerIntervalId);
+    viewportRecordingTimerIntervalId = null;
+  }
+  viewportRecordingStartedAt = 0;
+  if (!recordViewportTimer) return;
+  recordViewportTimer.classList.remove('active');
+  recordViewportTimer.textContent = '00:00';
+  recordViewportTimer.setAttribute('aria-hidden', 'true');
+}
+
+function startViewportRecordingTimer() {
+  stopViewportRecordingTimer();
+  viewportRecordingStartedAt = performance.now();
+  if (!recordViewportTimer) return;
+  recordViewportTimer.classList.add('active');
+  recordViewportTimer.setAttribute('aria-hidden', 'false');
+  updateViewportRecordingTimer();
+  viewportRecordingTimerIntervalId = window.setInterval(updateViewportRecordingTimer, 250);
+}
+
 function setRecordViewportButtonState(recording: boolean) {
   if (!recordViewportButton) return;
   recordViewportButton.classList.toggle('recording', recording);
   recordViewportButton.classList.toggle('active', recording);
-  const label = recording ? 'Stop viewport recording' : 'Record viewport';
+  const label = recording ? 'Stop viewport recording (Shift+R)' : 'Record viewport (Shift+R)';
   recordViewportButton.title = label;
   recordViewportButton.setAttribute('aria-label', label);
   const icon = recordViewportButton.querySelector('.material-symbols-rounded');
@@ -2933,6 +3311,7 @@ function finalizeViewportRecording(downloadVideo: boolean) {
   gridGroup.visible = viewportGridVisibleBeforeCapture;
   axes.visible = viewportAxesVisibleBeforeCapture;
   renderer.render(scene, camera);
+  stopViewportRecordingTimer();
   setRecordViewportButtonState(false);
 
   if (!downloadVideo) return;
@@ -3012,6 +3391,7 @@ function startViewportRecording() {
   axes.visible = false;
   renderer.render(scene, camera);
   setRecordViewportButtonState(true);
+  startViewportRecordingTimer();
 
   try {
     recorder.start(200);
@@ -3163,7 +3543,7 @@ function resetToIsometric() {
   PARAMS.N = targetN;
   PARAMS.primitive = 'hypercube';
   PARAMS.projection = 'PCA';
-  autoRotateExtraAxisDims.clear();
+  autoRotateExtraAxisSpeeds.clear();
   extraAxisGizmoAngles.clear();
   PARAMS.renderMode = 'faceted';
   PARAMS.sliceDim = -1;
@@ -3186,6 +3566,8 @@ updateObjectList();
 applySceneBackground(PARAMS.editMode);
 updateDimensionControl();
 updateEditModeToggle();
+texturePresets = loadTexturePresets();
+updateTexturePresetSelect();
 bindTextureControls();
 updateTexturePanel();
 initializeBackgroundRenderControls();
@@ -3281,16 +3663,6 @@ mobileOnboardingProgressButtons.forEach(button => {
 });
 dimensionDownButton?.addEventListener('click', () => setNewPrimitiveDimension(PARAMS.N - 1));
 dimensionUpButton?.addEventListener('click', () => setNewPrimitiveDimension(PARAMS.N + 1));
-dimensionControl?.addEventListener('keydown', ev => {
-  ev.stopPropagation();
-  if (ev.key === 'ArrowDown' || ev.key === 'ArrowLeft' || ev.key === '-' || ev.key === '_') {
-    ev.preventDefault();
-    setNewPrimitiveDimension(PARAMS.N - 1);
-  } else if (ev.key === 'ArrowUp' || ev.key === 'ArrowRight' || ev.key === '+' || ev.key === '=') {
-    ev.preventDefault();
-    setNewPrimitiveDimension(PARAMS.N + 1);
-  }
-});
 
 updateTransformActionButtons();
 syncPaneCollapsedToViewport(true);
@@ -3846,6 +4218,7 @@ window.addEventListener('pointercancel', (ev) => {
 });
 window.addEventListener('blur', () => {
   if (axisDrag.active) endAxisShiftDrag();
+  clearKeyboardCameraKeys();
 });
 
 window.addEventListener('keydown', (ev) => {
@@ -3909,18 +4282,50 @@ window.addEventListener('keydown', (ev) => {
 window.addEventListener('keydown', (ev) => {
   if (isModalUIOpen()) return;
   if (isTextEntryTarget(ev.target)) return;
+  const key = ev.key.toLowerCase();
+  const hasSystemMod = ev.ctrlKey || ev.metaKey || ev.altKey;
+
+  if (!hasSystemMod && !ev.shiftKey && transformOp.mode === 'none') {
+    const mode = VIEW_MODES[viewModeShortcutIndex(ev)];
+    if (mode && setViewMode) {
+      ev.preventDefault();
+      setViewMode(mode);
+      return;
+    }
+  }
+
+  if (handleKeyboardCameraShortcut(ev, key)) return;
+
+  if (!hasSystemMod && ev.shiftKey && transformOp.mode === 'none') {
+    if (key === 'r') {
+      ev.preventDefault();
+      if (viewportRecorder && viewportRecorder.state !== 'inactive') {
+        stopViewportRecording();
+      } else {
+        startViewportRecording();
+      }
+      return;
+    }
+    if (key === 's') {
+      ev.preventDefault();
+      captureViewportFrame();
+      return;
+    }
+  }
+
   if (ev.key === 'Tab') {
     ev.preventDefault();
     setEditMode(!PARAMS.editMode);
   }
+  if (hasSystemMod) return;
   // Transform hotkeys
   if (transformOp.mode === 'none') {
-    if (ev.key === 'g' || ev.key === 'r' || ev.key === 's') {
+    if (!ev.shiftKey && (key === 'g' || key === 'r' || key === 's')) {
       ev.preventDefault();
-      const modeMap: Record<string, TransformMode> = { g: 'move', r: 'rotate', s: 'scale' };
+      const modeMap: Record<'g' | 'r' | 's', TransformMode> = { g: 'move', r: 'rotate', s: 'scale' };
       const fakeEvent = new PointerEvent('pointerdown', { clientX: lastPointer.x, clientY: lastPointer.y });
-      startTransform(modeMap[ev.key], fakeEvent);
-    } else if (ev.key.toLowerCase() === 'a' && ev.shiftKey) {
+      startTransform(modeMap[key as 'g' | 'r' | 's'], fakeEvent);
+    } else if (key === 'a' && ev.shiftKey) {
       ev.preventDefault();
       // open add-object menu at last pointer position
       if (!ctxMenu) return;
@@ -3964,7 +4369,7 @@ window.addEventListener('keydown', (ev) => {
       ctxMenu.style.left = `${lastPointer.x}px`;
       ctxMenu.style.top = `${lastPointer.y}px`;
       ctxMenu.style.display = 'block';
-    } else if (ev.key === 'x') {
+    } else if (!ev.shiftKey && key === 'x') {
       ev.preventDefault();
       const hasSel = (selectedInstance === BASE_SELECTION && M > 0) || selectedInstance >= 0;
       if (!hasSel) return;
@@ -3979,6 +4384,15 @@ window.addEventListener('keydown', (ev) => {
   }
 });
 
+window.addEventListener('keyup', (ev) => {
+  const key = ev.key.toLowerCase();
+  if (key === 'control') {
+    keyboardCameraKeys.ctrl = false;
+    return;
+  }
+  setKeyboardCameraArrowKey(key, false);
+});
+
 // vertex drag disabled; edit mode uses transform menu
 
 function animate() {
@@ -3988,6 +4402,8 @@ function animate() {
   projectAndRenderAll();
 
   controls.update();
+  applyKeyboardCameraInput(dt);
+  applyKeyboardCameraSmoothing(dt);
   updateTransformActionButtons();
   updateAxisGizmo();
   renderer.render(scene, camera);
