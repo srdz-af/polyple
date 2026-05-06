@@ -18,6 +18,22 @@ const DEFAULT_SURFACE: SurfaceMaterial = {
 const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
 const COPLANAR_NORMAL_EPS = 1e-4;
 const COPLANAR_CONST_EPS = 1e-4;
+const HULL_POINT_EPS_SCALE = 1e-6;
+const FACET_SATURATION = 0.92;
+const FACET_HUE_STOPS = [0, 20, 40, 55, 80, 105, 130, 155, 180, 205, 230, 255, 280, 305, 330];
+const FACET_LIGHTNESS_STOPS = [0.40, 0.54, 0.68];
+const FACET_COLOR_CANDIDATES = (() => {
+  const colors: THREE.Color[] = [];
+  for (const lightness of FACET_LIGHTNESS_STOPS) {
+    for (const hue of FACET_HUE_STOPS) {
+      let l = lightness;
+      // Yellow is perceptually brighter; keep it from washing out.
+      if (hue >= 45 && hue <= 75) l = Math.max(0.34, l - 0.08);
+      colors.push(new THREE.Color().setHSL(hue / 360, FACET_SATURATION, l));
+    }
+  }
+  return colors;
+})();
 
 type HullFaceInfo = {
   face: Face;
@@ -46,6 +62,9 @@ export class HypercubeRenderer {
   private transform = new THREE.Matrix4();
   private tmp = new THREE.Vector3();
   private surface: SurfaceMaterial = { ...DEFAULT_SURFACE };
+  private regionColorByKey = new Map<string, THREE.Color>();
+  private regionColorBank: THREE.Color[] = [];
+  private hypercubeDimension = 0;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -102,6 +121,9 @@ export class HypercubeRenderer {
 
     this.hullNeedsUpdate = true;
     this.visibleVertexMask = undefined;
+    this.regionColorByKey = new Map<string, THREE.Color>();
+    this.regionColorBank = [];
+    this.hypercubeDimension = this.detectHypercubeDimension(M, edges);
   }
 
   setTransform(position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3): void {
@@ -217,6 +239,9 @@ export class HypercubeRenderer {
     }
 
     this.geometry = undefined as unknown as THREE.BufferGeometry;
+    this.regionColorByKey = new Map<string, THREE.Color>();
+    this.regionColorBank = [];
+    this.hypercubeDimension = 0;
   }
 
   private setIndexAttribute(array: Uint32Array): void {
@@ -258,6 +283,15 @@ export class HypercubeRenderer {
     }
 
     const geometry = this.buildColoredHull(indices.map(idx => this.points[idx]));
+    const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+    if (!positionAttr || positionAttr.count < 3) {
+      this.mesh.geometry.dispose();
+      this.mesh.geometry = geometry;
+      this.mesh.visible = false;
+      this.hullNeedsUpdate = false;
+      return;
+    }
+
     geometry.computeVertexNormals();
     geometry.computeBoundingSphere();
     this.mesh.geometry.dispose();
@@ -267,8 +301,20 @@ export class HypercubeRenderer {
   }
 
   private buildColoredHull(points: VertexPoint[]): THREE.BufferGeometry {
-    const hull = new ConvexHull().setFromPoints(points);
+    if (!this.hasNonDegenerateHull(points)) {
+      return new THREE.BufferGeometry();
+    }
+
+    let hull: ConvexHull;
+    try {
+      hull = new ConvexHull().setFromPoints(points);
+    } catch {
+      return new THREE.BufferGeometry();
+    }
     const faceInfos = hull.faces.map(face => this.collectHullFaceInfo(face));
+    if (!faceInfos.length) {
+      return new THREE.BufferGeometry();
+    }
     const faceColors = this.buildCoplanarFaceColors(faceInfos);
     const vertices: number[] = [];
     const normals: number[] = [];
@@ -298,11 +344,65 @@ export class HypercubeRenderer {
       }
     }
 
+    if (vertices.length < 9) {
+      return new THREE.BufferGeometry();
+    }
+
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
     geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
     geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     return geometry;
+  }
+
+  private hasNonDegenerateHull(points: VertexPoint[]): boolean {
+    if (points.length < 4) return false;
+
+    const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+    const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+    for (const p of points) {
+      min.min(p);
+      max.max(p);
+    }
+    const diag = Math.max(max.distanceTo(min), 1);
+    const pointEps = diag * HULL_POINT_EPS_SCALE;
+    const pointEpsSq = pointEps * pointEps;
+
+    const anchor = points[0];
+    let b: VertexPoint | null = null;
+    for (let i = 1; i < points.length; i++) {
+      if (anchor.distanceToSquared(points[i]) > pointEpsSq) {
+        b = points[i];
+        break;
+      }
+    }
+    if (!b) return false;
+
+    const ab = new THREE.Vector3().subVectors(b, anchor);
+    const abLen = Math.max(ab.length(), pointEps);
+    const lineNormal = new THREE.Vector3();
+    const offset = new THREE.Vector3();
+    let c: VertexPoint | null = null;
+    for (const candidate of points) {
+      offset.subVectors(candidate, anchor);
+      lineNormal.crossVectors(ab, offset);
+      if (lineNormal.lengthSq() > (pointEps * abLen) * (pointEps * abLen)) {
+        c = candidate;
+        break;
+      }
+    }
+    if (!c) return false;
+
+    offset.subVectors(c, anchor);
+    const planeNormal = new THREE.Vector3().crossVectors(ab, offset);
+    const planeNormalLen = Math.max(planeNormal.length(), pointEps);
+    for (const candidate of points) {
+      offset.subVectors(candidate, anchor);
+      const planeDistance = Math.abs(planeNormal.dot(offset)) / planeNormalLen;
+      if (planeDistance > pointEps) return true;
+    }
+
+    return false;
   }
 
   private collectFacePolygon(face: Face): VertexPoint[] {
@@ -325,6 +425,7 @@ export class HypercubeRenderer {
   private buildCoplanarFaceColors(faceInfos: HullFaceInfo[]): THREE.Color[] {
     const colors = Array.from({ length: faceInfos.length }, () => new THREE.Color(0xffffff));
     const assigned = new Uint8Array(faceInfos.length);
+
     for (let i = 0; i < faceInfos.length; i++) {
       if (assigned[i]) continue;
       assigned[i] = 1;
@@ -340,11 +441,63 @@ export class HypercubeRenderer {
       for (const idx of group) {
         for (const id of faceInfos[idx].vertexIds) regionIds.add(id);
       }
-      const regionKey = Array.from(regionIds).sort((a, b) => a - b).join(',');
-      const faceColor = this.colorFromRegionKey(regionKey);
+      const regionKey = this.regionTopologyKey(regionIds);
+      let faceColor = this.regionColorByKey.get(regionKey);
+      if (!faceColor) {
+        faceColor = this.selectDistinctRegionColor(regionKey, this.regionColorBank);
+        this.regionColorByKey.set(regionKey, faceColor);
+        this.regionColorBank.push(faceColor);
+      }
       for (const idx of group) colors[idx] = faceColor;
     }
     return colors;
+  }
+
+  private detectHypercubeDimension(vertexCount: number, edges: Uint32Array): number {
+    if (vertexCount < 4 || (vertexCount & (vertexCount - 1)) !== 0) return 0;
+    const dim = Math.log2(vertexCount);
+    if (!Number.isInteger(dim) || dim <= 0) return 0;
+    const expectedEdgeCount = (vertexCount * dim) / 2;
+    if ((edges.length & 1) !== 0 || (edges.length / 2) !== expectedEdgeCount) return 0;
+
+    const degree = new Uint16Array(vertexCount);
+    for (let i = 0; i < edges.length; i += 2) {
+      const a = edges[i];
+      const b = edges[i + 1];
+      if (a >= vertexCount || b >= vertexCount || a === b) return 0;
+      const xor = a ^ b;
+      if (xor === 0 || (xor & (xor - 1)) !== 0) return 0;
+      degree[a]++;
+      degree[b]++;
+    }
+    for (let i = 0; i < vertexCount; i++) {
+      if (degree[i] !== dim) return 0;
+    }
+    return dim;
+  }
+
+  private regionTopologyKey(regionIds: Set<number>): string {
+    const ids = Array.from(regionIds).sort((a, b) => a - b);
+    if (!ids.length) return 'empty';
+
+    if (this.hypercubeDimension > 0) {
+      const fixedBitParts: string[] = [];
+      const first = ids[0];
+      for (let bit = 0; bit < this.hypercubeDimension; bit++) {
+        const bitValue = (first >>> bit) & 1;
+        let fixed = true;
+        for (let i = 1; i < ids.length; i++) {
+          if (((ids[i] >>> bit) & 1) !== bitValue) {
+            fixed = false;
+            break;
+          }
+        }
+        if (fixed) fixedBitParts.push(`${bit}:${bitValue}`);
+      }
+      if (fixedBitParts.length > 0) return `h${this.hypercubeDimension}|${fixedBitParts.join('|')}`;
+    }
+
+    return `v|${ids.join(',')}`;
   }
 
   private areCoplanar(a: HullFaceInfo, b: HullFaceInfo): boolean {
@@ -357,15 +510,44 @@ export class HypercubeRenderer {
     return Math.abs(a.planeConstant + b.planeConstant) <= (COPLANAR_CONST_EPS * scale);
   }
 
-  private colorFromRegionKey(key: string): THREE.Color {
+  private hashRegionKey(key: string): number {
     let hash = 2166136261 >>> 0;
     for (let i = 0; i < key.length; i++) {
       hash ^= key.charCodeAt(i);
       hash = Math.imul(hash, 16777619);
     }
-    const hue = (hash % 360) / 360;
-    const saturation = 0.64 + (((hash >>> 8) % 20) / 100);
-    const lightness = 0.50 + (((hash >>> 16) % 12) / 100);
-    return new THREE.Color().setHSL(hue, saturation, lightness);
+    return hash >>> 0;
   }
+
+  private selectDistinctRegionColor(key: string, usedColors: THREE.Color[]): THREE.Color {
+    const hash = this.hashRegionKey(key);
+    const paletteSize = FACET_COLOR_CANDIDATES.length;
+    const start = hash % paletteSize;
+    let bestIdx = start;
+    let bestScore = -1;
+    let bestTie = Number.POSITIVE_INFINITY;
+
+    for (let offset = 0; offset < paletteSize; offset++) {
+      const idx = (start + offset) % paletteSize;
+      const candidate = FACET_COLOR_CANDIDATES[idx];
+      let minDistSq = Number.POSITIVE_INFINITY;
+      for (const used of usedColors) {
+        const dr = candidate.r - used.r;
+        const dg = candidate.g - used.g;
+        const db = candidate.b - used.b;
+        const distSq = (dr * dr) + (dg * dg) + (db * db);
+        if (distSq < minDistSq) minDistSq = distSq;
+      }
+      const score = usedColors.length ? minDistSq : 1;
+      // Tie-break with hash distance so results stay deterministic for the same region key.
+      const tie = Math.abs(((idx - start) + paletteSize) % paletteSize);
+      if (score > bestScore || (Math.abs(score - bestScore) < 1e-12 && tie < bestTie)) {
+        bestScore = score;
+        bestIdx = idx;
+        bestTie = tie;
+      }
+    }
+    return FACET_COLOR_CANDIDATES[bestIdx].clone();
+  }
+
 }
