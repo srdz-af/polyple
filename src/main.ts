@@ -1345,7 +1345,7 @@ function renderAxisList() {
   const items = list.map((dim, idx) => {
     const color = AXIS_PALETTE[dim % AXIS_PALETTE.length];
     const active = activeDims.has(dim);
-    return `<li draggable="true" data-idx="${idx}" class="${active ? 'active' : ''}" style="--axis-color:${color};border-top:3px solid ${color};">${axisLabel(dim)}</li>`;
+    return `<li data-idx="${idx}" data-dim="${dim}" class="${active ? 'active' : ''}" style="--axis-color:${color};border-top:3px solid ${color};">${axisLabel(dim)}</li>`;
   }).join('');
   axisList.innerHTML = `
     <div class="axis-list-head">
@@ -1375,27 +1375,180 @@ function renderAxisList() {
   paneToggleButton?.addEventListener('click', () => setPaneCollapsed(!paneCollapsed));
   setPaneCollapsed(paneCollapsed);
 
-  axisList.querySelectorAll('li').forEach(li => {
-    li.addEventListener('dragstart', (ev) => {
-      ev.dataTransfer?.setData('text/plain', (li as HTMLElement).dataset.idx || '');
+  const axisUl = axisList.querySelector('ul') as HTMLUListElement | null;
+  if (!axisUl) return;
+
+  type AxisDragState = {
+    pointerId: number;
+    startX: number;
+    startY: number;
+    grabOffsetX: number;
+    grabOffsetY: number;
+    active: boolean;
+    source: HTMLLIElement | null;
+    placeholder: HTMLLIElement | null;
+    ghost: HTMLLIElement | null;
+  };
+
+  const dragState: AxisDragState = {
+    pointerId: -1,
+    startX: 0,
+    startY: 0,
+    grabOffsetX: 0,
+    grabOffsetY: 0,
+    active: false,
+    source: null,
+    placeholder: null,
+    ghost: null,
+  };
+
+  const clearDragPreview = () => {
+    if (dragState.ghost?.parentElement) dragState.ghost.parentElement.removeChild(dragState.ghost);
+    if (dragState.placeholder?.parentElement) dragState.placeholder.parentElement.removeChild(dragState.placeholder);
+    if (dragState.source) {
+      dragState.source.style.display = '';
+      dragState.source.classList.remove('axis-drag-source');
+    }
+    axisUl.classList.remove('dragging');
+    document.body.classList.remove('axis-list-dragging');
+    dragState.placeholder = null;
+    dragState.ghost = null;
+  };
+
+  const commitAxisDrag = () => {
+    if (!dragState.active || !dragState.source || !dragState.placeholder) return;
+    const draggedDim = Number(dragState.source.dataset.dim ?? -1);
+    if (draggedDim < 0) return;
+
+    const orderedDims: number[] = [];
+    for (const child of Array.from(axisUl.children)) {
+      if (child === dragState.source) continue;
+      if (child === dragState.placeholder) {
+        orderedDims.push(draggedDim);
+        continue;
+      }
+      const dim = Number((child as HTMLElement).dataset.dim ?? -1);
+      if (dim >= 0) orderedDims.push(dim);
+    }
+
+    const nVis = visibleDims();
+    if (orderedDims.length !== nVis) return;
+    axesOrder = [...orderedDims, ...axesOrder.slice(nVis)];
+    const newOffset = axesOrder.slice(0, nVis).indexOf(PARAMS.axesX);
+    axesOffset = newOffset >= 0 ? newOffset : 0;
+    setProjectionAxes({
+      x: axesOrder[axesOffset % nVis],
+      y: axesOrder[(axesOffset + 1) % nVis],
+      z: axesOrder[(axesOffset + 2) % nVis],
     });
-    li.addEventListener('dragover', (ev) => ev.preventDefault());
-    li.addEventListener('drop', (ev) => {
+  };
+
+  const updateDropPlaceholder = (clientX: number, clientY: number) => {
+    if (!dragState.placeholder || !dragState.source) return;
+    const candidates = Array.from(axisUl.querySelectorAll('li')).filter(li => li !== dragState.placeholder && li !== dragState.source);
+    let beforeEl: HTMLLIElement | null = null;
+    for (const candidate of candidates) {
+      const rect = candidate.getBoundingClientRect();
+      const midX = rect.left + (rect.width * 0.5);
+      const midY = rect.top + (rect.height * 0.5);
+      const rowTolerance = rect.height * 0.45;
+      const beforeByRow = clientY < (midY - rowTolerance);
+      const beforeByColumn = Math.abs(clientY - midY) <= rowTolerance && clientX < midX;
+      if (beforeByRow || beforeByColumn) {
+        beforeEl = candidate;
+        break;
+      }
+    }
+
+    if (beforeEl) axisUl.insertBefore(dragState.placeholder, beforeEl);
+    else axisUl.appendChild(dragState.placeholder);
+  };
+
+  const updateGhostPosition = (clientX: number, clientY: number) => {
+    if (!dragState.ghost) return;
+    dragState.ghost.style.left = `${clientX - dragState.grabOffsetX}px`;
+    dragState.ghost.style.top = `${clientY - dragState.grabOffsetY}px`;
+  };
+
+  const beginAxisDrag = (ev: PointerEvent) => {
+    if (!dragState.source) return;
+    const sourceRect = dragState.source.getBoundingClientRect();
+    dragState.active = true;
+    dragState.grabOffsetX = ev.clientX - sourceRect.left;
+    dragState.grabOffsetY = ev.clientY - sourceRect.top;
+
+    dragState.placeholder = document.createElement('li');
+    dragState.placeholder.className = 'axis-drop-placeholder';
+    dragState.placeholder.style.width = `${sourceRect.width}px`;
+    dragState.placeholder.style.height = `${sourceRect.height}px`;
+    axisUl.insertBefore(dragState.placeholder, dragState.source.nextSibling);
+
+    dragState.source.classList.add('axis-drag-source');
+    dragState.source.style.display = 'none';
+
+    dragState.ghost = dragState.source.cloneNode(true) as HTMLLIElement;
+    dragState.ghost.classList.add('axis-drag-ghost');
+    dragState.ghost.style.width = `${sourceRect.width}px`;
+    dragState.ghost.style.height = `${sourceRect.height}px`;
+    document.body.appendChild(dragState.ghost);
+
+    axisUl.classList.add('dragging');
+    document.body.classList.add('axis-list-dragging');
+    updateGhostPosition(ev.clientX, ev.clientY);
+    updateDropPlaceholder(ev.clientX, ev.clientY);
+  };
+
+  const onPointerMove = (ev: PointerEvent) => {
+    if (ev.pointerId !== dragState.pointerId || !dragState.source) return;
+    ev.preventDefault();
+    if (!dragState.active) {
+      const dx = ev.clientX - dragState.startX;
+      const dy = ev.clientY - dragState.startY;
+      if ((dx * dx) + (dy * dy) < 16) return;
+      beginAxisDrag(ev);
+    } else {
+      updateGhostPosition(ev.clientX, ev.clientY);
+      updateDropPlaceholder(ev.clientX, ev.clientY);
+    }
+  };
+
+  const endAxisDrag = (commit: boolean) => {
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    window.removeEventListener('pointercancel', onPointerCancel);
+    if (commit) commitAxisDrag();
+    clearDragPreview();
+    dragState.pointerId = -1;
+    dragState.startX = 0;
+    dragState.startY = 0;
+    dragState.grabOffsetX = 0;
+    dragState.grabOffsetY = 0;
+    dragState.active = false;
+    dragState.source = null;
+  };
+
+  const onPointerUp = (ev: PointerEvent) => {
+    if (ev.pointerId !== dragState.pointerId) return;
+    endAxisDrag(true);
+  };
+
+  const onPointerCancel = (ev: PointerEvent) => {
+    if (ev.pointerId !== dragState.pointerId) return;
+    endAxisDrag(false);
+  };
+
+  axisUl.querySelectorAll('li').forEach(li => {
+    li.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0 || dragState.pointerId !== -1) return;
       ev.preventDefault();
-      const from = Number(ev.dataTransfer?.getData('text/plain') ?? -1);
-      const to = Number((li as HTMLElement).dataset.idx ?? -1);
-      if (from < 0 || to < 0 || from === to) return;
-      const moved = axesOrder.splice(from, 1)[0];
-      axesOrder.splice(to, 0, moved);
-      // keep current leading axis if possible
-      const newOffset = axesOrder.slice(0, visibleDims()).indexOf(PARAMS.axesX);
-      axesOffset = newOffset >= 0 ? newOffset : 0;
-      setProjectionAxes({
-        x: axesOrder[axesOffset % visibleDims()],
-        y: axesOrder[(axesOffset + 1) % visibleDims()],
-        z: axesOrder[(axesOffset + 2) % visibleDims()],
-      });
-      renderAxisList();
+      dragState.pointerId = ev.pointerId;
+      dragState.startX = ev.clientX;
+      dragState.startY = ev.clientY;
+      dragState.source = li as HTMLLIElement;
+      dragState.active = false;
+      window.addEventListener('pointermove', onPointerMove, { passive: false });
+      window.addEventListener('pointerup', onPointerUp);
+      window.addEventListener('pointercancel', onPointerCancel);
     });
   });
 }

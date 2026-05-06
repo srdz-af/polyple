@@ -382,7 +382,11 @@
         padding: 0;
         list-style: none;
       }
+      #axis-list ul.dragging {
+        cursor: grabbing;
+      }
       #axis-list li {
+        box-sizing: border-box;
         min-width: 28px;
         margin: 0;
         padding: 6px 8px;
@@ -396,12 +400,46 @@
         -moz-user-select: none;
         -ms-user-select: none;
         -webkit-user-drag: none;
+        touch-action: none;
       }
       #axis-list li.active {
         background: transparent;
         border-color: var(--axis-color);
         color: var(--axis-color);
         box-shadow: inset 0 0 0 1px var(--axis-color);
+      }
+      #axis-list li.axis-drop-placeholder {
+        border: 1px dashed var(--ui-border);
+        background: rgba(148, 163, 184, 0.14);
+        box-shadow: inset 0 0 0 1px rgba(191, 212, 255, 0.2);
+      }
+      .axis-drag-ghost {
+        position: fixed;
+        box-sizing: border-box;
+        min-width: 28px;
+        margin: 0;
+        padding: 6px 8px;
+        border-radius: 6px;
+        border: 1px solid var(--ui-border-soft);
+        background: var(--ui-bg-soft);
+        color: var(--ui-text);
+        text-align: center;
+        font: 12px/1.4 system-ui, sans-serif;
+        box-shadow: var(--ui-shadow);
+        opacity: 0.96;
+        pointer-events: none;
+        z-index: 12000;
+        cursor: grabbing;
+      }
+      .axis-drag-ghost.active {
+        background: transparent;
+        border-color: var(--axis-color);
+        color: var(--axis-color);
+        box-shadow: inset 0 0 0 1px var(--axis-color), var(--ui-shadow);
+      }
+      body.axis-list-dragging {
+        user-select: none;
+        -webkit-user-select: none;
       }
       #object-list,
       #object-list h4,
