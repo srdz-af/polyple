@@ -40,7 +40,6 @@ type ExtraAxisGizmoControllerOptions = {
   getAxesOffset: () => number;
   getParams: () => ExtraAxisParams;
   getRot: () => RotND;
-  markProjectionDirty: () => void;
   applySceneBackground: () => void;
   projectAndRenderAll: () => void;
   reorderExtraAxes: (orderedExtraDims: number[]) => void;
@@ -56,6 +55,8 @@ type ExtraAxisOrderDragState = {
   startY: number;
   grabOffsetX: number;
   grabOffsetY: number;
+  lastX: number;
+  lastY: number;
   active: boolean;
   sourceDim: number;
   source: HTMLDivElement | null;
@@ -83,6 +84,8 @@ export class ExtraAxisGizmoController {
     startY: 0,
     grabOffsetX: 0,
     grabOffsetY: 0,
+    lastX: 0,
+    lastY: 0,
     active: false,
     sourceDim: -1,
     source: null,
@@ -98,9 +101,15 @@ export class ExtraAxisGizmoController {
     maxScroll: 0,
     trackTravel: 0,
   };
+  private readonly orderAutoScroll = {
+    frame: 0,
+    lastTs: 0,
+  };
   private readonly handleOrderPointerMove = (ev: PointerEvent) => {
     if (ev.pointerId !== this.orderDrag.pointerId || !this.orderDrag.source) return;
     ev.preventDefault();
+    this.orderDrag.lastX = ev.clientX;
+    this.orderDrag.lastY = ev.clientY;
     if (!this.orderDrag.active) {
       const dx = ev.clientX - this.orderDrag.startX;
       const dy = ev.clientY - this.orderDrag.startY;
@@ -111,6 +120,27 @@ export class ExtraAxisGizmoController {
     this.updateOrderGhostPosition(ev.clientX, ev.clientY);
     this.updateProjectedAxisDropTarget(ev.clientX, ev.clientY);
     this.updateOrderPlaceholder(ev.clientX, ev.clientY);
+    this.updateOrderAutoScroll(ev.clientX);
+  };
+  private readonly stepOrderAutoScroll = (ts: number) => {
+    this.orderAutoScroll.frame = 0;
+    if (!this.options.rootEl || !this.orderDrag.active) return;
+
+    const direction = this.orderAutoScrollDirection(this.orderDrag.lastX);
+    if (direction === 0) return;
+
+    const dt = Math.min(40, Math.max(0, ts - (this.orderAutoScroll.lastTs || ts)));
+    this.orderAutoScroll.lastTs = ts;
+    const maxScroll = Math.max(0, this.options.rootEl.scrollWidth - this.options.rootEl.clientWidth);
+    this.options.rootEl.scrollLeft = clamp(
+      this.options.rootEl.scrollLeft + (direction * dt * 0.85),
+      0,
+      maxScroll,
+    );
+    this.syncScrollIndicator();
+    this.updateProjectedAxisDropTarget(this.orderDrag.lastX, this.orderDrag.lastY);
+    this.updateOrderPlaceholder(this.orderDrag.lastX, this.orderDrag.lastY);
+    this.orderAutoScroll.frame = requestAnimationFrame(this.stepOrderAutoScroll);
   };
   private readonly handleOrderPointerUp = (ev: PointerEvent) => {
     if (ev.pointerId !== this.orderDrag.pointerId) return;
@@ -189,6 +219,13 @@ export class ExtraAxisGizmoController {
     );
   }
 
+  primaryExtraRotationDepthDim(localN: number, axisMap: AxisMap): number {
+    if (localN < 4) return -1;
+    const available = new Set<number>(axisMap.slice(0, localN));
+    const plane = this.currentPlanes().find(candidate => available.has(candidate.depthDim));
+    return plane?.depthDim ?? axisMap[localN - 1] ?? -1;
+  }
+
   applyAutoRotation(dt: number) {
     const gizmoPlanes = this.currentPlanes();
     if (!gizmoPlanes.length || this.autoRotateSpeeds.size === 0) return;
@@ -200,13 +237,11 @@ export class ExtraAxisGizmoController {
       if (plane.planeAxis < 0 || plane.planeAxis === plane.depthDim) continue;
       const delta = EXTRA_AXIS_AUTO_ROTATE_SPEED * speed * dt;
       this.options.getRot().applyGivensLeft(plane.planeAxis, plane.depthDim, delta);
-      const prev = this.getAngle(plane.depthDim);
-      this.angles.set(plane.depthDim, normalizeSignedAngleDelta(prev + delta));
       rotated = true;
     }
 
     if (!rotated) return;
-    this.options.markProjectionDirty();
+    this.syncAnglesFromRotation(gizmoPlanes);
     this.options.applySceneBackground();
   }
 
@@ -226,9 +261,9 @@ export class ExtraAxisGizmoController {
       rotated = true;
     }
 
+    this.syncAnglesFromRotation(planes);
     this.sync();
     if (!rotated) return;
-    this.options.markProjectionDirty();
     this.options.applySceneBackground();
     this.options.projectAndRenderAll();
   }
@@ -236,6 +271,7 @@ export class ExtraAxisGizmoController {
   sync() {
     if (!this.options.rootEl) return;
     const planes = this.currentPlanes();
+    this.syncAnglesFromRotation(planes);
     const activeDepthDims = new Set(planes.map(plane => plane.depthDim));
     const freezeDomOrder = this.orderDrag.active;
 
@@ -373,6 +409,23 @@ export class ExtraAxisGizmoController {
     if (typeof existing === 'number') return existing;
     this.angles.set(depthDim, EXTRA_GIZMO_BASE_ANGLE);
     return EXTRA_GIZMO_BASE_ANGLE;
+  }
+
+  private syncAnglesFromRotation(planes = this.currentPlanes()) {
+    const rot = this.options.getRot();
+    const R = rot.matrix;
+    const N = rot.N;
+    const activeDepthDims = new Set<number>();
+    for (const plane of planes) {
+      if (plane.planeAxis < 0 || plane.depthDim < 0 || plane.planeAxis >= N || plane.depthDim >= N) continue;
+      activeDepthDims.add(plane.depthDim);
+      const x = R[plane.planeAxis * N + plane.planeAxis] ?? 1;
+      const y = R[plane.depthDim * N + plane.planeAxis] ?? 0;
+      this.angles.set(plane.depthDim, normalizeSignedAngleDelta(EXTRA_GIZMO_BASE_ANGLE + Math.atan2(y, x)));
+    }
+    for (const dim of Array.from(this.angles.keys())) {
+      if (!activeDepthDims.has(dim)) this.angles.delete(dim);
+    }
   }
 
   private setAutoRotateSpeed(depthDim: number, speed: number) {
@@ -517,6 +570,8 @@ export class ExtraAxisGizmoController {
     this.orderDrag.pointerId = ev.pointerId;
     this.orderDrag.startX = ev.clientX;
     this.orderDrag.startY = ev.clientY;
+    this.orderDrag.lastX = ev.clientX;
+    this.orderDrag.lastY = ev.clientY;
     this.orderDrag.sourceDim = depthDim;
     this.orderDrag.source = gizmoEl;
     this.orderDrag.active = false;
@@ -531,6 +586,8 @@ export class ExtraAxisGizmoController {
     this.orderDrag.active = true;
     this.orderDrag.grabOffsetX = ev.clientX - sourceRect.left;
     this.orderDrag.grabOffsetY = ev.clientY - sourceRect.top;
+    this.orderDrag.lastX = ev.clientX;
+    this.orderDrag.lastY = ev.clientY;
 
     this.orderDrag.placeholder = document.createElement('div');
     this.orderDrag.placeholder.className = 'extra-axis-drop-placeholder';
@@ -552,6 +609,43 @@ export class ExtraAxisGizmoController {
     this.updateOrderGhostPosition(ev.clientX, ev.clientY);
     this.updateProjectedAxisDropTarget(ev.clientX, ev.clientY);
     this.updateOrderPlaceholder(ev.clientX, ev.clientY);
+    this.updateOrderAutoScroll(ev.clientX);
+  }
+
+  private orderAutoScrollDirection(clientX: number) {
+    const root = this.options.rootEl;
+    if (!root || !this.orderDrag.active) return 0;
+    const maxScroll = root.scrollWidth - root.clientWidth;
+    if (maxScroll <= 1) return 0;
+
+    const rect = root.getBoundingClientRect();
+    const edge = Math.max(28, Math.min(56, rect.width * 0.22));
+    const leftDistance = clientX - rect.left;
+    const rightDistance = rect.right - clientX;
+
+    if (leftDistance < edge && root.scrollLeft > 0) {
+      return -Math.min(1, Math.max(0.18, (edge - leftDistance) / edge));
+    }
+    if (rightDistance < edge && root.scrollLeft < maxScroll) {
+      return Math.min(1, Math.max(0.18, (edge - rightDistance) / edge));
+    }
+    return 0;
+  }
+
+  private updateOrderAutoScroll(clientX: number) {
+    if (this.orderAutoScrollDirection(clientX) === 0) {
+      this.stopOrderAutoScroll();
+      return;
+    }
+    if (this.orderAutoScroll.frame) return;
+    this.orderAutoScroll.lastTs = performance.now();
+    this.orderAutoScroll.frame = requestAnimationFrame(this.stepOrderAutoScroll);
+  }
+
+  private stopOrderAutoScroll() {
+    if (this.orderAutoScroll.frame) cancelAnimationFrame(this.orderAutoScroll.frame);
+    this.orderAutoScroll.frame = 0;
+    this.orderAutoScroll.lastTs = 0;
   }
 
   private updateProjectedAxisDropTarget(clientX: number, clientY: number) {
@@ -628,6 +722,7 @@ export class ExtraAxisGizmoController {
   }
 
   private endOrderDrag(commit: boolean) {
+    this.stopOrderAutoScroll();
     window.removeEventListener('pointermove', this.handleOrderPointerMove);
     window.removeEventListener('pointerup', this.handleOrderPointerUp);
     window.removeEventListener('pointercancel', this.handleOrderPointerCancel);
@@ -642,6 +737,8 @@ export class ExtraAxisGizmoController {
     this.orderDrag.startY = 0;
     this.orderDrag.grabOffsetX = 0;
     this.orderDrag.grabOffsetY = 0;
+    this.orderDrag.lastX = 0;
+    this.orderDrag.lastY = 0;
     this.orderDrag.active = false;
     this.orderDrag.sourceDim = -1;
     this.orderDrag.source = null;
@@ -786,9 +883,7 @@ export class ExtraAxisGizmoController {
     if (this.drag.planeAxis < 0 || this.drag.depthAxis < 0 || this.drag.planeAxis === this.drag.depthAxis) return;
 
     this.options.getRot().applyGivensLeft(this.drag.planeAxis, this.drag.depthAxis, delta);
-    this.options.markProjectionDirty();
-    const prev = this.getAngle(this.drag.depthAxis);
-    this.angles.set(this.drag.depthAxis, normalizeSignedAngleDelta(prev + delta));
+    this.syncAnglesFromRotation();
     this.options.applySceneBackground();
   }
 }

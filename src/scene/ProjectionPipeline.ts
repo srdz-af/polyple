@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { pcaTopK } from '../PCA';
 import type { RotND } from '../RotND';
 import type { NDProjector } from '../geometry/NDProjector';
 import { perspectiveScaleFrom, recenterProjected, type AxisMap } from '../geometry/projectionUtils';
@@ -9,7 +8,6 @@ import type { ViewMode } from '../constants';
 
 type ProjectionParams = {
   N: number;
-  projection: 'Canonical' | 'PCA';
   sliceDim: number;
   sliceMin: number;
   sliceMax: number;
@@ -27,10 +25,6 @@ type ProjectionPipelineOptions = {
   getY: () => Float32Array;
   getRot: () => RotND;
   getProjector: () => NDProjector;
-  getPcaCache: () => Float32Array | null;
-  setPcaCache: (cache: Float32Array | null) => void;
-  isProjectionDirty: () => boolean;
-  setProjectionDirty: (dirty: boolean) => void;
   getParams: () => ProjectionParams;
   getRendererND: () => HypercubeRenderer;
   getExtraInstances: () => Instance[];
@@ -39,7 +33,6 @@ type ProjectionPipelineOptions = {
   getBaseAxisMap: () => AxisMap;
   visibleDims: () => number;
   perspectiveDimsFor: (localN: number, axisMap: AxisMap) => number[];
-  onPcaAxesChanged: (axes: { x: number; y: number; z: number }) => void;
   applyObjectVisibility: () => void;
   updateSelectionOutline: () => void;
   updateVertexCloud: () => void;
@@ -158,45 +151,13 @@ export class ProjectionPipeline {
   private applyProjectionMatrix() {
     const params = this.options.getParams();
     const N = this.options.getN();
-    const M = this.options.getM();
     const projector = this.options.getProjector();
-    if (params.projection === 'Canonical' || M === 0) {
-      const nVis = this.options.visibleDims();
-      const axes = [params.axesX % nVis, params.axesY % nVis, params.axesZ % nVis].map(v => Math.max(0, Math.min(nVis - 1, v)));
-      const P = new Float32Array(3 * N);
-      P[0 * N + axes[0]] = 1;
-      P[1 * N + axes[1]] = 1;
-      P[2 * N + axes[2]] = 1;
-      projector.setCustomP(P);
-      this.options.setPcaCache(null);
-      return;
-    }
-
-    let pcaCache = this.options.getPcaCache();
-    if (!pcaCache || this.options.isProjectionDirty()) {
-      const { P } = pcaTopK(this.options.getX(), N, M, 3);
-      pcaCache = P;
-      this.options.setPcaCache(P);
-      this.options.setProjectionDirty(false);
-    }
-    projector.setCustomP(pcaCache);
-    if (M <= 0) return;
-
-    const chooseMaxDim = (row: number) => {
-      let best = 0;
-      let bestVal = -Infinity;
-      for (let k = 0; k < N; k++) {
-        const val = Math.abs(pcaCache![row * N + k]);
-        if (val > bestVal) {
-          bestVal = val;
-          best = k;
-        }
-      }
-      return best;
-    };
-    const newAxes = { x: chooseMaxDim(0), y: chooseMaxDim(1), z: chooseMaxDim(2) };
-    if (newAxes.x !== params.axesX || newAxes.y !== params.axesY || newAxes.z !== params.axesZ) {
-      this.options.onPcaAxesChanged(newAxes);
-    }
+    const nVis = this.options.visibleDims();
+    const axes = [params.axesX % nVis, params.axesY % nVis, params.axesZ % nVis].map(v => Math.max(0, Math.min(nVis - 1, v)));
+    const P = new Float32Array(3 * N);
+    P[0 * N + axes[0]] = 1;
+    P[1 * N + axes[1]] = 1;
+    P[2 * N + axes[2]] = 1;
+    projector.setCustomP(P);
   }
 }

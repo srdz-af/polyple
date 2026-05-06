@@ -14,7 +14,6 @@ import {
 
 type AxisParams = {
   N: number;
-  projection: 'Canonical' | 'PCA';
   renderMode: ViewMode;
   editMode: boolean;
   axesX: number;
@@ -37,7 +36,6 @@ type AxisGizmoControllerOptions = {
   getParams: () => AxisParams;
   getN: () => number;
   getRot: () => RotND;
-  markProjectionDirty: () => void;
   clearAxisGuide: () => void;
   projectAndRenderAll: () => void;
   applySceneBackground: () => void;
@@ -76,7 +74,6 @@ export class AxisGizmoController {
       getAxesOffset: () => this.axesOffset,
       getParams: () => this.options.getParams(),
       getRot: () => this.options.getRot(),
-      markProjectionDirty: () => this.options.markProjectionDirty(),
       applySceneBackground: () => this.options.applySceneBackground(),
       projectAndRenderAll: () => this.options.projectAndRenderAll(),
       reorderExtraAxes: orderedExtraDims => this.reorderExtraAxes(orderedExtraDims),
@@ -119,6 +116,34 @@ export class AxisGizmoController {
     this.extraAxisGizmos.clearDynamicState();
   }
 
+  normalizeVisibleAxes(nVis = this.visibleDims()) {
+    const count = Math.max(3, Math.min(nVis, MAX_N));
+    const projectionOrder = this.projectionOrder();
+    const visible: number[] = [];
+    for (const dim of projectionOrder) {
+      if (dim >= 0 && dim < count && !visible.includes(dim)) visible.push(dim);
+    }
+    for (let dim = 0; dim < count; dim++) {
+      if (!visible.includes(dim)) visible.push(dim);
+    }
+
+    const hidden: number[] = [];
+    for (const dim of this.axesOrder) {
+      if (dim >= count && dim < MAX_N && !hidden.includes(dim)) hidden.push(dim);
+    }
+    for (let dim = count; dim < MAX_N; dim++) {
+      if (!hidden.includes(dim)) hidden.push(dim);
+    }
+
+    this.axesOrder = [...visible, ...hidden];
+    this.axesOffset = 0;
+    const params = this.options.getParams();
+    params.axesX = visible[0] ?? 0;
+    params.axesY = visible[1] ?? 1;
+    params.axesZ = visible[2] ?? 2;
+    this.options.clearAxisGuide();
+  }
+
   currentAxisMap(localN: number): AxisMap {
     const source = this.axesOrder.slice(0, this.visibleDims());
     const activeAxes = source.length ? source : canonicalAxisMap(MAX_N);
@@ -136,6 +161,10 @@ export class AxisGizmoController {
 
   perspectiveDimsFor(localN: number, axisMap: AxisMap): number[] {
     return this.extraAxisGizmos.perspectiveDimsFor(localN, axisMap);
+  }
+
+  primaryExtraRotationDepthDim(localN: number, axisMap: AxisMap): number {
+    return this.extraAxisGizmos.primaryExtraRotationDepthDim(localN, axisMap);
   }
 
   extraRotationPlaneAxis(lockAxis: -1 | 0 | 1 | 2, depthDim: number, n: number) {
@@ -159,7 +188,6 @@ export class AxisGizmoController {
     params.axesZ = clamp(z);
     const idx = list.indexOf(params.axesX);
     if (idx >= 0) this.axesOffset = idx;
-    this.options.markProjectionDirty();
     this.options.clearAxisGuide();
     this.updateAxisLegend();
     this.renderAxisList();
@@ -171,10 +199,6 @@ export class AxisGizmoController {
     const n = this.visibleDims();
     if (n < 3) return;
     this.axesOffset = (((this.axesOffset + step) % n) + n) % n;
-    if (params.projection !== 'Canonical') {
-      params.projection = 'Canonical';
-      this.options.markProjectionDirty();
-    }
     this.setProjectionAxes({
       x: this.axesOrder[this.axesOffset % n],
       y: this.axesOrder[(this.axesOffset + 1) % n],

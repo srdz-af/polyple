@@ -40,7 +40,6 @@ import type {
   TransformState,
 } from './scene/types';
 
-type ProjMode = 'Canonical' | 'PCA';
 type PrimitiveMode = PrimitiveKind;
 
 const app = document.getElementById('app')!;
@@ -157,8 +156,6 @@ const edgesFallback = new Uint32Array([0, 0]);
 const tmpVec = new THREE.Vector3();
 const tmpN = new Float32Array(32);
 const tmpCenter = new THREE.Vector3();
-let pcaCache: Float32Array | null = null;
-let projectionDirty = true;
 let setViewMode: (mode: ViewMode) => void;
 let sceneHistory: SceneHistory<SceneSnapshot<PrimitiveMode>>;
 let baseLabel = 'Hypercube';
@@ -197,6 +194,7 @@ function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
     label: baseLabel,
     paramsN: PARAMS.N,
     primitive: PARAMS.primitive,
+    rotMatrix: new Float32Array(rot.matrix),
     axes: { x: PARAMS.axesX, y: PARAMS.axesY, z: PARAMS.axesZ },
     axesOrder: [...axisController.axesOrder],
     axesOffset: axisController.axesOffset,
@@ -238,6 +236,7 @@ function applySnapshot(snap: SceneSnapshot<PrimitiveMode>) {
   PARAMS.N = snap.paramsN;
   PARAMS.primitive = snap.primitive;
   rebuildState(snap.N, snap.X, snap.E, snap.source, snap.baseOrigN, snap.baseAxisMap);
+  if (snap.rotMatrix.length === rot.matrix.length) rot.matrix.set(snap.rotMatrix);
   baseLabel = snap.label;
   PARAMS.axesX = snap.axes.x; PARAMS.axesY = snap.axes.y; PARAMS.axesZ = snap.axes.z;
   axisController.setAxisOrder(snap.axesOrder);
@@ -252,7 +251,6 @@ function applySnapshot(snap: SceneSnapshot<PrimitiveMode>) {
   selectedInstance = snap.selectedInstance >= 0 && snap.selectedInstance < extraInstances.length
     ? snap.selectedInstance
     : (M > 0 ? BASE_SELECTION : NO_SELECTION);
-  projectionDirty = true;
   projectAndRenderAll();
   applySliceFilter();
   updateDimensionControl();
@@ -485,7 +483,6 @@ if (M > 0) {
 const PARAMS = {
   N: 4,
   primitive: 'hypercube' as PrimitiveMode,
-  projection: 'Canonical' as ProjMode,
   // Slicing
   sliceDim: -1,
   sliceMin: -0.5,
@@ -522,8 +519,8 @@ transformController = new TransformController({
   getObjectVisible,
   visibleDims,
   perspectiveDimsFor,
+  primaryExtraRotationDepthDim: (localN, axisMap) => axisController.primaryExtraRotationDepthDim(localN, axisMap),
   extraRotationPlaneAxis,
-  setProjectionDirty: dirty => { projectionDirty = dirty; },
   projectAndRenderAll,
   applySliceFilter,
   updateSelectionOutline,
@@ -537,7 +534,6 @@ axisController = new AxisGizmoController({
   getParams: () => PARAMS,
   getN: () => N,
   getRot: () => rot,
-  markProjectionDirty: () => { projectionDirty = true; },
   clearAxisGuide,
   projectAndRenderAll,
   applySceneBackground: () => backgroundController.applySceneBackground(PARAMS.editMode),
@@ -552,10 +548,6 @@ projectionPipeline = new ProjectionPipeline({
   getY: () => Y,
   getRot: () => rot,
   getProjector: () => projector,
-  getPcaCache: () => pcaCache,
-  setPcaCache: cache => { pcaCache = cache; },
-  isProjectionDirty: () => projectionDirty,
-  setProjectionDirty: dirty => { projectionDirty = dirty; },
   getParams: () => PARAMS,
   getRendererND: () => rendererND,
   getExtraInstances: () => extraInstances,
@@ -564,14 +556,6 @@ projectionPipeline = new ProjectionPipeline({
   getBaseAxisMap: () => baseAxisMap,
   visibleDims,
   perspectiveDimsFor,
-  onPcaAxesChanged: newAxes => {
-    PARAMS.axesX = newAxes.x;
-    PARAMS.axesY = newAxes.y;
-    PARAMS.axesZ = newAxes.z;
-    axisController.axesOffset = axisController.axesOrder.indexOf(PARAMS.axesX);
-    updateAxisLegend();
-    renderAxisList();
-  },
   applyObjectVisibility,
   updateSelectionOutline,
   updateVertexCloud: () => updateVertexCloud(selectedInstance),
@@ -596,15 +580,11 @@ function setNewPrimitiveDimension(value: number) {
   }
   const next = Math.max(3, Math.min(MAX_N, Math.round(value)));
   PARAMS.N = next;
-  const nVis = visibleDims();
-  axisController.axesOffset = (((axisController.axesOffset % nVis) + nVis) % nVis);
-  const visibleOrder = axisController.axesOrder.slice(0, nVis);
-  PARAMS.axesX = visibleOrder[axisController.axesOffset % nVis] ?? 0;
-  PARAMS.axesY = visibleOrder[(axisController.axesOffset + 1) % nVis] ?? 1;
-  PARAMS.axesZ = visibleOrder[(axisController.axesOffset + 2) % nVis] ?? 2;
+  axisController.normalizeVisibleAxes(next);
   updateDimensionControl();
   renderAxisList();
   updateAxisLegend();
+  projectAndRenderAll();
 }
 
 function updateEditModeToggle() {
@@ -764,8 +744,6 @@ function rebuildState(newN: number, newX: Float32Array, newE: Uint32Array, sourc
   rot = new RotND(ambientN);
   projector = new NDProjector(ambientN, rot.matrix, canonicalP(ambientN));
   Y = new Float32Array(3 * M);
-  pcaCache = null;
-  projectionDirty = true;
   clearExtraInstances();
   baseVisible = true;
   baseTransform.pos.set(0,0,0);
@@ -802,7 +780,6 @@ function resetToIsometric() {
   const targetN = 6;
   PARAMS.N = targetN;
   PARAMS.primitive = 'hypercube';
-  PARAMS.projection = 'PCA';
   axisController.clearDynamicState();
   PARAMS.renderMode = 'faceted';
   PARAMS.sliceDim = -1;

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { RotND } from '../RotND';
 import type { NDProjector } from '../geometry/NDProjector';
-import { perspectiveDepthDim, perspectiveScaleFrom, type AxisMap } from '../geometry/projectionUtils';
+import { perspectiveScaleFrom, type AxisMap } from '../geometry/projectionUtils';
 import type { HypercubeRenderer } from '../rendering/HypercubeRenderer';
 import type { Instance, TransformMode, TransformState } from '../scene/types';
 
@@ -41,8 +41,8 @@ type TransformControllerOptions = {
   getObjectVisible: (idx: number) => boolean;
   visibleDims: () => number;
   perspectiveDimsFor: (localN: number, axisMap: AxisMap) => number[];
+  primaryExtraRotationDepthDim: (localN: number, axisMap: AxisMap) => number;
   extraRotationPlaneAxis: (lockAxis: -1 | 0 | 1 | 2, depthDim: number) => number;
-  setProjectionDirty: (dirty: boolean) => void;
   projectAndRenderAll: () => void;
   applySliceFilter: () => void;
   updateSelectionOutline: () => void;
@@ -488,7 +488,6 @@ export class TransformController {
             }
           }
           this.transformOp.lastHit.copy(hit);
-          this.options.setProjectionDirty(true);
         }
       } else if (this.transformOp.mode === 'rotate') {
         if (this.transformOp.extraPlane && this.transformOp.objectDataStart) {
@@ -499,8 +498,7 @@ export class TransformController {
           if (count > 0) {
             const originalN = inst ? inst.originalN : this.options.getBaseOriginalN() || this.options.visibleDims();
             const axisMap = inst ? inst.axisMap : this.options.getBaseAxisMap();
-            const perspectiveDims = this.options.perspectiveDimsFor(originalN, axisMap);
-            const dimB = perspectiveDims[0] ?? perspectiveDepthDim(originalN, axisMap);
+            const dimB = this.options.primaryExtraRotationDepthDim(originalN, axisMap);
             const dimA = this.options.extraRotationPlaneAxis(this.transformOp.lockAxis, dimB);
             if (dimA < 0 || dimB < 0 || dimA === dimB) return;
             const angle = (dx - dy) * 0.01;
@@ -512,7 +510,6 @@ export class TransformController {
               src[dimA * count + i] = a0 * c - b0 * s;
               src[dimB * count + i] = a0 * s + b0 * c;
             }
-            this.options.setProjectionDirty(true);
           }
         } else {
           const deltaX = dx * 0.005;
@@ -593,7 +590,6 @@ export class TransformController {
         if (this.transformOp.objectDataStart) {
           const src = this.transformOp.instIdx === -1 ? this.options.getX() : extraInstances[this.transformOp.instIdx].X;
           src.set(this.transformOp.objectDataStart);
-          this.options.setProjectionDirty(true);
         }
         target.pos.copy(this.transformOp.startPos);
         target.rot.copy(this.transformOp.startRot);
@@ -734,7 +730,6 @@ export class TransformController {
       src[a * count + vertexIdx] = acc;
     }
 
-    if (instIdx === -1) this.options.setProjectionDirty(true);
     return true;
   }
 

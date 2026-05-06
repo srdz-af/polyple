@@ -37,10 +37,6 @@ export function embedToMax(localVerts: Float32Array, localN: number, axisMap: Ax
   return out;
 }
 
-export function perspectiveDepthDim(localN: number, axisMap: AxisMap) {
-  return localN >= 4 ? axisMap[localN - 1] ?? -1 : -1;
-}
-
 export function perspectiveScaleFrom(rotated: ArrayLike<number>, perspectiveDims: number[]) {
   if (perspectiveDims.length === 0) return 1;
   const k = 0.6;

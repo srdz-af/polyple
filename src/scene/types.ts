@@ -32,6 +32,7 @@ export type SceneSnapshot<TPrimitiveMode> = {
   label: string;
   paramsN: number;
   primitive: TPrimitiveMode;
+  rotMatrix: Float32Array;
   axes: ProjectionAxes;
   axesOrder: number[];
   axesOffset: number;
