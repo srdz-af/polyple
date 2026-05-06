@@ -5,7 +5,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/x-icon" href="./favicon.ico" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded&icon_names=chevron_left,chevron_right,edit,file_download,file_upload,grid_on,help,keyboard_arrow_down,keyboard_arrow_up,opacity,open_with,play_arrow,radio_button_checked,refresh,stop,sync_alt,view_in_ar,visibility,visibility_off,vrpano,zoom_out_map&display=block" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded&icon_names=chevron_left,chevron_right,edit,file_download,file_upload,grid_on,help,keyboard_arrow_down,keyboard_arrow_up,movie,opacity,open_with,photo_camera,play_arrow,radio_button_checked,refresh,stop,sync_alt,view_in_ar,visibility,visibility_off,vrpano,zoom_out_map&display=block" />
     <title>BleND</title>
     <style>
       :root {
@@ -175,6 +175,11 @@
       #view-toggle button.active:hover,
       #scene-actions button.active:hover,
       #transform-actions button.active:hover { background: var(--ui-blue-hover); }
+      #scene-actions button.recording,
+      #scene-actions button.recording:hover {
+        background: rgba(201, 56, 56, 0.86);
+        color: #fff;
+      }
       #view-toggle button:disabled,
       #scene-actions button:disabled,
       #transform-actions button:disabled {
@@ -1347,6 +1352,12 @@
       <div id="scene-actions" aria-label="Scene actions">
         <button id="import-json-button" type="button" aria-label="Import JSON" title="Import JSON">
           <span class="material-symbols-rounded" aria-hidden="true">file_upload</span>
+        </button>
+        <button id="record-viewport-button" type="button" aria-label="Record viewport" title="Record viewport">
+          <span class="material-symbols-rounded" aria-hidden="true">movie</span>
+        </button>
+        <button id="capture-frame-button" type="button" aria-label="Download current frame" title="Download current frame">
+          <span class="material-symbols-rounded" aria-hidden="true">photo_camera</span>
         </button>
         <button id="export-json-button" type="button" aria-label="Export JSON" title="Export JSON">
           <span class="material-symbols-rounded" aria-hidden="true">file_download</span>

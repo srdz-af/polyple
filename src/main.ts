@@ -36,6 +36,8 @@ const mobileOnboardingProgressButtons = Array.from(document.querySelectorAll('#m
 const mobileOnboardingSteps = Array.from(document.querySelectorAll('#mobile-onboarding-track .mobile-onboarding-step')) as HTMLElement[];
 const importJsonButton = document.getElementById('import-json-button') as HTMLButtonElement | null;
 const exportJsonButton = document.getElementById('export-json-button') as HTMLButtonElement | null;
+const recordViewportButton = document.getElementById('record-viewport-button') as HTMLButtonElement | null;
+const captureFrameButton = document.getElementById('capture-frame-button') as HTMLButtonElement | null;
 const editModeToggle = document.getElementById('edit-mode-toggle') as HTMLButtonElement | null;
 const transformMoveButton = document.getElementById('transform-move-button') as HTMLButtonElement | null;
 const transformRotateButton = document.getElementById('transform-rotate-button') as HTMLButtonElement | null;
@@ -2840,6 +2842,206 @@ function downloadText(name: string, text: string, mime = 'text/plain') {
   URL.revokeObjectURL(url);
 }
 
+function downloadBlob(name: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+const VIDEO_RECORDER_MIME_CANDIDATES = [
+  'video/webm;codecs=vp9,opus',
+  'video/webm;codecs=vp8,opus',
+  'video/webm;codecs=h264,opus',
+  'video/webm',
+  'video/mp4',
+] as const;
+const VIDEO_RECORDER_FPS = 60;
+const VIDEO_RECORDER_MIN_BITRATE = 28_000_000;
+const VIDEO_RECORDER_MAX_BITRATE = 140_000_000;
+const recorderBufferSize = new THREE.Vector2();
+
+let viewportRecorder: MediaRecorder | null = null;
+let viewportRecorderStream: MediaStream | null = null;
+let viewportRecorderChunks: Blob[] = [];
+let viewportRecorderMimeType = 'video/webm';
+let viewportGridVisibleBeforeCapture = true;
+let viewportAxesVisibleBeforeCapture = true;
+let viewportRecordingFinalized = false;
+
+function captureTimestamp() {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+
+function recordingFileExtensionFromMime(mimeType: string) {
+  if (mimeType.includes('mp4')) return 'mp4';
+  return 'webm';
+}
+
+function setRecordViewportButtonState(recording: boolean) {
+  if (!recordViewportButton) return;
+  recordViewportButton.classList.toggle('recording', recording);
+  recordViewportButton.classList.toggle('active', recording);
+  const label = recording ? 'Stop viewport recording' : 'Record viewport';
+  recordViewportButton.title = label;
+  recordViewportButton.setAttribute('aria-label', label);
+  const icon = recordViewportButton.querySelector('.material-symbols-rounded');
+  if (icon) icon.textContent = recording ? 'stop' : 'movie';
+}
+
+function pickRecorderMimeType() {
+  if (typeof MediaRecorder === 'undefined') return '';
+  for (const candidate of VIDEO_RECORDER_MIME_CANDIDATES) {
+    try {
+      if (MediaRecorder.isTypeSupported(candidate)) return candidate;
+    } catch {
+      // Ignore and try next.
+    }
+  }
+  return '';
+}
+
+function recommendedRecordingBitrate() {
+  renderer.getDrawingBufferSize(recorderBufferSize);
+  const pixelCount = Math.max(1, recorderBufferSize.x * recorderBufferSize.y);
+  const bitsPerPixelFrame = pixelCount >= (3840 * 2160)
+    ? 0.16
+    : pixelCount >= (2560 * 1440)
+      ? 0.2
+      : 0.24;
+  const target = Math.round(pixelCount * VIDEO_RECORDER_FPS * bitsPerPixelFrame);
+  return Math.max(VIDEO_RECORDER_MIN_BITRATE, Math.min(VIDEO_RECORDER_MAX_BITRATE, target));
+}
+
+function finalizeViewportRecording(downloadVideo: boolean) {
+  if (viewportRecordingFinalized) return;
+  viewportRecordingFinalized = true;
+
+  const mimeType = viewportRecorderMimeType;
+  const chunks = viewportRecorderChunks;
+  const stream = viewportRecorderStream;
+
+  viewportRecorder = null;
+  viewportRecorderStream = null;
+  viewportRecorderChunks = [];
+
+  stream?.getTracks().forEach(track => track.stop());
+  gridGroup.visible = viewportGridVisibleBeforeCapture;
+  axes.visible = viewportAxesVisibleBeforeCapture;
+  renderer.render(scene, camera);
+  setRecordViewportButtonState(false);
+
+  if (!downloadVideo) return;
+  if (chunks.length === 0) {
+    alert('Recording stopped, but no video data was captured.');
+    return;
+  }
+  const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
+  const ext = recordingFileExtensionFromMime(blob.type || mimeType);
+  downloadBlob(`blend-viewport-${captureTimestamp()}.${ext}`, blob);
+}
+
+function stopViewportRecording() {
+  if (!viewportRecorder) return;
+  try {
+    if (viewportRecorder.state !== 'inactive') {
+      viewportRecorder.stop();
+    } else {
+      finalizeViewportRecording(true);
+    }
+  } catch {
+    finalizeViewportRecording(false);
+  }
+}
+
+function startViewportRecording() {
+  if (typeof MediaRecorder === 'undefined') {
+    alert('Viewport recording is not supported in this browser.');
+    return;
+  }
+  const captureStream = renderer.domElement.captureStream?.bind(renderer.domElement);
+  if (!captureStream) {
+    alert('Viewport recording is not supported in this browser.');
+    return;
+  }
+
+  const stream = captureStream(VIDEO_RECORDER_FPS);
+  const mimeType = pickRecorderMimeType();
+  const videoBitsPerSecond = recommendedRecordingBitrate();
+  let recorder: MediaRecorder;
+  try {
+    recorder = mimeType
+      ? new MediaRecorder(stream, { mimeType, videoBitsPerSecond })
+      : new MediaRecorder(stream, { videoBitsPerSecond });
+  } catch {
+    try {
+      recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+    } catch {
+      stream.getTracks().forEach(track => track.stop());
+      alert('Unable to start viewport recording.');
+      return;
+    }
+  }
+
+  viewportRecorder = recorder;
+  viewportRecorderStream = stream;
+  viewportRecorderChunks = [];
+  viewportRecorderMimeType = recorder.mimeType || mimeType || 'video/webm';
+  viewportGridVisibleBeforeCapture = gridGroup.visible;
+  viewportAxesVisibleBeforeCapture = axes.visible;
+  viewportRecordingFinalized = false;
+
+  recorder.ondataavailable = ev => {
+    if (ev.data && ev.data.size > 0) viewportRecorderChunks.push(ev.data);
+  };
+  recorder.onerror = () => {
+    alert('Viewport recording failed.');
+    finalizeViewportRecording(false);
+  };
+  recorder.onstop = () => {
+    finalizeViewportRecording(true);
+  };
+
+  gridGroup.visible = false;
+  axes.visible = false;
+  renderer.render(scene, camera);
+  setRecordViewportButtonState(true);
+
+  try {
+    recorder.start(200);
+  } catch {
+    finalizeViewportRecording(false);
+    alert('Unable to start viewport recording.');
+  }
+}
+
+function captureViewportFrame() {
+  const previousGridVisibility = gridGroup.visible;
+  const previousAxesVisibility = axes.visible;
+  gridGroup.visible = false;
+  axes.visible = false;
+  renderer.render(scene, camera);
+  try {
+    const dataUrl = renderer.domElement.toDataURL('image/png');
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = `blend-frame-${captureTimestamp()}.png`;
+    a.click();
+  } catch {
+    alert('Unable to capture frame.');
+  } finally {
+    gridGroup.visible = previousGridVisibility;
+    axes.visible = previousAxesVisibility;
+    renderer.render(scene, camera);
+  }
+}
+
 async function handleImport(file: File) {
   try {
     const text = await file.text();
@@ -3030,7 +3232,16 @@ if (fileInput) {
   });
 }
 
+setRecordViewportButtonState(false);
 importJsonButton?.addEventListener('click', () => fileInput?.click());
+recordViewportButton?.addEventListener('click', () => {
+  if (viewportRecorder && viewportRecorder.state !== 'inactive') {
+    stopViewportRecording();
+    return;
+  }
+  startViewportRecording();
+});
+captureFrameButton?.addEventListener('click', () => captureViewportFrame());
 exportJsonButton?.addEventListener('click', () => exportProjectionJSON());
 editModeToggle?.addEventListener('click', () => setEditMode(!PARAMS.editMode));
 helpToggleButton?.addEventListener('click', ev => {

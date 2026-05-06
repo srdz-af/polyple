@@ -5,7 +5,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/x-icon" href="./favicon.ico" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded&icon_names=chevron_left,chevron_right,edit,file_download,file_upload,grid_on,help,keyboard_arrow_down,keyboard_arrow_up,opacity,open_with,play_arrow,radio_button_checked,refresh,stop,sync_alt,view_in_ar,visibility,visibility_off,vrpano,zoom_out_map&display=block" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded&icon_names=chevron_left,chevron_right,edit,file_download,file_upload,grid_on,help,keyboard_arrow_down,keyboard_arrow_up,movie,opacity,open_with,photo_camera,play_arrow,radio_button_checked,refresh,stop,sync_alt,view_in_ar,visibility,visibility_off,vrpano,zoom_out_map&display=block" />
     <title>BleND</title>
     <style>
       :root {
@@ -55,22 +55,10 @@
         width: min(320px, calc(100vw - 24px));
         max-width: calc(100vw - 24px);
       }
-      #axis-shell {
-        box-sizing: border-box;
-        width: 100%;
-        min-width: 0;
-        display: flex;
-        align-items: flex-start;
-        gap: 8px;
-        padding: 8px;
-        border-radius: 6px;
-        border: 1px solid var(--ui-border);
-        background: var(--ui-bg);
-        box-shadow: var(--ui-shadow);
-        margin-bottom: 8px;
-      }
       #gizmo-dock {
-        position: static;
+        position: absolute;
+        right: calc(100% + 10px);
+        top: 0;
         z-index: 10;
         display: flex;
         flex-direction: column;
@@ -95,7 +83,6 @@
         padding-right: 2px;
       }
       #axis-list,
-      #axis-shell,
       #object-list,
       #dimension-control,
       #background-selector {
@@ -188,6 +175,11 @@
       #view-toggle button.active:hover,
       #scene-actions button.active:hover,
       #transform-actions button.active:hover { background: var(--ui-blue-hover); }
+      #scene-actions button.recording,
+      #scene-actions button.recording:hover {
+        background: rgba(201, 56, 56, 0.86);
+        color: #fff;
+      }
       #view-toggle button:disabled,
       #scene-actions button:disabled,
       #transform-actions button:disabled {
@@ -426,7 +418,7 @@
         font: 12px/1.4 system-ui, sans-serif;
         max-height: 220px;
         overflow: visible;
-        margin-bottom: 0;
+        margin-bottom: 8px;
         user-select: none;
         -webkit-user-select: none;
         -moz-user-select: none;
@@ -559,6 +551,7 @@
       #background-controls output,
       #texture-panel,
       #texture-panel h4,
+      #texture-empty,
       #texture-controls label,
       #texture-controls output {
         user-select: none;
@@ -769,6 +762,17 @@
         display: block;
         width: 100%;
         height: 100%;
+      }
+      #texture-empty {
+        display: none;
+        margin: 0;
+        padding: 0 0 8px 0;
+        color: var(--ui-muted);
+        font-size: 11px;
+        text-align: left;
+      }
+      #texture-panel.empty #texture-empty {
+        display: block;
       }
       #texture-panel.empty #texture-controls,
       #texture-panel.empty #texture-preview-wrap {
@@ -1226,14 +1230,11 @@
           overscroll-behavior: contain;
         }
         #gizmo-dock {
+          position: static;
           flex-direction: row;
           justify-content: flex-end;
           gap: 6px;
           margin: 0 0 8px 0;
-        }
-        #axis-shell {
-          display: block;
-          padding: 8px;
         }
         #extra-axis-gizmos {
           flex-direction: row;
@@ -1298,9 +1299,6 @@
           justify-content: flex-start;
         }
         #axis-list {
-          margin-bottom: 0;
-        }
-        #axis-shell {
           margin-bottom: 6px;
         }
         #object-list {
@@ -1334,7 +1332,7 @@
         }
       }
     </style>
-    <script type="module" crossorigin src="/BleND/assets/index-C6207XZ2.js"></script>
+    <script type="module" crossorigin src="/BleND/assets/index-CxP7D8Q1.js"></script>
   </head>
   <body>
     <div id="top-left-controls">
@@ -1356,6 +1354,12 @@
         <button id="import-json-button" type="button" aria-label="Import JSON" title="Import JSON">
           <span class="material-symbols-rounded" aria-hidden="true">file_upload</span>
         </button>
+        <button id="record-viewport-button" type="button" aria-label="Record viewport" title="Record viewport">
+          <span class="material-symbols-rounded" aria-hidden="true">movie</span>
+        </button>
+        <button id="capture-frame-button" type="button" aria-label="Download current frame" title="Download current frame">
+          <span class="material-symbols-rounded" aria-hidden="true">photo_camera</span>
+        </button>
         <button id="export-json-button" type="button" aria-label="Export JSON" title="Export JSON">
           <span class="material-symbols-rounded" aria-hidden="true">file_download</span>
         </button>
@@ -1376,14 +1380,12 @@
       </div>
     </div>
     <div id="pane">
-      <div id="axis-shell">
-        <div id="gizmo-dock">
-          <div id="axis-gizmo" aria-label="View axis gizmo"></div>
-          <div id="extra-axis-gizmos" aria-label="Extra axis gizmos"></div>
-        </div>
-        <div id="axis-legend" style="display:none;"></div>
-        <div id="axis-list"></div>
+      <div id="gizmo-dock">
+        <div id="axis-gizmo" aria-label="View axis gizmo"></div>
+        <div id="extra-axis-gizmos" aria-label="Extra axis gizmos"></div>
       </div>
+      <div id="axis-legend" style="display:none;"></div>
+      <div id="axis-list"></div>
       <div id="object-list"></div>
       <div id="dimension-control" role="group" aria-label="New object dimension">
         <span class="dimension-label">Dimension</span>
@@ -1454,6 +1456,7 @@
         <div id="texture-preview-wrap">
           <canvas id="texture-preview" aria-label="Texture preview"></canvas>
         </div>
+        <p id="texture-empty">No object selected</p>
         <div id="texture-controls">
           <div class="texture-row">
             <label for="texture-base-color">Base color</label>
