@@ -708,10 +708,16 @@
       }
       .extra-axis-drop-placeholder {
         box-sizing: border-box;
+        flex: 0 0 86px;
+        width: 86px;
+        height: 86px;
         border-radius: 12px;
-        border: 1px dashed var(--ui-border);
-        background: rgba(148, 163, 184, 0.12);
-        box-shadow: inset 0 0 0 1px rgba(191, 212, 255, 0.12);
+        background:
+          linear-gradient(135deg, rgba(255,255,255,0.12), rgba(255,255,255,0.02)),
+          rgba(148, 163, 184, 0.14);
+        box-shadow:
+          inset 0 0 0 2px rgba(226, 232, 240, 0.22),
+          0 0 18px rgba(15, 23, 42, 0.16);
       }
       .extra-axis-drag-ghost {
         position: fixed;
@@ -758,7 +764,6 @@
         color: inherit;
         padding: 0 0 16px 0;
         border: 0;
-        border-bottom: 1px solid var(--ui-border-soft);
         border-radius: 0;
         font: inherit;
         margin-bottom: 16px;
@@ -827,11 +832,33 @@
         color: inherit;
         padding: 0 0 16px 0;
         border: 0;
-        border-bottom: 1px solid var(--ui-border-soft);
         border-radius: 0;
         font: inherit;
         margin-bottom: 16px;
         box-shadow: none;
+        position: relative;
+      }
+      #texture-panel {
+        position: relative;
+      }
+      #background-selector::before,
+      #texture-panel::before {
+        content: "";
+        position: absolute;
+        left: 2px;
+        right: 2px;
+        top: -8px;
+        height: 1px;
+        background: linear-gradient(
+          90deg,
+          transparent 0%,
+          rgba(255, 255, 255, 0.2) 14%,
+          rgba(255, 255, 255, 0.12) 50%,
+          rgba(255, 255, 255, 0.04) 86%,
+          transparent 100%
+        );
+        opacity: 0.78;
+        pointer-events: none;
       }
       #background-selector h4 {
         margin: 0 0 14px 0;
@@ -1683,6 +1710,10 @@
           flex-basis: 86px;
         }
         .extra-axis-gizmo {
+          margin: 0 24px 0 22px;
+        }
+        .extra-axis-drop-placeholder {
+          flex-basis: 86px;
           margin: 0 24px 0 22px;
         }
         #view-toggle,

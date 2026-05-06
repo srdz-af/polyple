@@ -600,6 +600,7 @@ export class ExtraAxisGizmoController {
 
     this.orderDrag.ghost = this.orderDrag.source.cloneNode(true) as HTMLDivElement;
     this.orderDrag.ghost.classList.add('extra-axis-drag-ghost');
+    this.orderDrag.ghost.style.display = '';
     this.orderDrag.ghost.style.width = `${sourceRect.width}px`;
     this.orderDrag.ghost.style.height = `${sourceRect.height}px`;
     document.body.appendChild(this.orderDrag.ghost);
