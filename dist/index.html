@@ -1596,9 +1596,15 @@
           overflow-y: auto;
           overflow-x: hidden;
           overscroll-behavior: contain;
+          scrollbar-width: none;
         }
         #scene-controls {
           max-height: none;
+          scrollbar-width: none;
+        }
+        #pane::-webkit-scrollbar,
+        #scene-controls::-webkit-scrollbar {
+          display: none;
         }
         #gizmo-dock {
           position: static;
