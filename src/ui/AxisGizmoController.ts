@@ -272,7 +272,7 @@ export class AxisGizmoController {
       part.line.setAttribute('y1', `${axisGizmoCenter}`);
       part.line.setAttribute('x2', `${x}`);
       part.line.setAttribute('y2', `${y}`);
-      part.line.style.opacity = isBack ? '0.2' : '0.64';
+      part.line.style.opacity = isBack ? '0.34' : '0.82';
     }
 
     this.updateAxisSwapHighlights();

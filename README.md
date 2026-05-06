@@ -50,71 +50,107 @@ npm run preview
 
 Camera:
 
-```text
-Left mouse drag: orbit
-Mouse wheel: zoom
-Middle mouse drag: cycle projected axis triples
-Axis gizmo drag: orbit camera
-Axis gizmo endpoint click: snap view to axis
-```
+- Left mouse drag: orbit
+- Mouse wheel: zoom
+- Middle mouse drag: cycle projected axis triples
+- Axis gizmo drag: orbit camera
+- Axis gizmo endpoint click: snap view to axis
 
 Global N-D rotation:
 
-```text
-W gizmo (purple dial): rotate global space on the active W plane (4D+)
-Extra-axis gizmo mini play button: cycle auto-rotation through 1x, 2x, 3x, then stop
-Extra-axis gizmo depth icon: include/exclude that axis from perspective depth
-```
+- Extra-axis gizmo drag: rotate global space on that extra dimension's projection plane (4D+)
+- Extra-axis gizmo play button: cycle auto-rotation through 1x, 2x, 3x, then stop
+- Extra-axis gizmo depth button: include/exclude that axis from perspective depth
 
 Object operations:
 
-```text
-Shift + A: add object menu
-G: move selected object
-R: rotate selected object
-S: scale selected object
-X: delete selected object (with confirm)
-Right click: context menu (add/transform/delete depending selection)
-```
+- Shift + A: add object menu
+- G: move selected object
+- R: rotate selected object
+- S: scale selected object
+- X: delete selected object (with confirm)
+- Right click: context menu (add/transform/delete depending selection)
 
 Mobile transforms:
 
-```text
-Touch and drag the Move / Rotate / Scale toolbar buttons to transform the selected object
-Release touch to confirm the transform
-```
+- Touch and drag the Move / Rotate / Scale toolbar buttons to transform the selected object
+- Release touch to confirm the transform
 
 While a transform is active:
 
-```text
-X / Y / Z: lock transform axis
-W (during rotate): toggle W-plane rotation mode
-Left click: confirm
-Right click: cancel
-```
+- X / Y / Z: lock transform axis
+- Extra dimension key (during rotate): toggle that extra dimension's rotation plane
+- Left click: confirm
+- Right click: cancel
 
 Edit mode:
 
-```text
-Tab: toggle edit mode
-Left click vertex: select vertex
-Right click selected vertex: open vertex move action
-```
+- Tab: toggle edit mode
+- Left click vertex: select vertex
+- Right click selected vertex: open vertex move action
 
 History:
 
-```text
-Ctrl+Z / Cmd+Z: undo
-Ctrl+Y / Cmd+Y: redo
-Ctrl+Shift+Z / Cmd+Shift+Z: redo
-```
+- Ctrl+Z / Cmd+Z: undo
+- Ctrl+Y / Cmd+Y: redo
+- Ctrl+Shift+Z / Cmd+Shift+Z: redo
 
 ## UI Overview
 
-- **View mode buttons**: Wireframe / Transparent / Solid / Faceted (shared colors per coplanar outer face region)
-- **Scene actions**: record viewport, capture frame, Edit mode
-- **Axis order panel**: drag to reorder active dimensions
-- **Object list**: select, rename, hide/show objects
-- **Dimension selector**: sets dimension for newly created primitives
-- **Texture panel**: per-selected-object surface controls and preview cube
-- **Extra-axis gizmos**: per-axis high-dimensional rotation dials with mini play, 2x, 3x, stop auto-rotate toggles
+Use these names when referring to the main UI groups:
+
+- **Projection Controls**: the gizmo panel. It controls which dimensions are projected, how extra dimensions rotate, and how projection axes are arranged.
+- **Scene Controls**: the right-side boxes. They control objects, background, and per-object texture/material settings.
+- **Transformation Controls**: the circular bottom controls. They toggle edit mode and activate move, rotate, and scale.
+- **Render Options**: the rectangular bottom toolbar. It controls viewport render mode, recording, and screenshots.
+
+## Projection Controls
+
+Projection Controls contain the XYZ gizmo, dimension stepper, and extra-axis gizmos.
+
+- Dimension stepper: set the dimension used for newly created primitives
+- XYZ gizmo drag: orbit the camera
+- XYZ endpoint click: snap the camera to that axis direction
+- Shift axes button: cycle which axes are projected into XYZ
+- Sync rotations button: copy the current extra-axis rotation setup across extra gizmos
+- Extra-axis gizmo drag: rotate that extra dimension's projection plane
+- Extra-axis play button: cycle auto-rotation through 1x, 2x, 3x, then stop
+- Extra-axis depth button: include/exclude that axis from perspective depth
+- Extra-axis handle drag: reorder extra axes
+- Drag extra-axis gizmo over XYZ tip: swap that extra axis with the highlighted projected axis
+
+## Scene Controls
+
+Scene Controls are the right-side panels.
+
+- Object list: select, rename, hide/show, and manage scene objects
+- Background: choose the plain background or a studio/HDRI background and tune its settings
+- Texture: edit the selected object's base color, metallic, roughness, and alpha
+- Saved texture: save the current texture settings and reapply saved presets from the dropdown
+
+Texture controls are disabled/greyed out when no object is selected.
+
+## Transformation Controls
+
+Transformation Controls are the circular bottom controls.
+
+- Edit button: toggle vertex edit mode
+- Move button: activate move transform
+- Rotate button: activate rotate transform
+- Scale button: activate scale transform
+
+On mobile, touch and drag a Transformation Control to transform the selected object, then release to confirm.
+
+## Render Options
+
+Render Options are the rectangular bottom toolbar.
+
+- Wireframe / Transparent / Solid / Faceted: change viewport render mode
+- Record: start/stop viewport recording
+- Screenshot: download the current viewport frame
+
+Shortcuts:
+
+- 1 / 2 / 3 / 4: switch render mode
+- Shift+R: start/stop recording
+- Shift+S: download screenshot

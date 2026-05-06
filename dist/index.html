@@ -54,13 +54,12 @@
           "opsz" 24;
       }
       html, body, #app { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#0f1117; color:var(--ui-text); }
+      #bottom-controls {
+        display: contents;
+      }
       #top-left-controls,
       #gizmo-dock,
-      #object-list,
-      #dimension-control,
-      #background-selector,
-      #texture-panel,
-      .credit,
+      #scene-controls,
       #context-menu,
       #tooltip,
       #quick-links a,
@@ -71,8 +70,6 @@
       #axis-cycle-button,
       #axis-sync-rotations-button,
       #pane-toggle,
-      #dimension-control button,
-      #dimension-value,
       #texture-preview-wrap,
       #texture-controls input[type="color"],
       #texture-preset-select,
@@ -152,16 +149,32 @@
       }
       #pane {
         position: absolute;
-        top: 12px;
-        right: 12px;
+        top: calc(12px + var(--safe-top));
+        right: calc(12px + var(--safe-right));
         z-index: 10;
         width: min(320px, calc(100vw - 24px));
         max-width: calc(100vw - 24px);
       }
+      #scene-controls {
+        box-sizing: border-box;
+        width: 100%;
+        max-height: calc(100vh - 24px - var(--safe-top) - var(--safe-bottom));
+        max-height: calc(100dvh - 24px - var(--safe-top) - var(--safe-bottom));
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 12px 16px;
+        border-radius: 8px;
+        border: 1px solid var(--ui-border);
+        background: var(--ui-bg);
+        box-shadow: var(--ui-shadow);
+        color: var(--ui-text);
+        font: 12px/1.5 system-ui, sans-serif;
+      }
       #gizmo-dock {
+        box-sizing: border-box;
         position: fixed;
         left: calc(12px + var(--safe-left));
-        top: calc(112px + var(--safe-top));
+        top: calc(12px + var(--safe-top));
         z-index: 10;
         display: flex;
         flex-direction: column;
@@ -174,18 +187,44 @@
         background: var(--ui-bg);
         box-shadow: var(--ui-shadow);
       }
+      #axis-gizmo-row {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        width: 154px;
+        min-height: 112px;
+      }
+      #gizmo-dock #dimension-control {
+        position: static;
+        width: auto;
+        margin: 0;
+        transform: none;
+      }
       #extra-axis-gizmos {
         display: flex;
         flex-direction: column;
-        gap: 14px;
+        gap: 16px;
         align-items: center;
         width: 154px;
-        max-height: calc(100vh - 136px - var(--safe-top) - var(--safe-bottom));
-        max-height: calc(100dvh - 136px - var(--safe-top) - var(--safe-bottom));
+        max-height: calc(100vh - 160px - var(--safe-top) - var(--safe-bottom));
+        max-height: calc(100dvh - 160px - var(--safe-top) - var(--safe-bottom));
         overflow-y: auto;
         overflow-x: visible;
         overscroll-behavior: contain;
         padding-right: 2px;
+      }
+      #extra-axis-scroll-wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        width: 154px;
+        min-width: 0;
+      }
+      #extra-axis-scrollbar {
+        display: none;
       }
       #object-list,
       #dimension-control,
@@ -194,53 +233,51 @@
         width: 100%;
         min-width: 0;
       }
-      .credit {
-        position: absolute;
-        left: 12px;
-        bottom: 12px;
-        font: 12px/1.2 system-ui, sans-serif;
-        color: var(--ui-text);
-        background: var(--ui-bg);
-        padding: 6px 8px;
-        border-radius: 5px;
-        border: 1px solid var(--ui-border);
-        min-width: 220px;
-        max-width: min(54vw, 560px);
-        box-shadow: var(--ui-shadow);
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
       #pane-toggle .show-icon { display: none; }
       body.pane-collapsed #pane-toggle .show-icon { display: block; }
       body.pane-collapsed #pane-toggle .hide-icon { display: none; }
       body.pane-collapsed #object-list,
-      body.pane-collapsed #dimension-control,
       body.pane-collapsed #background-selector,
       body.pane-collapsed #texture-panel {
         display: none;
       }
+      body.pane-collapsed #pane-header {
+        margin-bottom: 0;
+      }
       #top-left-controls {
-        position: absolute;
-        top: 12px;
-        left: 12px;
+        box-sizing: border-box;
+        position: fixed;
+        top: auto;
+        right: auto;
+        bottom: calc(12px + var(--safe-bottom));
+        left: 50%;
         z-index: 20;
         display: flex;
-        align-items: flex-start;
-        flex-wrap: wrap;
-        gap: 4px;
-        padding: 4px;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: nowrap;
+        gap: 2px;
+        height: 44px;
+        padding: 6px;
         border: 1px solid var(--ui-border);
-        border-radius: 5px;
+        border-radius: 6px;
         background: var(--ui-bg);
         box-shadow: var(--ui-shadow);
-        max-width: calc(100vw - 24px);
+        max-width: calc(100vw - 24px - var(--safe-left) - var(--safe-right));
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: none;
+        transform: translateX(-50%);
+      }
+      #top-left-controls::-webkit-scrollbar {
+        display: none;
       }
       #view-toggle,
       #scene-actions,
       #transform-actions {
         display: inline-flex;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
+        align-items: center;
         gap: 2px;
       }
       #scene-actions,
@@ -257,8 +294,8 @@
       #transform-actions button {
         display: grid;
         place-items: center;
-        width: 27px;
-        height: 27px;
+        width: 30px;
+        height: 30px;
         padding: 0;
         border: 0;
         border-radius: 3px;
@@ -291,14 +328,14 @@
         display: none;
         margin-left: 2px;
         padding: 0 6px;
-        height: 27px;
+        height: 30px;
         border-radius: 3px;
         border: 1px solid rgba(201, 56, 56, 0.42);
         background: rgba(201, 56, 56, 0.18);
         color: #ffd7d7;
         font-size: 11px;
         font-weight: 700;
-        line-height: 27px;
+        line-height: 30px;
         font-variant-numeric: tabular-nums;
         letter-spacing: 0.2px;
       }
@@ -333,8 +370,8 @@
       }
       #axis-gizmo-wrap {
         position: relative;
-        width: 104px;
-        margin-left: 22px;
+        width: 86px;
+        margin-left: 0;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -371,8 +408,8 @@
         overflow: visible;
       }
       #axis-gizmo line {
-        stroke: rgba(219,231,255,0.46);
-        stroke-width: 1.4;
+        stroke: rgba(229,238,255,0.68);
+        stroke-width: 1.8;
       }
       #axis-gizmo button {
         position: absolute;
@@ -392,11 +429,11 @@
         box-shadow: var(--ui-shadow);
       }
       #axis-gizmo button.negative {
-        background: color-mix(in srgb, var(--axis-color) 28%, transparent);
+        background: color-mix(in srgb, var(--axis-color) 42%, transparent);
         color: var(--axis-color);
       }
       #axis-gizmo button.back {
-        opacity: 0.42;
+        opacity: 0.62;
       }
       #axis-gizmo button:hover {
         filter: brightness(1.18);
@@ -580,15 +617,15 @@
       .extra-axis-gizmo button.axis-order-handle {
         left: auto;
         top: 50%;
-        right: -27px;
+        right: -23px;
         margin: 0;
-        width: 28px;
-        height: 42px;
+        width: 24px;
+        height: 30px;
         padding: 0;
         border: 0;
         border-radius: 8px;
         background: transparent;
-        color: color-mix(in srgb, var(--extra-axis-color) 72%, var(--ui-text));
+        color: rgba(116, 124, 138, 0.78);
         box-shadow: none;
         cursor: grab;
         transform: translateY(-50%);
@@ -598,41 +635,39 @@
       .extra-axis-gizmo button.axis-order-handle::after {
         content: "";
         position: absolute;
-        top: 12px;
-        bottom: 12px;
-        left: 50%;
+        top: 9px;
+        bottom: 9px;
+        left: calc(50% - 2px);
         width: 2px;
         border-radius: 999px;
         background: currentColor;
         transform: translateX(-50%);
       }
       .extra-axis-gizmo button.axis-order-handle::after {
-        display: none;
+        left: calc(50% + 2px);
       }
       .extra-axis-gizmo button.axis-order-handle:hover {
-        background: color-mix(in srgb, var(--extra-axis-color) 18%, transparent);
+        background: rgba(255,255,255,0.06);
+        color: rgba(148, 156, 170, 0.9);
         filter: none;
         transform: translateY(-50%);
       }
       .extra-axis-gizmo button.axis-order-handle:active {
         cursor: grabbing;
       }
-      .extra-axis-gizmo .axis-label {
-        position: absolute;
-        left: 0;
-        right: 0;
-        bottom: 4px;
-        text-align: center;
-        color: currentColor;
-        font: 700 10px/1 system-ui, sans-serif;
-        letter-spacing: 0.2px;
-      }
       #pane-header {
         display: flex;
         align-items: center;
-        justify-content: flex-end;
+        justify-content: space-between;
         gap: 8px;
-        margin-bottom: 8px;
+        margin-bottom: 14px;
+      }
+      #pane-title {
+        color: var(--ui-text-strong);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.2px;
+        line-height: 1.45;
       }
       #axis-cycle-button,
       #axis-sync-rotations-button,
@@ -697,7 +732,6 @@
       #object-list td,
       #object-list .object-eye,
       #dimension-control,
-      #dimension-control .dimension-label,
       #dimension-value,
       #background-selector,
       #background-selector h4,
@@ -720,120 +754,162 @@
         -webkit-user-drag: none;
       }
       #object-list {
-        background: var(--ui-bg);
-        color: var(--ui-text);
-        padding: 8px;
-        border-radius: 5px;
-        border: 1px solid var(--ui-border);
-        font: 12px/1.4 system-ui, sans-serif;
-        margin-bottom: 8px;
-        box-shadow: var(--ui-shadow);
+        background: transparent;
+        color: inherit;
+        padding: 0 0 16px 0;
+        border: 0;
+        border-bottom: 1px solid var(--ui-border-soft);
+        border-radius: 0;
+        font: inherit;
+        margin-bottom: 16px;
+        box-shadow: none;
       }
       #dimension-control {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-        background: var(--ui-bg);
+        justify-content: center;
+        gap: 0;
+        background: transparent;
         color: var(--ui-text);
-        padding: 6px;
-        border-radius: 5px;
-        border: 1px solid var(--ui-border);
+        padding: 0;
+        border-radius: 0;
+        border: 0;
         font: 12px/1.4 system-ui, sans-serif;
-        margin-bottom: 8px;
-        box-shadow: var(--ui-shadow);
+        margin: 0;
+        box-shadow: none;
       }
       #object-list {
         max-height: 180px;
         overflow-y: auto;
       }
-      #object-list h4 { margin: 0 0 8px 0; font-size: 12px; font-weight: 700; letter-spacing: 0.2px; line-height: 1.2; color: var(--ui-text-strong); }
-      #dimension-control .dimension-label {
-        color: var(--ui-text);
-        font-size: 11px;
-        font-weight: 600;
-        letter-spacing: 0.2px;
-        line-height: 1.2;
-      }
+      #object-list h4 { margin: 0 0 14px 0; font-size: 12px; font-weight: 700; letter-spacing: 0.2px; line-height: 1.45; color: var(--ui-text-strong); }
       #dimension-control .dimension-stepper {
         display: inline-flex;
+        flex-direction: row;
         align-items: center;
         gap: 2px;
       }
       #dimension-control button,
       #dimension-value {
-        height: 28px;
+        height: 24px;
         border-radius: 3px;
-        background: var(--ui-bg-soft);
-        border: 1px solid var(--ui-border-soft);
+        background: transparent;
+        border: 0;
         color: var(--ui-text-strong);
       }
       #dimension-control button {
         display: grid;
         place-items: center;
-        width: 28px;
+        width: 24px;
         padding: 0;
         cursor: pointer;
-        transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+        transition: background 120ms ease, color 120ms ease, opacity 120ms ease;
       }
       #dimension-control button:hover:not(:disabled) {
-        background: var(--ui-bg-hover);
-        border-color: var(--ui-border);
+        color: var(--ui-text-strong);
       }
       #dimension-control button:disabled {
         cursor: not-allowed;
         opacity: 0.36;
       }
       #dimension-control button .material-symbols-rounded {
-        font-size: 16px;
+        font-size: 14px;
       }
       #dimension-value {
         box-sizing: border-box;
-        min-width: 44px;
-        padding: 5px 8px;
+        min-width: 32px;
+        padding: 4px 4px;
         text-align: center;
-        font: 700 13px/1.2 system-ui, sans-serif;
+        font: 700 12px/1.2 system-ui, sans-serif;
       }
       #background-selector {
-        background: var(--ui-bg);
-        color: var(--ui-text);
-        padding: 8px;
-        border-radius: 5px;
-        border: 1px solid var(--ui-border);
-        font: 12px/1.4 system-ui, sans-serif;
-        margin-bottom: 8px;
-        box-shadow: var(--ui-shadow);
+        background: transparent;
+        color: inherit;
+        padding: 0 0 16px 0;
+        border: 0;
+        border-bottom: 1px solid var(--ui-border-soft);
+        border-radius: 0;
+        font: inherit;
+        margin-bottom: 16px;
+        box-shadow: none;
       }
       #background-selector h4 {
-        margin: 0 0 8px 0;
+        margin: 0 0 14px 0;
         font-size: 12px;
         font-weight: 700;
         letter-spacing: 0.2px;
-        line-height: 1.2;
+        line-height: 1.45;
         color: var(--ui-text-strong);
       }
       #background-swatches {
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 14px;
+        width: 100%;
+        margin: 0;
+        padding: 4px 0 10px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        overscroll-behavior-x: contain;
+        scroll-padding: 12px;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+        mask-image: linear-gradient(to right, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+        -webkit-mask-image: linear-gradient(to right, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+      }
+      #background-swatches::-webkit-scrollbar {
+        display: none;
       }
       #background-swatches .background-swatch {
         --swatch-image: none;
-        width: 44px;
-        height: 44px;
+        position: relative;
+        isolation: isolate;
+        flex: 0 0 78px;
+        width: 78px;
+        height: 78px;
         border: 1px solid rgba(255,255,255,0.18);
         border-radius: 50%;
         background-color: #1b1f28;
-        background-image: var(--swatch-image);
+        background-image: none;
         background-size: cover;
         background-position: center;
         box-shadow: 0 3px 8px rgba(0,0,0,0.25);
         cursor: pointer;
+        overflow: hidden;
         padding: 0;
         transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
       }
+      #background-swatches .background-swatch::before,
+      #background-swatches .background-swatch::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        pointer-events: none;
+      }
+      #background-swatches .background-swatch::before {
+        z-index: 0;
+        background-image: var(--swatch-image);
+        background-size: cover;
+        background-position: center;
+        filter: none;
+      }
+      #background-swatches .background-swatch::after {
+        z-index: 1;
+        background:
+          radial-gradient(circle at 31% 24%, rgba(255,255,255,0.18) 0 9%, transparent 24%),
+          radial-gradient(circle at 50% 50%, transparent 0 58%, rgba(255,255,255,0.055) 72%, rgba(0,0,0,0.16) 100%),
+          linear-gradient(145deg, rgba(255,255,255,0.045), transparent 46%, rgba(0,0,0,0.055));
+        mix-blend-mode: screen;
+        opacity: 0.72;
+      }
       #background-swatches .background-swatch[data-hdri="plain"] {
         background-image: none;
+        background:
+          radial-gradient(110% 80% at 20% 15%, rgba(112, 156, 255, 0.24), transparent 60%),
+          linear-gradient(145deg, #10151d 0%, #192230 55%, #111821 100%);
+      }
+      #background-swatches .background-swatch[data-hdri="plain"]::before {
         background:
           radial-gradient(110% 80% at 20% 15%, rgba(112, 156, 255, 0.24), transparent 60%),
           linear-gradient(145deg, #10151d 0%, #192230 55%, #111821 100%);
@@ -859,22 +935,22 @@
         opacity: 0.52;
       }
       #background-controls {
-        margin-top: 10px;
+        margin-top: 14px;
         display: grid;
-        gap: 6px;
+        gap: 12px;
       }
       #background-controls .background-row {
         display: grid;
         grid-template-columns: 64px minmax(0, 1fr) 52px;
         align-items: center;
-        gap: 8px;
+        gap: 14px;
       }
       #background-controls label {
         color: var(--ui-text);
         font-size: 11px;
         font-weight: 600;
         letter-spacing: 0.2px;
-        line-height: 1.2;
+        line-height: 1.45;
       }
       #background-controls input[type="range"] {
         width: 100%;
@@ -884,24 +960,24 @@
         color: var(--ui-muted);
         font-variant-numeric: tabular-nums;
         font-size: 11px;
-        line-height: 1.2;
+        line-height: 1.45;
       }
       #texture-panel {
-        background: var(--ui-bg);
-        color: var(--ui-text);
-        padding: 8px;
-        border-radius: 5px;
-        border: 1px solid var(--ui-border);
-        font: 12px/1.4 system-ui, sans-serif;
-        margin-bottom: 8px;
-        box-shadow: var(--ui-shadow);
+        background: transparent;
+        color: inherit;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        font: inherit;
+        margin-bottom: 0;
+        box-shadow: none;
       }
       #texture-panel h4 {
-        margin: 0 0 8px 0;
+        margin: 0 0 14px 0;
         font-size: 12px;
         font-weight: 700;
         letter-spacing: 0.2px;
-        line-height: 1.2;
+        line-height: 1.45;
         color: var(--ui-text-strong);
       }
       #texture-panel.disabled {
@@ -914,7 +990,7 @@
         border: 1px solid var(--ui-border-soft);
         background: var(--ui-bg-soft);
         overflow: hidden;
-        margin-bottom: 8px;
+        margin-bottom: 14px;
       }
       #texture-preview {
         display: block;
@@ -924,9 +1000,10 @@
       #texture-empty {
         display: none;
         margin: 0;
-        padding: 0 0 8px 0;
+        padding: 0 0 12px 0;
         color: var(--ui-muted);
         font-size: 11px;
+        line-height: 1.45;
         text-align: left;
       }
       #texture-panel.empty #texture-empty {
@@ -938,28 +1015,43 @@
       }
       #texture-controls {
         display: grid;
-        gap: 7px;
+        gap: 12px;
       }
       #texture-controls .texture-row {
         display: grid;
         grid-template-columns: 82px minmax(0, 1fr) 66px;
         align-items: center;
-        gap: 8px;
+        gap: 14px;
       }
       #texture-controls label {
         color: var(--ui-text);
         font-size: 11px;
         font-weight: 600;
         letter-spacing: 0.2px;
-        line-height: 1.2;
+        line-height: 1.45;
       }
       #texture-controls input[type="color"] {
+        appearance: none;
+        -webkit-appearance: none;
         width: 100%;
-        height: 26px;
+        height: 20px;
         padding: 0;
-        border: 1px solid var(--ui-border-soft);
-        border-radius: 4px;
-        background: var(--ui-bg-soft);
+        border: 0;
+        border-radius: 2px;
+        background: transparent;
+        cursor: pointer;
+        overflow: hidden;
+      }
+      #texture-controls input[type="color"]::-webkit-color-swatch-wrapper {
+        padding: 0;
+      }
+      #texture-controls input[type="color"]::-webkit-color-swatch {
+        border: 0;
+        border-radius: 2px;
+      }
+      #texture-controls input[type="color"]::-moz-color-swatch {
+        border: 0;
+        border-radius: 2px;
       }
       #texture-controls input[type="range"] {
         width: 100%;
@@ -972,7 +1064,7 @@
         color: var(--ui-muted);
         font-variant-numeric: tabular-nums;
         font-size: 11px;
-        line-height: 1.2;
+        line-height: 1.45;
         overflow: hidden;
         white-space: nowrap;
         text-overflow: clip;
@@ -982,22 +1074,22 @@
         font-size: 11px;
       }
       #texture-preset-controls {
-        margin-top: 8px;
+        margin-top: 14px;
         display: grid;
-        gap: 6px;
+        gap: 10px;
       }
       #texture-preset-controls label {
         color: var(--ui-text);
         font-size: 11px;
         font-weight: 600;
         letter-spacing: 0.2px;
-        line-height: 1.2;
+        line-height: 1.45;
       }
       #texture-preset-controls .texture-preset-row {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto;
         align-items: center;
-        gap: 8px;
+        gap: 14px;
       }
       #texture-preset-select {
         width: 100%;
@@ -1017,7 +1109,7 @@
         border-radius: 4px;
         background: var(--ui-bg-soft);
         color: var(--ui-text-strong);
-        font: 600 11px/1 system-ui, sans-serif;
+        font: 600 11px/1.2 system-ui, sans-serif;
         cursor: pointer;
         transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
       }
@@ -1036,8 +1128,8 @@
         font-size: 11px;
         font-weight: 600;
         letter-spacing: 0.2px;
-        line-height: 1.2;
-        padding: 2px 4px 5px;
+        line-height: 1.45;
+        padding: 4px 6px 8px;
         text-align: left;
         text-transform: none;
       }
@@ -1049,7 +1141,7 @@
       #object-list tr.object-row:hover { background: var(--ui-bg-hover); }
       #object-list tr.object-row.active { background: var(--ui-blue-soft); }
       #object-list tr.object-row.hidden { opacity: 0.52; }
-      #object-list td { min-width: 0; overflow: hidden; padding: 2px 4px; vertical-align: middle; }
+      #object-list td { min-width: 0; overflow: hidden; padding: 6px 6px; line-height: 1.5; vertical-align: middle; }
       #object-list .object-eye {
         display: inline-grid;
         place-items: center;
@@ -1070,7 +1162,7 @@
         width: 100%;
         min-width: 0;
         max-width: 100%;
-        padding: 3px 5px;
+        padding: 5px 7px;
         border: 1px solid transparent;
         border-radius: 5px;
         background: transparent;
@@ -1172,6 +1264,37 @@
       }
       #help-toggle {
         font: 700 22px/1 ui-sans-serif, system-ui, -apple-system, sans-serif;
+      }
+      #transform-actions {
+        position: fixed;
+        left: calc(12px + var(--safe-left));
+        bottom: calc(12px + var(--safe-bottom));
+        z-index: 20;
+        display: inline-flex;
+        flex-wrap: nowrap;
+        gap: 8px;
+        margin: 0;
+        padding: 0;
+        border-left: 0;
+      }
+      #transform-actions button {
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        border: 1px solid var(--ui-border);
+        background: var(--ui-bg);
+        box-shadow: var(--ui-shadow);
+      }
+      #transform-actions button:hover {
+        background: var(--ui-bg-hover);
+        border-color: var(--ui-border);
+      }
+      #transform-actions button.active {
+        background: var(--ui-blue);
+        border-color: rgba(79, 121, 220, 0.78);
+      }
+      #transform-actions .material-symbols-rounded {
+        font-size: 18px;
       }
       #help-overlay {
         position: fixed;
@@ -1418,119 +1541,183 @@
       #mobile-onboarding-finish.visible {
         display: inline-block;
       }
-      @media (max-width: 920px) {
+      @media (max-width: 680px) {
+        #bottom-controls {
+          position: fixed;
+          left: calc(8px + var(--safe-left));
+          right: calc(8px + var(--safe-right));
+          bottom: calc(8px + var(--safe-bottom));
+          z-index: 20;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          flex-wrap: nowrap;
+          gap: 8px;
+          pointer-events: none;
+        }
+        #bottom-controls > * {
+          pointer-events: auto;
+        }
+        #bottom-controls #top-left-controls,
+        #bottom-controls #transform-actions,
+        #bottom-controls #quick-links {
+          position: static;
+          top: auto;
+          right: auto;
+          bottom: auto;
+          left: auto;
+          transform: none;
+        }
         #top-left-controls {
+          box-sizing: border-box;
+          height: 44px;
+          flex: 0 1 auto;
+          min-width: 0;
+          gap: 2px;
+          padding: 6px;
+          border-radius: 6px;
+          max-width: 100%;
+          overflow-x: auto;
+          overflow-y: hidden;
+          scrollbar-width: none;
+          order: 2;
+        }
+        #top-left-controls::-webkit-scrollbar {
+          display: none;
+        }
+        #pane {
           top: calc(8px + var(--safe-top));
           left: calc(8px + var(--safe-left));
           right: calc(8px + var(--safe-right));
+          width: auto;
           max-width: none;
-        }
-        #pane {
-          top: calc(62px + var(--safe-top));
-          right: calc(8px + var(--safe-right));
-          width: min(360px, calc(100vw - 16px - var(--safe-left) - var(--safe-right)));
-          max-width: calc(100vw - 16px - var(--safe-left) - var(--safe-right));
-          max-height: calc(100vh - 126px - var(--safe-top) - var(--safe-bottom));
-          max-height: calc(100dvh - 126px - var(--safe-top) - var(--safe-bottom));
+          max-height: calc(100vh - 82px - var(--safe-top) - var(--safe-bottom));
+          max-height: calc(100dvh - 82px - var(--safe-top) - var(--safe-bottom));
           overflow-y: auto;
+          overflow-x: hidden;
           overscroll-behavior: contain;
+        }
+        #scene-controls {
+          max-height: none;
         }
         #gizmo-dock {
           position: static;
           flex-direction: row;
-          justify-content: flex-end;
-          align-items: flex-start;
+          flex-wrap: nowrap;
+          justify-content: flex-start;
+          align-items: flex-end;
           gap: 6px;
           margin: 0 0 8px 0;
           min-width: 0;
         }
+        #axis-gizmo-row {
+          width: 132px;
+          min-height: 110px;
+          flex: 0 0 auto;
+        }
+        #gizmo-dock #dimension-control {
+          flex: 0 0 auto;
+          width: auto;
+          align-self: center;
+        }
         #extra-axis-gizmos {
-          flex: 1 1 auto;
+          flex: 0 0 auto;
           flex-direction: row;
-          flex-wrap: wrap;
-          justify-content: flex-end;
+          flex-wrap: nowrap;
+          justify-content: flex-start;
           gap: 6px;
           min-width: 0;
-          width: auto;
+          width: 100%;
           max-height: none;
-          overflow: visible;
-          padding-right: 0;
+          overflow-x: auto;
+          overflow-y: visible;
+          overscroll-behavior-x: contain;
+          padding: 0 18px;
+          scrollbar-width: none;
+          -webkit-overflow-scrolling: touch;
+          mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+          -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+        }
+        #extra-axis-scroll-wrap {
+          flex: 1 1 auto;
+          align-self: flex-end;
+          width: auto;
+          min-width: 0;
+          gap: 0;
+        }
+        #extra-axis-scrollbar {
+          display: block;
+          position: relative;
+          width: 100%;
+          height: 24px;
+          cursor: pointer;
+          touch-action: none;
+        }
+        #extra-axis-scrollbar::before {
+          content: "";
+          position: absolute;
+          left: 18px;
+          right: 18px;
+          top: 50%;
+          height: 3px;
+          border-radius: 999px;
+          background: rgba(116, 124, 138, 0.24);
+          transform: translateY(-50%);
+        }
+        #extra-axis-scrollbar.inactive {
+          opacity: 0;
+          pointer-events: none;
+        }
+        #extra-axis-scrollbar-thumb {
+          position: absolute;
+          left: 18px;
+          top: 50%;
+          width: 40px;
+          height: 3px;
+          border-radius: 999px;
+          background: rgba(148, 156, 170, 0.78);
+          transform: translateY(-50%);
+        }
+        #extra-axis-gizmos::-webkit-scrollbar {
+          display: none;
         }
         #axis-gizmo,
         #axis-gizmo-wrap,
         .extra-axis-gizmo {
-          width: 74px;
-          height: 74px;
-          flex-basis: 74px;
-        }
-        #axis-gizmo-wrap {
-          margin-left: 22px;
-        }
-        #axis-cycle-button,
-        #axis-sync-rotations-button {
-          left: -25px;
+          width: 86px;
+          height: 86px;
+          flex-basis: 86px;
         }
         .extra-axis-gizmo {
           margin: 0 24px 0 22px;
         }
-        #quick-links {
-          right: calc(8px + var(--safe-right));
-          bottom: calc(8px + var(--safe-bottom));
-          gap: 6px;
-        }
-        #quick-links a,
-        #quick-links button {
-          width: 40px;
-          height: 40px;
-        }
-        #github-link img {
-          width: 18px;
-          height: 18px;
-        }
-        .credit {
-          left: calc(8px + var(--safe-left));
-          right: calc(142px + var(--safe-right));
-          bottom: calc(8px + var(--safe-bottom));
-          min-width: 0;
-          max-width: none;
-        }
-      }
-      @media (max-width: 680px) {
-        #top-left-controls {
-          gap: 2px;
-          padding: 3px;
-          border-radius: 6px;
-        }
         #view-toggle,
-        #scene-actions,
-        #transform-actions {
+        #scene-actions {
+          flex-wrap: nowrap;
+          align-items: center;
           gap: 1px;
         }
         #view-toggle button,
-        #scene-actions button,
-        #transform-actions button {
+        #scene-actions button {
           width: 30px;
           height: 30px;
+        }
+        #transform-actions {
+          flex: 0 0 auto;
+          gap: 6px;
+          order: 1;
+        }
+        #quick-links {
+          order: 3;
+          display: none;
         }
         #record-viewport-timer {
           height: 30px;
           line-height: 30px;
           font-size: 10px;
         }
-        #pane {
-          left: calc(8px + var(--safe-left));
-          right: calc(8px + var(--safe-right));
-          width: auto;
-          max-width: none;
-        }
-        #gizmo-dock {
-          justify-content: flex-start;
-        }
         #object-list {
           max-height: 146px;
-          margin-bottom: 6px;
-        }
-        #dimension-control {
           margin-bottom: 6px;
         }
         #background-selector {
@@ -1556,38 +1743,45 @@
           font-size: 12.5px;
         }
       }
+      body *,
+      body *::before,
+      body *::after {
+        border: 0 !important;
+      }
     </style>
-    <script type="module" crossorigin src="/BleND/assets/index-D-pNclkf.js"></script>
+    <script type="module" crossorigin src="/BleND/assets/index-CDQckZL8.js"></script>
   </head>
   <body>
-    <div id="top-left-controls">
-      <div id="view-toggle" aria-label="View mode">
-        <button data-mode="wireframe" aria-label="Wireframe mode" title="Wireframe">
-          <span class="material-symbols-rounded" aria-hidden="true">grid_on</span>
-        </button>
-        <button data-mode="transparent" aria-label="Transparent mode" title="Transparent">
-          <span class="material-symbols-rounded" aria-hidden="true">opacity</span>
-        </button>
-        <button data-mode="solid" class="active" aria-label="Solid mode" title="Solid">
-          <span class="material-symbols-rounded" aria-hidden="true">radio_button_checked</span>
-        </button>
-        <button data-mode="faceted" aria-label="Faceted mode" title="Faceted">
-          <span class="material-symbols-rounded" aria-hidden="true">view_in_ar</span>
-        </button>
+    <div id="bottom-controls">
+      <div id="top-left-controls">
+        <div id="view-toggle" aria-label="View mode">
+          <button data-mode="wireframe" aria-label="Wireframe mode" title="Wireframe">
+            <span class="material-symbols-rounded" aria-hidden="true">grid_on</span>
+          </button>
+          <button data-mode="transparent" aria-label="Transparent mode" title="Transparent">
+            <span class="material-symbols-rounded" aria-hidden="true">opacity</span>
+          </button>
+          <button data-mode="solid" class="active" aria-label="Solid mode" title="Solid">
+            <span class="material-symbols-rounded" aria-hidden="true">radio_button_checked</span>
+          </button>
+          <button data-mode="faceted" aria-label="Faceted mode" title="Faceted">
+            <span class="material-symbols-rounded" aria-hidden="true">view_in_ar</span>
+          </button>
+        </div>
+        <div id="scene-actions" aria-label="Scene actions">
+          <button id="record-viewport-button" type="button" aria-label="Record viewport (Shift+R)" title="Record viewport (Shift+R)">
+            <span class="material-symbols-rounded" aria-hidden="true">movie</span>
+          </button>
+          <span id="record-viewport-timer" aria-live="polite" aria-hidden="true">00:00</span>
+          <button id="capture-frame-button" type="button" aria-label="Download current frame (Shift+S)" title="Download current frame (Shift+S)">
+            <span class="material-symbols-rounded" aria-hidden="true">photo_camera</span>
+          </button>
+        </div>
       </div>
-      <div id="scene-actions" aria-label="Scene actions">
-        <button id="record-viewport-button" type="button" aria-label="Record viewport (Shift+R)" title="Record viewport (Shift+R)">
-          <span class="material-symbols-rounded" aria-hidden="true">movie</span>
-        </button>
-        <span id="record-viewport-timer" aria-live="polite" aria-hidden="true">00:00</span>
-        <button id="capture-frame-button" type="button" aria-label="Download current frame (Shift+S)" title="Download current frame (Shift+S)">
-          <span class="material-symbols-rounded" aria-hidden="true">photo_camera</span>
-        </button>
+      <div id="transform-actions" aria-label="Transform actions">
         <button id="edit-mode-toggle" type="button" aria-label="Toggle edit mode" aria-pressed="false" title="Edit mode">
           <span class="material-symbols-rounded" aria-hidden="true">edit</span>
         </button>
-      </div>
-      <div id="transform-actions" aria-label="Transform actions">
         <button id="transform-move-button" type="button" aria-label="Move transform" title="Move (G)">
           <span class="material-symbols-rounded" aria-hidden="true">open_with</span>
         </button>
@@ -1598,127 +1792,149 @@
           <span class="material-symbols-rounded" aria-hidden="true">zoom_out_map</span>
         </button>
       </div>
+      <div id="quick-links">
+        <a
+          id="github-link"
+          href="https://github.com/srdz-af/BleND"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="GitHub repository"
+          title="GitHub repository"
+        >
+          <img src="./github-white-icon.webp" alt="GitHub" />
+        </a>
+        <button id="help-toggle" type="button" aria-label="Open controls help" title="Controls help"><span class="material-symbols-rounded" aria-hidden="true">help</span></button>
+      </div>
     </div>
     <div id="pane">
       <div id="gizmo-dock">
-        <div id="axis-gizmo-wrap">
-          <div id="axis-gizmo" aria-label="View axis gizmo"></div>
-          <button id="axis-cycle-button" type="button" aria-label="Shift projected axes" title="Shift projected axes">
-            <span class="material-symbols-rounded" aria-hidden="true">sync_alt</span>
-          </button>
-          <button id="axis-sync-rotations-button" type="button" aria-label="Sync extra-axis rotations" title="Sync extra-axis rotations">
-            <span class="material-symbols-rounded" aria-hidden="true">refresh</span>
-          </button>
+        <div id="axis-gizmo-row">
+          <div id="dimension-control" role="group" aria-label="New object dimension">
+            <div class="dimension-stepper">
+              <button id="dimension-down" type="button" aria-label="Dimension down" title="Dimension down">
+                <span class="material-symbols-rounded" aria-hidden="true">keyboard_arrow_down</span>
+              </button>
+              <output id="dimension-value" aria-live="polite">4D</output>
+              <button id="dimension-up" type="button" aria-label="Dimension up" title="Dimension up">
+                <span class="material-symbols-rounded" aria-hidden="true">keyboard_arrow_up</span>
+              </button>
+            </div>
+          </div>
+          <div id="axis-gizmo-wrap">
+            <div id="axis-gizmo" aria-label="View axis gizmo"></div>
+            <button id="axis-cycle-button" type="button" aria-label="Shift projected axes" title="Shift projected axes">
+              <span class="material-symbols-rounded" aria-hidden="true">sync_alt</span>
+            </button>
+            <button id="axis-sync-rotations-button" type="button" aria-label="Sync extra-axis rotations" title="Sync extra-axis rotations">
+              <span class="material-symbols-rounded" aria-hidden="true">refresh</span>
+            </button>
+          </div>
         </div>
-        <div id="extra-axis-gizmos" aria-label="Extra axis gizmos"></div>
-      </div>
-      <div id="pane-header">
-        <button id="pane-toggle" type="button" aria-label="Hide panel details" aria-expanded="true" aria-controls="pane" title="Hide panel details">
-          <span class="material-symbols-rounded hide-icon" aria-hidden="true">chevron_left</span>
-          <span class="material-symbols-rounded show-icon" aria-hidden="true">chevron_right</span>
-        </button>
-      </div>
-      <div id="axis-legend" style="display:none;"></div>
-      <div id="object-list"></div>
-      <div id="dimension-control" role="group" aria-label="New object dimension">
-        <span class="dimension-label">Dimension</span>
-        <div class="dimension-stepper">
-          <button id="dimension-down" type="button" aria-label="Dimension down" title="Dimension down">
-            <span class="material-symbols-rounded" aria-hidden="true">keyboard_arrow_down</span>
-          </button>
-          <output id="dimension-value" aria-live="polite">4D</output>
-          <button id="dimension-up" type="button" aria-label="Dimension up" title="Dimension up">
-            <span class="material-symbols-rounded" aria-hidden="true">keyboard_arrow_up</span>
-          </button>
+        <div id="extra-axis-scroll-wrap">
+          <div id="extra-axis-scrollbar" aria-hidden="true">
+            <div id="extra-axis-scrollbar-thumb"></div>
+          </div>
+          <div id="extra-axis-gizmos" aria-label="Extra axis gizmos"></div>
         </div>
       </div>
-      <div id="background-selector" role="group" aria-label="Background environment selector">
-        <h4>Background</h4>
-        <div id="background-swatches">
-          <button
-            type="button"
-            class="background-swatch"
-            data-hdri="plain"
-            aria-label="Plain background"
-            title="Plain background"
-          ></button>
-          <button
-            type="button"
-            class="background-swatch"
-            data-hdri="ferndale"
-            aria-label="Ferndale studio background"
-            title="Ferndale studio"
-          ></button>
-          <button
-            type="button"
-            class="background-swatch"
-            data-hdri="monochrome"
-            aria-label="Monochrome studio background"
-            title="Monochrome studio"
-          ></button>
-          <button
-            type="button"
-            class="background-swatch"
-            data-hdri="sundowner"
-            aria-label="Sundowner deck background"
-            title="Sundowner deck"
-          ></button>
-          <button
-            type="button"
-            class="background-swatch"
-            data-hdri="grasslands"
-            aria-label="Grasslands sunset background"
-            title="Grasslands sunset"
-          ></button>
+      <div id="scene-controls" aria-label="Scene controls">
+        <div id="pane-header">
+          <div id="pane-title">Scene Controls</div>
+          <button id="pane-toggle" type="button" aria-label="Hide panel details" aria-expanded="true" aria-controls="scene-controls" title="Hide panel details">
+            <span class="material-symbols-rounded hide-icon" aria-hidden="true">chevron_left</span>
+            <span class="material-symbols-rounded show-icon" aria-hidden="true">chevron_right</span>
+          </button>
         </div>
-        <div id="background-controls">
-          <div class="background-row">
-            <label for="background-blur">Blur</label>
-            <input id="background-blur" type="range" min="0" max="1" step="0.01" value="0.35" />
-            <output id="background-blur-value">0.35</output>
+        <div id="axis-legend" style="display:none;"></div>
+        <div id="object-list"></div>
+        <div id="background-selector" role="group" aria-label="Background environment selector">
+          <h4>Background</h4>
+          <div id="background-swatches">
+            <button
+              type="button"
+              class="background-swatch"
+              data-hdri="plain"
+              aria-label="Plain background"
+              title="Plain background"
+            ></button>
+            <button
+              type="button"
+              class="background-swatch"
+              data-hdri="ferndale"
+              aria-label="Ferndale studio background"
+              title="Ferndale studio"
+            ></button>
+            <button
+              type="button"
+              class="background-swatch"
+              data-hdri="monochrome"
+              aria-label="Monochrome studio background"
+              title="Monochrome studio"
+            ></button>
+            <button
+              type="button"
+              class="background-swatch"
+              data-hdri="sundowner"
+              aria-label="Sundowner deck background"
+              title="Sundowner deck"
+            ></button>
+            <button
+              type="button"
+              class="background-swatch"
+              data-hdri="grasslands"
+              aria-label="Grasslands sunset background"
+              title="Grasslands sunset"
+            ></button>
           </div>
-          <div class="background-row">
-            <label for="background-lightness">Lightness</label>
-            <input id="background-lightness" type="range" min="0.2" max="2" step="0.01" value="1.00" />
-            <output id="background-lightness-value">1.00</output>
-          </div>
-        </div>
-      </div>
-      <div id="texture-panel" role="group" aria-label="Texture controls" class="empty disabled">
-        <h4>Texture</h4>
-        <div id="texture-preview-wrap">
-          <canvas id="texture-preview" aria-label="Texture preview"></canvas>
-        </div>
-        <p id="texture-empty">No object selected</p>
-        <div id="texture-controls">
-          <div class="texture-row">
-            <label for="texture-base-color">Base color</label>
-            <input id="texture-base-color" type="color" value="#bfc7d5" />
-            <output id="texture-base-color-value">#bfc7d5</output>
-          </div>
-          <div class="texture-row">
-            <label for="texture-metallic">Metallic</label>
-            <input id="texture-metallic" type="range" min="0" max="1" step="0.001" value="1" />
-            <output id="texture-metallic-value">1.000</output>
-          </div>
-          <div class="texture-row">
-            <label for="texture-roughness">Roughness</label>
-            <input id="texture-roughness" type="range" min="0" max="1" step="0.001" value="0.05" />
-            <output id="texture-roughness-value">0.050</output>
-          </div>
-          <div class="texture-row">
-            <label for="texture-alpha">Alpha</label>
-            <input id="texture-alpha" type="range" min="0" max="1" step="0.001" value="1" />
-            <output id="texture-alpha-value">1.000</output>
+          <div id="background-controls">
+            <div class="background-row">
+              <label for="background-blur">Blur</label>
+              <input id="background-blur" type="range" min="0" max="1" step="0.01" value="0.35" />
+              <output id="background-blur-value">0.35</output>
+            </div>
+            <div class="background-row">
+              <label for="background-lightness">Lightness</label>
+              <input id="background-lightness" type="range" min="0.2" max="2" step="0.01" value="1.00" />
+              <output id="background-lightness-value">1.00</output>
+            </div>
           </div>
         </div>
-        <div id="texture-preset-controls">
-          <label for="texture-preset-select">Saved texture</label>
-          <div class="texture-preset-row">
-            <select id="texture-preset-select">
-              <option value="">Select preset…</option>
-            </select>
-            <button id="texture-preset-save" type="button">Save</button>
+        <div id="texture-panel" role="group" aria-label="Texture controls" class="empty disabled">
+          <h4>Texture</h4>
+          <div id="texture-preview-wrap">
+            <canvas id="texture-preview" aria-label="Texture preview"></canvas>
+          </div>
+          <p id="texture-empty">No object selected</p>
+          <div id="texture-controls">
+            <div class="texture-row">
+              <label for="texture-base-color">Base color</label>
+              <input id="texture-base-color" type="color" value="#bfc7d5" />
+              <output id="texture-base-color-value">#bfc7d5</output>
+            </div>
+            <div class="texture-row">
+              <label for="texture-metallic">Metallic</label>
+              <input id="texture-metallic" type="range" min="0" max="1" step="0.001" value="1" />
+              <output id="texture-metallic-value">1.000</output>
+            </div>
+            <div class="texture-row">
+              <label for="texture-roughness">Roughness</label>
+              <input id="texture-roughness" type="range" min="0" max="1" step="0.001" value="0.05" />
+              <output id="texture-roughness-value">0.050</output>
+            </div>
+            <div class="texture-row">
+              <label for="texture-alpha">Alpha</label>
+              <input id="texture-alpha" type="range" min="0" max="1" step="0.001" value="1" />
+              <output id="texture-alpha-value">1.000</output>
+            </div>
+          </div>
+          <div id="texture-preset-controls">
+            <label for="texture-preset-select">Saved texture</label>
+            <div class="texture-preset-row">
+              <select id="texture-preset-select">
+                <option value="">Select preset…</option>
+              </select>
+              <button id="texture-preset-save" type="button">Save</button>
+            </div>
           </div>
         </div>
       </div>
@@ -1726,20 +1942,6 @@
     <div id="app"></div>
     <div id="tooltip"></div>
     <div id="context-menu"></div>
-    <div class="credit" id="status-bar"></div>
-    <div id="quick-links">
-      <a
-        id="github-link"
-        href="https://github.com/srdz-af/BleND"
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label="GitHub repository"
-        title="GitHub repository"
-      >
-        <img src="./github-white-icon.webp" alt="GitHub" />
-      </a>
-      <button id="help-toggle" type="button" aria-label="Open controls help" title="Controls help"><span class="material-symbols-rounded" aria-hidden="true">help</span></button>
-    </div>
     <div id="help-overlay" role="dialog" aria-modal="true" aria-labelledby="help-title" aria-hidden="true">
       <section id="help-dialog">
         <div id="help-header">

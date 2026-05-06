@@ -160,7 +160,6 @@ const tmpCenter = new THREE.Vector3();
 let pcaCache: Float32Array | null = null;
 let projectionDirty = true;
 let setViewMode: (mode: ViewMode) => void;
-const statusBar = document.getElementById('status-bar') as HTMLDivElement | null;
 let sceneHistory: SceneHistory<SceneSnapshot<PrimitiveMode>>;
 let baseLabel = 'Hypercube';
 const BASE_SELECTION = -1;
@@ -504,7 +503,7 @@ transformController = new TransformController({
   raycaster,
   ndc,
   vertexGeo,
-  statusBar,
+  statusBar: null,
   moveButton: transformMoveButton,
   rotateButton: transformRotateButton,
   scaleButton: transformScaleButton,
@@ -658,7 +657,7 @@ viewportInteraction = new ViewportInteractionController({
   ndc,
   tooltipEl,
   contextMenuEl: ctxMenu,
-  statusBar,
+  statusBar: null,
   keyboardCamera,
   transformController,
   primitiveMenuOptions,

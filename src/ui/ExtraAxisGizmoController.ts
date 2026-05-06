@@ -31,7 +31,6 @@ type ExtraAxisGizmoUI = {
   autoToggleButton: HTMLButtonElement;
   perspectiveToggleButton: HTMLButtonElement;
   orderHandleButton: HTMLButtonElement;
-  label: HTMLSpanElement;
 };
 
 type ExtraAxisGizmoControllerOptions = {
@@ -90,6 +89,15 @@ export class ExtraAxisGizmoController {
     placeholder: null,
     ghost: null,
   };
+  private readonly scrollBarEl = document.getElementById('extra-axis-scrollbar') as HTMLDivElement | null;
+  private readonly scrollThumbEl = document.getElementById('extra-axis-scrollbar-thumb') as HTMLDivElement | null;
+  private readonly scrollDrag = {
+    pointerId: -1,
+    startX: 0,
+    startScrollLeft: 0,
+    maxScroll: 0,
+    trackTravel: 0,
+  };
   private readonly handleOrderPointerMove = (ev: PointerEvent) => {
     if (ev.pointerId !== this.orderDrag.pointerId || !this.orderDrag.source) return;
     ev.preventDefault();
@@ -113,8 +121,59 @@ export class ExtraAxisGizmoController {
     if (ev.pointerId !== this.orderDrag.pointerId) return;
     this.endOrderDrag(false);
   };
+  private readonly handleBandScroll = () => this.syncScrollIndicator();
+  private readonly handleScrollBarPointerDown = (ev: PointerEvent) => {
+    if (ev.button !== 0) return;
+    const metrics = this.scrollMetrics();
+    if (!metrics) return;
+    ev.preventDefault();
+    ev.stopPropagation();
 
-  constructor(private readonly options: ExtraAxisGizmoControllerOptions) {}
+    const target = ev.target as Node | null;
+    if (target && !this.scrollThumbEl?.contains(target)) {
+      const centeredX = ev.clientX - metrics.trackStart - (metrics.thumbWidth * 0.5);
+      this.options.rootEl!.scrollLeft = clamp(
+        (centeredX / metrics.trackTravel) * metrics.maxScroll,
+        0,
+        metrics.maxScroll,
+      );
+    }
+
+    const nextMetrics = this.scrollMetrics();
+    if (!nextMetrics) return;
+    this.scrollDrag.pointerId = ev.pointerId;
+    this.scrollDrag.startX = ev.clientX;
+    this.scrollDrag.startScrollLeft = this.options.rootEl!.scrollLeft;
+    this.scrollDrag.maxScroll = nextMetrics.maxScroll;
+    this.scrollDrag.trackTravel = nextMetrics.trackTravel;
+    window.addEventListener('pointermove', this.handleScrollBarPointerMove, { passive: false });
+    window.addEventListener('pointerup', this.handleScrollBarPointerUp);
+    window.addEventListener('pointercancel', this.handleScrollBarPointerUp);
+  };
+  private readonly handleScrollBarPointerMove = (ev: PointerEvent) => {
+    if (ev.pointerId !== this.scrollDrag.pointerId || !this.options.rootEl) return;
+    ev.preventDefault();
+    const dx = ev.clientX - this.scrollDrag.startX;
+    this.options.rootEl.scrollLeft = clamp(
+      this.scrollDrag.startScrollLeft + ((dx / this.scrollDrag.trackTravel) * this.scrollDrag.maxScroll),
+      0,
+      this.scrollDrag.maxScroll,
+    );
+  };
+  private readonly handleScrollBarPointerUp = (ev: PointerEvent) => {
+    if (ev.pointerId !== this.scrollDrag.pointerId) return;
+    window.removeEventListener('pointermove', this.handleScrollBarPointerMove);
+    window.removeEventListener('pointerup', this.handleScrollBarPointerUp);
+    window.removeEventListener('pointercancel', this.handleScrollBarPointerUp);
+    this.scrollDrag.pointerId = -1;
+  };
+
+  constructor(private readonly options: ExtraAxisGizmoControllerOptions) {
+    this.options.rootEl?.addEventListener('scroll', this.handleBandScroll, { passive: true });
+    this.scrollBarEl?.addEventListener('pointerdown', this.handleScrollBarPointerDown);
+    window.addEventListener('resize', this.handleBandScroll);
+    requestAnimationFrame(this.handleBandScroll);
+  }
 
   clearDynamicState() {
     this.autoRotateSpeeds.clear();
@@ -222,7 +281,6 @@ export class ExtraAxisGizmoController {
       ui.negButton.disabled = false;
       ui.orderHandleButton.title = `Reorder ${depthLabel} axis`;
       ui.orderHandleButton.setAttribute('aria-label', ui.orderHandleButton.title);
-      ui.label.textContent = depthLabel;
       ui.posButton.textContent = depthLabel;
       ui.posButton.title = `Rotate ${planeLabel}-${depthLabel}`;
       ui.negButton.title = `Rotate ${planeLabel}-${depthLabel}`;
@@ -246,6 +304,7 @@ export class ExtraAxisGizmoController {
       this.setAutoRotateSpeed(plane.depthDim, this.autoRotateSpeeds.get(plane.depthDim) ?? 0);
       this.setPerspectiveDepth(plane.depthDim, this.selectedPerspectiveDims.has(plane.depthDim));
     }
+    this.syncScrollIndicator();
   }
 
   private currentPlanes(): ExtraAxisGizmoPlane[] {
@@ -359,6 +418,41 @@ export class ExtraAxisGizmoController {
     const currentSpeed = this.autoRotateSpeeds.get(depthDim) ?? 0;
     const nextSpeed = currentSpeed >= 3 ? 0 : currentSpeed + 1;
     this.setAutoRotateSpeed(depthDim, nextSpeed);
+  }
+
+  private scrollMetrics() {
+    const root = this.options.rootEl;
+    if (!root || !this.scrollBarEl || !this.scrollThumbEl) return null;
+    const maxScroll = root.scrollWidth - root.clientWidth;
+    if (maxScroll <= 1) return null;
+
+    const barRect = this.scrollBarEl.getBoundingClientRect();
+    const trackInset = 18;
+    const trackWidth = Math.max(1, barRect.width - (trackInset * 2));
+    const thumbWidth = Math.max(28, Math.min(trackWidth, trackWidth * (root.clientWidth / root.scrollWidth)));
+    const trackTravel = Math.max(1, trackWidth - thumbWidth);
+    return {
+      maxScroll,
+      thumbWidth,
+      trackTravel,
+      trackStart: barRect.left + trackInset,
+      trackInset,
+    };
+  }
+
+  private syncScrollIndicator() {
+    const root = this.options.rootEl;
+    if (!root || !this.scrollBarEl || !this.scrollThumbEl) return;
+    const metrics = this.scrollMetrics();
+    if (!metrics) {
+      this.scrollBarEl.classList.add('inactive');
+      return;
+    }
+
+    this.scrollBarEl.classList.remove('inactive');
+    const left = metrics.trackInset + ((root.scrollLeft / metrics.maxScroll) * metrics.trackTravel);
+    this.scrollThumbEl.style.width = `${metrics.thumbWidth}px`;
+    this.scrollThumbEl.style.left = `${left}px`;
   }
 
   private setPerspectiveDepth(depthDim: number, active: boolean) {
@@ -601,8 +695,6 @@ export class ExtraAxisGizmoController {
     orderHandleButton.type = 'button';
     orderHandleButton.className = 'axis-order-handle';
     orderHandleButton.setAttribute('aria-label', `Reorder ${axisLabel(depthDim)} axis`);
-    const label = document.createElement('span');
-    label.className = 'axis-label';
 
     const onPointerDown = (ev: PointerEvent) => {
       if (ev.pointerType !== 'mouse') ev.preventDefault();
@@ -678,8 +770,8 @@ export class ExtraAxisGizmoController {
     });
     root.addEventListener('pointercancel', ev => this.endDrag(ev));
 
-    root.append(svg, negButton, posButton, autoToggleButton, perspectiveToggleButton, orderHandleButton, label);
-    return { root, line, negButton, posButton, autoToggleButton, perspectiveToggleButton, orderHandleButton, label };
+    root.append(svg, negButton, posButton, autoToggleButton, perspectiveToggleButton, orderHandleButton);
+    return { root, line, negButton, posButton, autoToggleButton, perspectiveToggleButton, orderHandleButton };
   }
 
   private handleDragMove(ev: PointerEvent, root: HTMLDivElement) {
@@ -699,4 +791,8 @@ export class ExtraAxisGizmoController {
     this.angles.set(this.drag.depthAxis, normalizeSignedAngleDelta(prev + delta));
     this.options.applySceneBackground();
   }
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }

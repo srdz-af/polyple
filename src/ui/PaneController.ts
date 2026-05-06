@@ -8,7 +8,7 @@ export class PaneController {
   private viewportWasMobile = this.isMobileViewport();
 
   constructor(options: PaneControllerOptions = {}) {
-    this.breakpoint = options.breakpoint ?? 920;
+    this.breakpoint = options.breakpoint ?? 680;
   }
 
   get isCollapsed() {
