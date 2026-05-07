@@ -4,7 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
-import { AfterimagePass } from 'three/examples/jsm/postprocessing/AfterimagePass.js';
+import { FullScreenQuad, Pass } from 'three/examples/jsm/postprocessing/Pass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { MAX_N, type ViewMode } from './constants';
 import { RotND } from './RotND';
@@ -48,6 +48,130 @@ type PrimitiveMode = PrimitiveKind;
 
 const DEFAULT_BLOOM_INTENSITY = 0.25;
 const DEFAULT_MOTION_BLUR_INTENSITY = 0.5;
+
+class SmoothAfterimagePass extends Pass {
+  uniforms: {
+    tOld: THREE.IUniform<THREE.Texture | null>;
+    tNew: THREE.IUniform<THREE.Texture | null>;
+    blend: THREE.IUniform<number>;
+  };
+
+  private textureComp: THREE.WebGLRenderTarget;
+  private textureOld: THREE.WebGLRenderTarget;
+  private readonly compFsMaterial: THREE.ShaderMaterial;
+  private readonly compFsQuad: FullScreenQuad;
+  private readonly copyFsMaterial: THREE.MeshBasicMaterial;
+  private readonly copyFsQuad: FullScreenQuad;
+  private initialized = false;
+
+  constructor(blend = 0.74) {
+    super();
+
+    this.uniforms = {
+      tOld: { value: null },
+      tNew: { value: null },
+      blend: { value: blend },
+    };
+
+    this.textureComp = this.createTarget(window.innerWidth, window.innerHeight);
+    this.textureOld = this.createTarget(window.innerWidth, window.innerHeight);
+    this.compFsMaterial = new THREE.ShaderMaterial({
+      uniforms: this.uniforms,
+      vertexShader: `
+        varying vec2 vUv;
+
+        void main() {
+          vUv = uv;
+          gl_Position = vec4(position.xy, 0.0, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D tOld;
+        uniform sampler2D tNew;
+        uniform float blend;
+        varying vec2 vUv;
+
+        void main() {
+          vec4 oldColor = texture2D(tOld, vUv);
+          vec4 newColor = texture2D(tNew, vUv);
+          gl_FragColor = mix(newColor, oldColor, blend);
+        }
+      `,
+    });
+    this.compFsQuad = new FullScreenQuad(this.compFsMaterial);
+    this.copyFsMaterial = new THREE.MeshBasicMaterial();
+    this.copyFsQuad = new FullScreenQuad(this.copyFsMaterial);
+  }
+
+  private createTarget(width: number, height: number) {
+    return new THREE.WebGLRenderTarget(width, height, {
+      magFilter: THREE.LinearFilter,
+      minFilter: THREE.LinearFilter,
+      type: THREE.HalfFloatType,
+      depthBuffer: false,
+      stencilBuffer: false,
+    });
+  }
+
+  render(renderer: THREE.WebGLRenderer, writeBuffer: THREE.WebGLRenderTarget, readBuffer: THREE.WebGLRenderTarget) {
+    if (!this.initialized) {
+      this.copy(readBuffer.texture, renderer, this.textureOld);
+      this.output(readBuffer.texture, renderer, writeBuffer);
+      this.initialized = true;
+      return;
+    }
+
+    this.uniforms.tOld.value = this.textureOld.texture;
+    this.uniforms.tNew.value = readBuffer.texture;
+
+    renderer.setRenderTarget(this.textureComp);
+    this.compFsQuad.render(renderer);
+
+    this.output(this.textureComp.texture, renderer, writeBuffer);
+
+    const temp = this.textureOld;
+    this.textureOld = this.textureComp;
+    this.textureComp = temp;
+  }
+
+  setSize(width: number, height: number) {
+    this.textureComp.setSize(width, height);
+    this.textureOld.setSize(width, height);
+    this.reset();
+  }
+
+  reset() {
+    this.initialized = false;
+  }
+
+  dispose() {
+    this.textureComp.dispose();
+    this.textureOld.dispose();
+    this.compFsMaterial.dispose();
+    this.copyFsMaterial.dispose();
+    this.compFsQuad.dispose();
+    this.copyFsQuad.dispose();
+  }
+
+  private copy(texture: THREE.Texture, renderer: THREE.WebGLRenderer, target: THREE.WebGLRenderTarget) {
+    this.copyFsMaterial.map = texture;
+    renderer.setRenderTarget(target);
+    this.copyFsQuad.render(renderer);
+  }
+
+  private output(texture: THREE.Texture, renderer: THREE.WebGLRenderer, writeBuffer: THREE.WebGLRenderTarget) {
+    this.copyFsMaterial.map = texture;
+
+    if (this.renderToScreen) {
+      renderer.setRenderTarget(null);
+    } else {
+      renderer.setRenderTarget(writeBuffer);
+      if (this.clear) renderer.clear();
+    }
+
+    this.copyFsQuad.render(renderer);
+  }
+}
 
 const app = document.getElementById('app')!;
 const tooltipEl = document.getElementById('tooltip') as HTMLDivElement | null;
@@ -111,7 +235,7 @@ camera.position.copy(DEFAULT_CAMERA_POSITION);
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0, 0.58, 0.22);
-const afterimagePass = new AfterimagePass();
+const afterimagePass = new SmoothAfterimagePass();
 composer.addPass(bloomPass);
 composer.addPass(afterimagePass);
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -522,9 +646,9 @@ function clamp01(value: number) {
   return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
 }
 
-function motionBlurDampFromIntensity(intensity: number) {
+function motionBlurBlendFromIntensity(intensity: number) {
   if (intensity <= 0) return 0;
-  return 0.74 + (clamp01(intensity) * 0.24);
+  return 0.54 + (clamp01(intensity) * 0.4);
 }
 
 function syncRenderEffects() {
@@ -537,7 +661,8 @@ function syncRenderEffects() {
   bloomPass.threshold = 0.22;
 
   afterimagePass.enabled = PARAMS.motionBlurIntensity > 0.001;
-  afterimagePass.uniforms.damp.value = motionBlurDampFromIntensity(PARAMS.motionBlurIntensity);
+  afterimagePass.uniforms.blend.value = motionBlurBlendFromIntensity(PARAMS.motionBlurIntensity);
+  if (!afterimagePass.enabled) afterimagePass.reset();
 
   if (bloomIntensityInput) bloomIntensityInput.value = PARAMS.bloomIntensity.toFixed(2);
   if (bloomIntensityValue) bloomIntensityValue.textContent = PARAMS.bloomIntensity.toFixed(2);
@@ -740,6 +865,9 @@ const primitiveMenuOptions: { label: string; kind: PrimitiveKind }[] = [
   { label: 'Cross polytope', kind: 'cross' },
   { label: 'Simplex', kind: 'simplex' },
   { label: 'Simplex prism', kind: 'simplexPrism' },
+  { label: 'Demicube', kind: 'demicube' },
+  { label: '24-cell', kind: 'cell24' },
+  { label: 'Duoprism', kind: 'duoprism' },
 ];
 
 viewportInteraction = new ViewportInteractionController({

@@ -89,10 +89,11 @@ export class ViewportInteractionController {
     const menu = this.options.contextMenuEl;
     if (!menu) return;
     menu.replaceChildren();
+    menu.classList.add('primitive-menu');
     const spawnPoint = this.pickPointOnTargetPlane({ clientX: this.lastPointer.x, clientY: this.lastPointer.y });
     for (const opt of this.options.primitiveMenuOptions) {
       const btn = document.createElement('button');
-      btn.textContent = `Add ${opt.label}`;
+      btn.textContent = opt.label;
       btn.onclick = () => {
         menu.style.display = 'none';
         this.options.pushUndoSnapshot();
@@ -100,9 +101,8 @@ export class ViewportInteractionController {
       };
       menu.appendChild(btn);
     }
-    menu.style.left = `${this.lastPointer.x}px`;
-    menu.style.top = `${this.lastPointer.y}px`;
-    menu.style.display = 'block';
+    this.placeMenu(menu, this.lastPointer.x, this.lastPointer.y, 196);
+    menu.style.display = 'grid';
   }
 
   startTransformFromLastPointer(mode: TransformMode) {
@@ -237,15 +237,17 @@ export class ViewportInteractionController {
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
     this.deletePending = false;
     menu.replaceChildren();
+    menu.classList.remove('primitive-menu');
     const spawnPoint = this.pickPointOnTargetPlane(ev);
 
     if (this.options.getParams().editMode) {
       if (this.options.transformController.getSelectedVertex() < 0) return;
       this.appendTransformAction(menu, 'Move vertex', 'move', ev);
     } else if (!this.options.hasActiveSelection()) {
+      menu.classList.add('primitive-menu');
       for (const opt of this.options.primitiveMenuOptions) {
         const btn = document.createElement('button');
-        btn.textContent = `Add ${opt.label}`;
+        btn.textContent = opt.label;
         btn.onclick = () => {
           menu.style.display = 'none';
           this.options.pushUndoSnapshot();
@@ -263,11 +265,16 @@ export class ViewportInteractionController {
       menu.appendChild(deleteButton);
     }
 
-    const x = Math.min(ev.clientX, window.innerWidth - 180);
-    const y = Math.min(ev.clientY, window.innerHeight - 150);
+    const primitiveMenu = menu.classList.contains('primitive-menu');
+    this.placeMenu(menu, ev.clientX, ev.clientY, primitiveMenu ? 196 : 180);
+    menu.style.display = menu.childElementCount ? (primitiveMenu ? 'grid' : 'block') : 'none';
+  }
+
+  private placeMenu(menu: HTMLDivElement, clientX: number, clientY: number, estimatedWidth: number) {
+    const x = Math.max(12, Math.min(clientX, window.innerWidth - estimatedWidth - 12));
+    const y = Math.max(12, Math.min(clientY, window.innerHeight - 150));
     menu.style.left = `${x}px`;
     menu.style.top = `${y}px`;
-    menu.style.display = menu.childElementCount ? 'block' : 'none';
   }
 
   private handleWheel(ev: WheelEvent) {

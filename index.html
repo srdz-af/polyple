@@ -1321,16 +1321,29 @@
         box-shadow: var(--ui-shadow);
         display: none;
         min-width: 160px;
+        width: max-content;
+        max-width: min(260px, calc(100vw - 24px));
+        overflow: hidden;
         font: 13px/1.4 var(--ui-font);
       }
+      #context-menu.primitive-menu {
+        grid-template-columns: minmax(0, 1fr);
+        width: min(196px, calc(100vw - 24px));
+        max-width: calc(100vw - 24px);
+      }
       #context-menu button {
+        box-sizing: border-box;
         width: 100%;
         padding: 8px 12px;
         background: transparent;
         border: none;
         color: inherit;
         text-align: left;
+        white-space: nowrap;
         cursor: pointer;
+      }
+      #context-menu.primitive-menu button {
+        padding: 7px 10px;
       }
       #context-menu button:hover { background: var(--ui-bg-hover); color: var(--ui-text-strong); }
       #tooltip {
@@ -2137,7 +2150,7 @@
           <li><strong>Axis order handles:</strong> drag the handle beside an extra-axis gizmo to reorder extra dimensions.</li>
           <li><strong>Axis swapping:</strong> drag an extra-axis gizmo over an XYZ tip to swap it with that projected axis.</li>
           <li><strong>Faceted mode:</strong> every object uses the same solid multicolor material with one color per coplanar outer face region.</li>
-          <li><strong>Add object:</strong> <code>Shift + A</code>.</li>
+          <li><strong>Add object:</strong> <code>Shift + A</code> opens the primitive library.</li>
           <li><strong>Transform selected object:</strong> <code>G</code> move, <code>R</code> rotate, <code>S</code> scale.</li>
           <li><strong>Mobile transforms:</strong> touch and drag the Move/Rotate/Scale Transformation Controls, then release to confirm.</li>
           <li><strong>Delete selected object:</strong> <code>X</code>.</li>

@@ -17,7 +17,7 @@ https://srdz-af.github.io/BleND/
 
 ## What It Supports
 
-- N-dimensional primitives
+- N-dimensional primitive library: hypercube, cross polytope, simplex, simplex prism, demicube, 24-cell, and duoprism
 - Canonical projection using selected axes
 - Global N-D rotation with per-axis auto-rotation controls
 - Object transforms (move/rotate/scale)
@@ -65,6 +65,7 @@ Global N-D rotation:
 Object operations:
 
 - Shift + A: add object menu
+- Add object menu: choose from the primitive library
 - G: move selected object
 - R: rotate selected object
 - S: scale selected object
