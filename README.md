@@ -112,7 +112,7 @@ Projection Controls contain the XYZ gizmo, dimension stepper, and extra-axis giz
 - XYZ gizmo drag: orbit the camera
 - XYZ endpoint click: snap the camera to that axis direction
 - Shift axes button: cycle which axes are projected into XYZ
-- Sync rotations button: copy the current extra-axis rotation setup across extra gizmos
+- Reset rotations button: reset extra-axis rotations without stopping active auto-rotation
 - Extra-axis gizmo drag: rotate that extra dimension's projection plane
 - Extra-axis play button: cycle auto-rotation through 1x, 2x, 3x, then stop
 - Extra-axis depth button: include/exclude that axis from perspective depth

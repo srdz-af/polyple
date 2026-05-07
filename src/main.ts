@@ -2,6 +2,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { AfterimagePass } from 'three/examples/jsm/postprocessing/AfterimagePass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { MAX_N, type ViewMode } from './constants';
 import { RotND } from './RotND';
 import { NDProjector, canonicalP } from './geometry/NDProjector';
@@ -42,6 +46,9 @@ import type {
 
 type PrimitiveMode = PrimitiveKind;
 
+const DEFAULT_BLOOM_INTENSITY = 0.25;
+const DEFAULT_MOTION_BLUR_INTENSITY = 0.5;
+
 const app = document.getElementById('app')!;
 const tooltipEl = document.getElementById('tooltip') as HTMLDivElement | null;
 const ctxMenu = document.getElementById('context-menu') as HTMLDivElement | null;
@@ -55,6 +62,10 @@ const transformScaleButton = document.getElementById('transform-scale-button') a
 const dimensionValue = document.getElementById('dimension-value') as HTMLOutputElement | null;
 const dimensionDownButton = document.getElementById('dimension-down') as HTMLButtonElement | null;
 const dimensionUpButton = document.getElementById('dimension-up') as HTMLButtonElement | null;
+const bloomIntensityInput = document.getElementById('bloom-intensity') as HTMLInputElement | null;
+const bloomIntensityValue = document.getElementById('bloom-intensity-value') as HTMLOutputElement | null;
+const motionBlurIntensityInput = document.getElementById('motion-blur-intensity') as HTMLInputElement | null;
+const motionBlurIntensityValue = document.getElementById('motion-blur-intensity-value') as HTMLOutputElement | null;
 const modalOverlayController = new ModalOverlayController();
 const paneController = new PaneController();
 
@@ -88,6 +99,7 @@ const backgroundController = new BackgroundController({
   blurValue: document.getElementById('background-blur-value') as HTMLOutputElement | null,
   lightnessInput: document.getElementById('background-lightness') as HTMLInputElement | null,
   lightnessValue: document.getElementById('background-lightness-value') as HTMLOutputElement | null,
+  qualityButtons: Array.from(document.querySelectorAll('#background-quality-toggle button[data-hdri-quality]')) as HTMLButtonElement[],
   controlsEl: document.getElementById('background-controls') as HTMLDivElement | null,
   getRenderMode: () => PARAMS.renderMode,
   getEditMode: () => PARAMS.editMode,
@@ -96,6 +108,12 @@ const backgroundController = new BackgroundController({
 const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.01, 100);
 const DEFAULT_CAMERA_POSITION = new THREE.Vector3(3.9, 2.7, 3.9);
 camera.position.copy(DEFAULT_CAMERA_POSITION);
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0, 0.58, 0.22);
+const afterimagePass = new AfterimagePass();
+composer.addPass(bloomPass);
+composer.addPass(afterimagePass);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 const worldUp = new THREE.Vector3(0, 1, 0);
@@ -131,6 +149,10 @@ axes.position.set(0, -0.6, 0);
 scene.add(axes);
 const gridGroup = createFadingGrid({ y: -0.6 });
 scene.add(gridGroup);
+const referenceLineDepthMaterial = new THREE.MeshBasicMaterial();
+referenceLineDepthMaterial.colorWrite = false;
+referenceLineDepthMaterial.depthWrite = true;
+referenceLineDepthMaterial.depthTest = true;
 const viewportCapture = new ViewportCaptureController({
   renderer,
   scene,
@@ -492,7 +514,99 @@ const PARAMS = {
   axesX: 0,
   axesY: 1,
   axesZ: 2,
+  bloomIntensity: DEFAULT_BLOOM_INTENSITY,
+  motionBlurIntensity: DEFAULT_MOTION_BLUR_INTENSITY,
 };
+
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+}
+
+function motionBlurDampFromIntensity(intensity: number) {
+  if (intensity <= 0) return 0;
+  return 0.74 + (clamp01(intensity) * 0.24);
+}
+
+function syncRenderEffects() {
+  PARAMS.bloomIntensity = clamp01(PARAMS.bloomIntensity);
+  PARAMS.motionBlurIntensity = clamp01(PARAMS.motionBlurIntensity);
+
+  bloomPass.enabled = PARAMS.bloomIntensity > 0.001;
+  bloomPass.strength = PARAMS.bloomIntensity * 1.6;
+  bloomPass.radius = 0.46 + (PARAMS.bloomIntensity * 0.28);
+  bloomPass.threshold = 0.22;
+
+  afterimagePass.enabled = PARAMS.motionBlurIntensity > 0.001;
+  afterimagePass.uniforms.damp.value = motionBlurDampFromIntensity(PARAMS.motionBlurIntensity);
+
+  if (bloomIntensityInput) bloomIntensityInput.value = PARAMS.bloomIntensity.toFixed(2);
+  if (bloomIntensityValue) bloomIntensityValue.textContent = PARAMS.bloomIntensity.toFixed(2);
+  if (motionBlurIntensityInput) motionBlurIntensityInput.value = PARAMS.motionBlurIntensity.toFixed(2);
+  if (motionBlurIntensityValue) motionBlurIntensityValue.textContent = PARAMS.motionBlurIntensity.toFixed(2);
+}
+
+function hasRenderEffects() {
+  return bloomPass.enabled || afterimagePass.enabled;
+}
+
+function renderReferenceLinesClean(gridWasVisible: boolean, axesWereVisible: boolean) {
+  if (!gridWasVisible && !axesWereVisible) return;
+
+  const previousAutoClear = renderer.autoClear;
+  const previousBackground = scene.background;
+  const previousOverrideMaterial = scene.overrideMaterial;
+  const childVisibility = scene.children.map(child => ({ child, visible: child.visible }));
+
+  renderer.autoClear = false;
+  scene.background = null;
+
+  if (PARAMS.renderMode !== 'transparent') {
+    gridGroup.visible = false;
+    axes.visible = false;
+    scene.overrideMaterial = referenceLineDepthMaterial;
+    renderer.clearDepth();
+    renderer.render(scene, camera);
+    scene.overrideMaterial = previousOverrideMaterial;
+  } else {
+    renderer.clearDepth();
+  }
+
+  for (const { child } of childVisibility) {
+    child.visible = (child === gridGroup && gridWasVisible) || (child === axes && axesWereVisible);
+  }
+  renderer.render(scene, camera);
+
+  for (const { child, visible } of childVisibility) child.visible = visible;
+  scene.background = previousBackground;
+  scene.overrideMaterial = previousOverrideMaterial;
+  renderer.autoClear = previousAutoClear;
+}
+
+function renderEffectsFrame() {
+  const gridWasVisible = gridGroup.visible;
+  const axesWereVisible = axes.visible;
+
+  gridGroup.visible = false;
+  axes.visible = false;
+  composer.render();
+
+  gridGroup.visible = gridWasVisible;
+  axes.visible = axesWereVisible;
+  renderReferenceLinesClean(gridWasVisible, axesWereVisible);
+}
+
+function bindRenderEffectControls() {
+  bloomIntensityInput?.addEventListener('input', () => {
+    PARAMS.bloomIntensity = clamp01(Number.parseFloat(bloomIntensityInput.value));
+    syncRenderEffects();
+  });
+  motionBlurIntensityInput?.addEventListener('input', () => {
+    PARAMS.motionBlurIntensity = clamp01(Number.parseFloat(motionBlurIntensityInput.value));
+    syncRenderEffects();
+  });
+  syncRenderEffects();
+}
+
 transformController = new TransformController({
   scene,
   camera,
@@ -832,6 +946,7 @@ if (M === 0 && extraInstances.length === 0) {
 
 viewportCapture.bindControls();
 modalOverlayController.bindControls();
+bindRenderEffectControls();
 editModeToggle?.addEventListener('click', () => setEditMode(!PARAMS.editMode));
 [
   { el: transformMoveButton, mode: 'move' as TransformMode },
@@ -877,7 +992,8 @@ function animate() {
   keyboardCamera.update(dt);
   updateTransformActionButtons();
   updateAxisGizmo();
-  renderer.render(scene, camera);
+  if (hasRenderEffects()) renderEffectsFrame();
+  else renderer.render(scene, camera);
   requestAnimationFrame(animate);
 }
 animate();
@@ -888,6 +1004,7 @@ window.addEventListener('resize', () => {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
+  composer.setSize(w, h);
   paneController.syncToViewport();
   textureEditor.updatePanel();
 });

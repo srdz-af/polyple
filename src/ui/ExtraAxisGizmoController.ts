@@ -33,6 +33,15 @@ type ExtraAxisGizmoUI = {
   orderHandleButton: HTMLButtonElement;
 };
 
+const AUTO_ROTATE_SPEED_MULTIPLIERS = [0, 1, 2, 3] as const;
+const AUTO_ROTATE_BUTTON_ICONS = ['play_arrow', 'speed_1_5x', 'speed_2x', 'stop'] as const;
+const AUTO_ROTATE_BUTTON_ACTIONS = [
+  'Start auto-rotate',
+  'Set auto-rotate 1.5x',
+  'Set auto-rotate 2x',
+  'Stop auto-rotate',
+] as const;
+
 type ExtraAxisGizmoControllerOptions = {
   rootEl: HTMLDivElement | null;
   getVisibleDims: () => number;
@@ -235,9 +244,10 @@ export class ExtraAxisGizmoController {
     let rotated = false;
     for (const plane of gizmoPlanes) {
       const speed = this.autoRotateSpeeds.get(plane.depthDim) ?? 0;
-      if (speed <= 0) continue;
+      const multiplier = AUTO_ROTATE_SPEED_MULTIPLIERS[speed] ?? 0;
+      if (multiplier <= 0) continue;
       if (plane.planeAxis < 0 || plane.planeAxis === plane.depthDim) continue;
-      const delta = EXTRA_AXIS_AUTO_ROTATE_SPEED * speed * dt;
+      const delta = EXTRA_AXIS_AUTO_ROTATE_SPEED * multiplier * dt;
       this.options.getRot().applyGivensLeft(plane.planeAxis, plane.depthDim, delta);
       this.offsetAngle(plane, delta);
       rotated = true;
@@ -267,6 +277,15 @@ export class ExtraAxisGizmoController {
 
     this.sync();
     if (!rotated) return;
+    this.options.applySceneBackground();
+    this.options.projectAndRenderAll();
+  }
+
+  resetRotations() {
+    this.options.getRot().reset();
+    this.angles.clear();
+    this.anglePlaneKeys.clear();
+    this.sync();
     this.options.applySceneBackground();
     this.options.projectAndRenderAll();
   }
@@ -467,25 +486,14 @@ export class ExtraAxisGizmoController {
     if (ui.autoToggleButton.dataset.autoSpeed !== speedKey) {
       ui.autoToggleButton.dataset.autoSpeed = speedKey;
       ui.autoToggleButton.replaceChildren();
-      if (normalizedSpeed === 0 || normalizedSpeed === 3) {
-        const icon = document.createElement('span');
-        icon.className = 'material-symbols-rounded';
-        icon.setAttribute('aria-hidden', 'true');
-        icon.textContent = normalizedSpeed === 0 ? 'play_arrow' : 'stop';
-        ui.autoToggleButton.appendChild(icon);
-      } else {
-        const speedLabel = document.createElement('span');
-        speedLabel.className = 'auto-speed-label';
-        speedLabel.textContent = `x${normalizedSpeed + 1}`;
-        ui.autoToggleButton.appendChild(speedLabel);
-      }
+      const icon = document.createElement('span');
+      icon.className = 'material-symbols-rounded';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = AUTO_ROTATE_BUTTON_ICONS[normalizedSpeed] ?? AUTO_ROTATE_BUTTON_ICONS[0];
+      ui.autoToggleButton.appendChild(icon);
     }
     const label = axisLabel(depthDim);
-    const action = normalizedSpeed === 0
-      ? 'Start auto-rotate'
-      : normalizedSpeed < 3
-        ? `Set auto-rotate ${normalizedSpeed + 1}x`
-        : 'Stop auto-rotate';
+    const action = AUTO_ROTATE_BUTTON_ACTIONS[normalizedSpeed] ?? AUTO_ROTATE_BUTTON_ACTIONS[0];
     const title = `${action} ${label} axis`;
     ui.autoToggleButton.title = title;
     ui.autoToggleButton.setAttribute('aria-label', title);
@@ -805,8 +813,7 @@ export class ExtraAxisGizmoController {
     autoToggleButton.type = 'button';
     autoToggleButton.className = 'auto-toggle';
     autoToggleButton.innerHTML = `
-      <span class="material-symbols-rounded play-icon" aria-hidden="true">play_arrow</span>
-      <span class="material-symbols-rounded stop-icon" aria-hidden="true">stop</span>
+      <span class="material-symbols-rounded" aria-hidden="true">play_arrow</span>
     `;
     const perspectiveToggleButton = document.createElement('button');
     perspectiveToggleButton.type = 'button';

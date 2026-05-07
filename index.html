@@ -5,7 +5,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/x-icon" href="./favicon.ico" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded&icon_names=chevron_left,chevron_right,edit,grid_on,help,keyboard_arrow_down,keyboard_arrow_up,movie,opacity,open_with,photo_camera,play_arrow,radio_button_checked,refresh,stop,sync_alt,view_in_ar,visibility,visibility_off,vrpano,zoom_out_map&display=block" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded&icon_names=1k,2k,chevron_left,chevron_right,edit,grid_on,help,keyboard_arrow_down,keyboard_arrow_up,movie,opacity,open_with,photo_camera,play_arrow,radio_button_checked,refresh,speed_1_5x,speed_2x,stop,sync_alt,view_in_ar,visibility,visibility_off,vrpano,zoom_out_map&display=block" />
     <title>BleND</title>
     <style>
       :root {
@@ -85,6 +85,7 @@
         background-clip: padding-box;
       }
       #background-controls input[type="range"],
+      #render-effects-controls input[type="range"],
       #texture-controls input[type="range"] {
         appearance: none;
         -webkit-appearance: none;
@@ -95,16 +96,19 @@
         cursor: pointer;
       }
       #background-controls input[type="range"]:disabled,
+      #render-effects-controls input[type="range"]:disabled,
       #texture-controls input[type="range"]:disabled {
         cursor: default;
         opacity: 0.48;
       }
       #background-controls input[type="range"]:focus-visible,
+      #render-effects-controls input[type="range"]:focus-visible,
       #texture-controls input[type="range"]:focus-visible {
         outline: 2px solid rgba(255,255,255,0.55);
         outline-offset: 2px;
       }
       #background-controls input[type="range"]::-webkit-slider-runnable-track,
+      #render-effects-controls input[type="range"]::-webkit-slider-runnable-track,
       #texture-controls input[type="range"]::-webkit-slider-runnable-track {
         height: 3px;
         border-radius: 999px;
@@ -112,6 +116,7 @@
         box-shadow: none;
       }
       #background-controls input[type="range"]::-webkit-slider-thumb,
+      #render-effects-controls input[type="range"]::-webkit-slider-thumb,
       #texture-controls input[type="range"]::-webkit-slider-thumb {
         -webkit-appearance: none;
         appearance: none;
@@ -124,22 +129,27 @@
         box-shadow: none;
       }
       #background-controls input[type="range"]::-moz-range-track,
+      #render-effects-controls input[type="range"]::-moz-range-track,
       #texture-controls input[type="range"]::-moz-range-track,
       #background-controls input[type="range"]::-moz-range-progress,
+      #render-effects-controls input[type="range"]::-moz-range-progress,
       #texture-controls input[type="range"]::-moz-range-progress {
         height: 3px;
         border: 0;
         border-radius: 999px;
       }
       #background-controls input[type="range"]::-moz-range-track,
+      #render-effects-controls input[type="range"]::-moz-range-track,
       #texture-controls input[type="range"]::-moz-range-track {
         background: var(--ui-slider-track);
       }
       #background-controls input[type="range"]::-moz-range-progress,
+      #render-effects-controls input[type="range"]::-moz-range-progress,
       #texture-controls input[type="range"]::-moz-range-progress {
         background: var(--ui-slider-fill);
       }
       #background-controls input[type="range"]::-moz-range-thumb,
+      #render-effects-controls input[type="range"]::-moz-range-thumb,
       #texture-controls input[type="range"]::-moz-range-thumb {
         width: 9px;
         height: 9px;
@@ -548,37 +558,28 @@
         overflow: hidden;
         border-radius: 50%;
         border-width: 0;
-        background: color-mix(in srgb, var(--extra-axis-color) 22%, transparent);
-        color: var(--extra-axis-color);
+        background: var(--ui-bg-soft);
+        color: var(--ui-text);
         font: 700 10px/1 var(--ui-font);
         transform: translateY(-50%);
         z-index: 4;
       }
       .extra-axis-gizmo button.auto-toggle:hover {
         transform: translateY(-50%);
-        filter: brightness(1.2);
+        background: var(--ui-bg-hover);
+        color: var(--ui-text-strong);
+        filter: none;
       }
       .extra-axis-gizmo button.auto-toggle .material-symbols-rounded {
         font-size: 17px;
         line-height: 1;
       }
-      .extra-axis-gizmo button.auto-toggle .auto-speed-label {
-        display: block;
-        font: 800 10px/1 var(--ui-font);
-      }
-      .extra-axis-gizmo button.auto-toggle .stop-icon {
-        display: none;
-      }
       .extra-axis-gizmo button.auto-toggle.active {
-        background: var(--extra-axis-color);
-        border-color: var(--extra-axis-color);
-        color: #10141a;
+        background: var(--ui-blue);
+        color: var(--ui-text-strong);
       }
-      .extra-axis-gizmo button.auto-toggle.active .play-icon {
-        display: none;
-      }
-      .extra-axis-gizmo button.auto-toggle.active .stop-icon {
-        display: block;
+      .extra-axis-gizmo button.auto-toggle.active:hover {
+        background: var(--ui-blue-hover);
       }
       .extra-axis-gizmo button.perspective-toggle {
         left: -25px;
@@ -598,22 +599,27 @@
         overflow: hidden;
         border-radius: 50%;
         border-width: 0;
-        background: color-mix(in srgb, var(--extra-axis-color) 22%, transparent);
-        color: var(--extra-axis-color);
+        background: var(--ui-bg-soft);
+        color: var(--ui-text);
         transform: translateY(-50%);
         z-index: 4;
       }
       .extra-axis-gizmo button.perspective-toggle:hover {
         transform: translateY(-50%);
-        filter: brightness(1.2);
+        background: var(--ui-bg-hover);
+        color: var(--ui-text-strong);
+        filter: none;
       }
       .extra-axis-gizmo button.perspective-toggle .material-symbols-rounded {
         font-size: 17px;
         line-height: 1;
       }
       .extra-axis-gizmo button.perspective-toggle.active {
-        background: var(--extra-axis-color);
-        color: #10141a;
+        background: var(--ui-blue);
+        color: var(--ui-text-strong);
+      }
+      .extra-axis-gizmo button.perspective-toggle.active:hover {
+        background: var(--ui-blue-hover);
       }
       .extra-axis-gizmo button.axis-order-handle {
         left: auto;
@@ -743,8 +749,14 @@
       #background-selector,
       #background-selector h4,
       #background-swatches button,
+      #background-quality-toggle,
+      #background-quality-toggle button,
       #background-controls label,
       #background-controls output,
+      #render-effects,
+      #render-effects h4,
+      #render-effects-controls label,
+      #render-effects-controls output,
       #texture-panel,
       #texture-panel h4,
       #texture-controls label,
@@ -838,10 +850,22 @@
         box-shadow: none;
         position: relative;
       }
+      #render-effects {
+        background: transparent;
+        color: inherit;
+        padding: 0 0 16px 0;
+        border: 0;
+        border-radius: 0;
+        font: inherit;
+        margin-bottom: 16px;
+        box-shadow: none;
+        position: relative;
+      }
       #texture-panel {
         position: relative;
       }
       #background-selector::before,
+      #render-effects::before,
       #texture-panel::before {
         content: "";
         position: absolute;
@@ -860,6 +884,13 @@
         opacity: 0.78;
         pointer-events: none;
       }
+      .section-title-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 0 0 14px 0;
+      }
       #background-selector h4 {
         margin: 0 0 14px 0;
         font-size: 12px;
@@ -867,6 +898,9 @@
         letter-spacing: 0.2px;
         line-height: 1.45;
         color: var(--ui-text-strong);
+      }
+      #background-selector .section-title-row h4 {
+        margin: 0;
       }
       #background-swatches {
         display: flex;
@@ -972,6 +1006,9 @@
         align-items: center;
         gap: 14px;
       }
+      #background-controls .background-row.quality-row {
+        grid-template-columns: 64px minmax(0, 1fr);
+      }
       #background-controls label {
         color: var(--ui-text);
         font-size: 11px;
@@ -983,6 +1020,82 @@
         width: 100%;
       }
       #background-controls output {
+        text-align: right;
+        color: var(--ui-muted);
+        font-variant-numeric: tabular-nums;
+        font-size: 11px;
+        line-height: 1.45;
+      }
+      #background-quality-toggle {
+        display: inline-flex;
+        align-items: center;
+        flex: 0 0 auto;
+        gap: 2px;
+        padding: 0;
+        border-radius: 0;
+        background: transparent;
+      }
+      #background-quality-toggle button {
+        display: grid;
+        place-items: center;
+        width: 30px;
+        height: 30px;
+        padding: 0;
+        border: 0;
+        border-radius: 3px;
+        background: transparent;
+        color: var(--ui-text);
+        cursor: pointer;
+        transition: background 120ms ease, color 120ms ease, opacity 120ms ease;
+      }
+      #background-quality-toggle button.active {
+        background: var(--ui-blue);
+        color: var(--ui-text-strong);
+      }
+      #background-quality-toggle button:hover:not(:disabled) {
+        background: var(--ui-bg-hover);
+        color: var(--ui-text-strong);
+      }
+      #background-quality-toggle button.active:hover {
+        background: var(--ui-blue-hover);
+      }
+      #background-quality-toggle button:disabled {
+        cursor: default;
+        opacity: 0.45;
+      }
+      #background-quality-toggle .material-symbols-rounded {
+        font-size: 18px;
+        line-height: 1;
+      }
+      #render-effects h4 {
+        margin: 0 0 14px 0;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.2px;
+        line-height: 1.45;
+        color: var(--ui-text-strong);
+      }
+      #render-effects-controls {
+        display: grid;
+        gap: 12px;
+      }
+      #render-effects-controls .render-effect-row {
+        display: grid;
+        grid-template-columns: 82px minmax(0, 1fr) 52px;
+        align-items: center;
+        gap: 14px;
+      }
+      #render-effects-controls label {
+        color: var(--ui-text);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+        line-height: 1.45;
+      }
+      #render-effects-controls input[type="range"] {
+        width: 100%;
+      }
+      #render-effects-controls output {
         text-align: right;
         color: var(--ui-muted);
         font-variant-numeric: tabular-nums;
@@ -1723,13 +1836,15 @@
           gap: 1px;
         }
         #view-toggle button,
-        #render-actions button {
+        #render-actions button,
+        #background-quality-toggle button {
           width: 26px;
           height: 26px;
         }
         #view-toggle .material-symbols-rounded,
         #render-actions .material-symbols-rounded,
-        #transform-actions .material-symbols-rounded {
+        #transform-actions .material-symbols-rounded,
+        #background-quality-toggle .material-symbols-rounded {
           font-size: 16px;
         }
         #transform-actions {
@@ -1757,13 +1872,18 @@
         #background-selector {
           margin-bottom: 6px;
         }
+        #render-effects {
+          margin-bottom: 6px;
+        }
         #texture-preview-wrap {
           height: 108px;
         }
+        #render-effects-controls .render-effect-row,
         #texture-controls .texture-row {
           grid-template-columns: 1fr;
           gap: 4px;
         }
+        #render-effects-controls output,
         #texture-controls output {
           width: 100%;
           text-align: left;
@@ -1858,7 +1978,7 @@
             <button id="axis-cycle-button" type="button" aria-label="Shift projected axes" title="Shift projected axes">
               <span class="material-symbols-rounded" aria-hidden="true">sync_alt</span>
             </button>
-            <button id="axis-sync-rotations-button" type="button" aria-label="Sync extra-axis rotations" title="Sync extra-axis rotations">
+            <button id="axis-sync-rotations-button" type="button" aria-label="Reset extra-axis rotations" title="Reset extra-axis rotations">
               <span class="material-symbols-rounded" aria-hidden="true">refresh</span>
             </button>
           </div>
@@ -1881,7 +2001,17 @@
         <div id="axis-legend" style="display:none;"></div>
         <div id="object-list"></div>
         <div id="background-selector" role="group" aria-label="Background environment selector">
-          <h4>Background</h4>
+          <div class="section-title-row">
+            <h4>Background</h4>
+            <div id="background-quality-toggle" role="group" aria-label="HDRI quality">
+              <button type="button" data-hdri-quality="sd" aria-label="Use 1K HDRI" aria-pressed="true" title="Use 1K HDRI">
+                <span class="material-symbols-rounded" aria-hidden="true">1k</span>
+              </button>
+              <button type="button" data-hdri-quality="hd" aria-label="Use 2K HDRI" aria-pressed="false" title="Use 2K HDRI">
+                <span class="material-symbols-rounded" aria-hidden="true">2k</span>
+              </button>
+            </div>
+          </div>
           <div id="background-swatches">
             <button
               type="button"
@@ -1929,6 +2059,21 @@
               <label for="background-lightness">Lightness</label>
               <input id="background-lightness" type="range" min="0.2" max="2" step="0.01" value="1.00" />
               <output id="background-lightness-value">1.00</output>
+            </div>
+          </div>
+        </div>
+        <div id="render-effects" role="group" aria-label="Render effects">
+          <h4>Render Effects</h4>
+          <div id="render-effects-controls">
+            <div class="render-effect-row">
+              <label for="bloom-intensity">Bloom</label>
+              <input id="bloom-intensity" type="range" min="0" max="1" step="0.01" value="0.25" />
+              <output id="bloom-intensity-value">0.25</output>
+            </div>
+            <div class="render-effect-row">
+              <label for="motion-blur-intensity">Motion blur</label>
+              <input id="motion-blur-intensity" type="range" min="0" max="1" step="0.01" value="0.50" />
+              <output id="motion-blur-intensity-value">0.50</output>
             </div>
           </div>
         </div>
@@ -1983,6 +2128,7 @@
         <ul id="help-content">
           <li><strong>Orbit:</strong> left drag. <strong>Zoom:</strong> wheel.</li>
           <li><strong>Shift axes button:</strong> click the axis cycle button to shift which dimensions are projected as X/Y/Z.</li>
+          <li><strong>Reset rotations button:</strong> reset extra-axis rotations without stopping active auto-rotation.</li>
           <li><strong>Perspective depth:</strong> use the depth button on an extra-axis gizmo to include/exclude that axis from perspective depth.</li>
           <li><strong>XYZ gizmo:</strong> drag the gizmo to move/orbit the view, or tap an endpoint to snap the camera to that axis.</li>
           <li><strong>Extra-axis gizmos:</strong> drag a gizmo to rotate through that extra dimension's projection plane.</li>
@@ -2029,6 +2175,7 @@
                 <li><strong>Axis order handles:</strong> drag the handle beside an extra-axis gizmo to reorder extra dimensions.</li>
                 <li><strong>Axis swapping:</strong> drag an extra-axis gizmo over an XYZ tip to swap it with that projected axis.</li>
                 <li><strong>Gizmo use:</strong> drag a gizmo to rotate through that axis plane.</li>
+                <li><strong>Reset rotations:</strong> tap the reset button beside the XYZ gizmo to zero extra-axis rotations while keeping auto-rotation active.</li>
                 <li><strong>Auto rotate by axis:</strong> tap the small play button on a gizmo to cycle 1x, 2x, 3x, then stop.</li>
                 <li><strong>Depth button:</strong> tap the depth icon on a gizmo to toggle that axis in perspective depth.</li>
               </ul>

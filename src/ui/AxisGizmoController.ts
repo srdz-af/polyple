@@ -437,7 +437,7 @@ export class AxisGizmoController {
   private bindProjectionControls() {
     if (this.projectionControlsBound) return;
     this.axisCycleButton?.addEventListener('click', () => this.cycleAxes(1));
-    this.axisSyncRotationsButton?.addEventListener('click', () => this.extraAxisGizmos.syncRotationAngles());
+    this.axisSyncRotationsButton?.addEventListener('click', () => this.extraAxisGizmos.resetRotations());
     this.paneToggleButton?.addEventListener('click', () => {
       this.options.setPaneCollapsed(!this.options.getPaneCollapsed());
     });
