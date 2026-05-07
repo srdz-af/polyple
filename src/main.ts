@@ -30,6 +30,10 @@ import { TextureEditorController } from './ui/TextureEditorController';
 import { ViewModeController } from './ui/ViewModeController';
 import { ViewportCaptureController } from './viewport/ViewportCaptureController';
 import { HypercubeRenderer } from './rendering/HypercubeRenderer';
+import {
+  KeyframeTimelineController,
+  type AnimationKeyframeState,
+} from './animation/KeyframeTimelineController';
 import { createSceneInstance, type InstanceGeometryData } from './scene/instanceFactory';
 import { ProjectionPipeline } from './scene/ProjectionPipeline';
 import { SceneHistory } from './scene/SceneHistory';
@@ -176,6 +180,7 @@ class SmoothAfterimagePass extends Pass {
 const app = document.getElementById('app')!;
 const tooltipEl = document.getElementById('tooltip') as HTMLDivElement | null;
 const ctxMenu = document.getElementById('context-menu') as HTMLDivElement | null;
+const renderAnimationButton = document.getElementById('render-animation-button') as HTMLButtonElement | null;
 const recordViewportButton = document.getElementById('record-viewport-button') as HTMLButtonElement | null;
 const recordViewportTimer = document.getElementById('record-viewport-timer') as HTMLSpanElement | null;
 const captureFrameButton = document.getElementById('capture-frame-button') as HTMLButtonElement | null;
@@ -277,15 +282,28 @@ const referenceLineDepthMaterial = new THREE.MeshBasicMaterial();
 referenceLineDepthMaterial.colorWrite = false;
 referenceLineDepthMaterial.depthWrite = true;
 referenceLineDepthMaterial.depthTest = true;
+let animationTimeline: KeyframeTimelineController | null = null;
+let animationVideoRendering = false;
 const viewportCapture = new ViewportCaptureController({
   renderer,
   scene,
   camera,
   gridGroup,
   axes,
+  renderButton: renderAnimationButton,
   recordButton: recordViewportButton,
   captureButton: captureFrameButton,
   timerEl: recordViewportTimer,
+  renderFrame: () => renderViewportFrame(),
+  renderAnimationFrame: frame => animationTimeline?.seekToFrame(frame, true),
+  onAnimationRenderStart: () => {
+    animationVideoRendering = true;
+    animationTimeline?.pause();
+  },
+  onAnimationRenderStop: () => {
+    animationVideoRendering = false;
+    animationTimeline?.pause();
+  },
 });
 const vertexGeo = new THREE.SphereGeometry(0.012, 8, 8);
 
@@ -674,6 +692,191 @@ function hasRenderEffects() {
   return bloomPass.enabled || afterimagePass.enabled;
 }
 
+function lerpNumber(a: number, b: number, t: number) {
+  return a + ((b - a) * t);
+}
+
+function lerpVector(a: THREE.Vector3, b: THREE.Vector3, t: number) {
+  return new THREE.Vector3(
+    lerpNumber(a.x, b.x, t),
+    lerpNumber(a.y, b.y, t),
+    lerpNumber(a.z, b.z, t),
+  );
+}
+
+function slerpDirection(a: THREE.Vector3, b: THREE.Vector3, t: number) {
+  const from = a.clone().normalize();
+  const to = b.clone().normalize();
+  const dot = Math.max(-1, Math.min(1, from.dot(to)));
+
+  if (dot > 0.9995) {
+    return from.lerp(to, t).normalize();
+  }
+
+  if (dot < -0.9995) {
+    const seed = Math.abs(from.x) < 0.9
+      ? new THREE.Vector3(1, 0, 0)
+      : new THREE.Vector3(0, 1, 0);
+    const orthogonal = seed.sub(from.clone().multiplyScalar(seed.dot(from))).normalize();
+    return from
+      .multiplyScalar(Math.cos(Math.PI * t))
+      .addScaledVector(orthogonal, Math.sin(Math.PI * t))
+      .normalize();
+  }
+
+  const theta = Math.acos(dot);
+  const sinTheta = Math.sin(theta);
+  return from
+    .multiplyScalar(Math.sin((1 - t) * theta) / sinTheta)
+    .addScaledVector(to, Math.sin(t * theta) / sinTheta)
+    .normalize();
+}
+
+function interpolateCameraPosition(
+  fromPosition: THREE.Vector3,
+  fromTarget: THREE.Vector3,
+  toPosition: THREE.Vector3,
+  toTarget: THREE.Vector3,
+  t: number,
+) {
+  const target = lerpVector(fromTarget, toTarget, t);
+  const fromOffset = fromPosition.clone().sub(fromTarget);
+  const toOffset = toPosition.clone().sub(toTarget);
+  const fromDistance = fromOffset.length();
+  const toDistance = toOffset.length();
+
+  if (fromDistance < 1e-6 || toDistance < 1e-6) {
+    return lerpVector(fromPosition, toPosition, t);
+  }
+
+  const direction = slerpDirection(fromOffset, toOffset, t);
+  return target.addScaledVector(direction, lerpNumber(fromDistance, toDistance, t));
+}
+
+function completeAxisOrder(order: number[]) {
+  const next = order.filter(dim => Number.isInteger(dim) && dim >= 0 && dim < MAX_N);
+  for (let dim = 0; dim < MAX_N; dim++) {
+    if (!next.includes(dim)) next.push(dim);
+  }
+  return next.slice(0, MAX_N);
+}
+
+function orthonormalizeRows(raw: Float32Array, dimension: number) {
+  const out = new Float32Array(raw);
+  const row = new Float32Array(dimension);
+
+  for (let r = 0; r < dimension; r++) {
+    for (let c = 0; c < dimension; c++) row[c] = out[r * dimension + c] ?? 0;
+
+    for (let prev = 0; prev < r; prev++) {
+      let dot = 0;
+      for (let c = 0; c < dimension; c++) dot += row[c] * out[prev * dimension + c];
+      for (let c = 0; c < dimension; c++) row[c] -= dot * out[prev * dimension + c];
+    }
+
+    let lenSq = 0;
+    for (let c = 0; c < dimension; c++) lenSq += row[c] * row[c];
+
+    if (lenSq < 1e-8) {
+      row.fill(0);
+      row[r] = 1;
+      for (let prev = 0; prev < r; prev++) {
+        let dot = 0;
+        for (let c = 0; c < dimension; c++) dot += row[c] * out[prev * dimension + c];
+        for (let c = 0; c < dimension; c++) row[c] -= dot * out[prev * dimension + c];
+      }
+      lenSq = 0;
+      for (let c = 0; c < dimension; c++) lenSq += row[c] * row[c];
+    }
+
+    const invLen = lenSq > 1e-8 ? 1 / Math.sqrt(lenSq) : 1;
+    for (let c = 0; c < dimension; c++) out[r * dimension + c] = row[c] * invLen;
+  }
+
+  return out;
+}
+
+function captureAnimationState(): AnimationKeyframeState {
+  return {
+    dimension: N,
+    rotMatrix: new Float32Array(rot.matrix),
+    axesOrder: completeAxisOrder(axisController.axesOrder),
+    axesOffset: axisController.axesOffset,
+    renderMode: PARAMS.renderMode,
+    bloomIntensity: PARAMS.bloomIntensity,
+    motionBlurIntensity: PARAMS.motionBlurIntensity,
+    cameraPosition: camera.position.clone(),
+    cameraTarget: controls.target.clone(),
+    cameraUp: camera.up.clone(),
+    cameraFov: camera.fov,
+    cameraZoom: camera.zoom,
+  };
+}
+
+function interpolateAnimationState(from: AnimationKeyframeState, to: AnimationKeyframeState, t: number): AnimationKeyframeState {
+  const dimension = from.dimension === to.dimension ? from.dimension : N;
+  const matrixLength = dimension * dimension;
+  const blended = new Float32Array(matrixLength);
+  const cameraTarget = lerpVector(from.cameraTarget, to.cameraTarget, t);
+  if (from.rotMatrix.length === matrixLength && to.rotMatrix.length === matrixLength) {
+    for (let i = 0; i < matrixLength; i++) blended[i] = lerpNumber(from.rotMatrix[i], to.rotMatrix[i], t);
+  } else {
+    blended.set(rot.matrix.slice(0, matrixLength));
+  }
+
+  return {
+    dimension,
+    rotMatrix: orthonormalizeRows(blended, dimension),
+    axesOrder: t < 0.5 ? completeAxisOrder(from.axesOrder) : completeAxisOrder(to.axesOrder),
+    axesOffset: Math.round(lerpNumber(from.axesOffset, to.axesOffset, t)),
+    renderMode: t < 0.5 ? from.renderMode : to.renderMode,
+    bloomIntensity: lerpNumber(from.bloomIntensity, to.bloomIntensity, t),
+    motionBlurIntensity: lerpNumber(from.motionBlurIntensity, to.motionBlurIntensity, t),
+    cameraPosition: interpolateCameraPosition(from.cameraPosition, from.cameraTarget, to.cameraPosition, to.cameraTarget, t),
+    cameraTarget,
+    cameraUp: lerpVector(from.cameraUp, to.cameraUp, t).normalize(),
+    cameraFov: lerpNumber(from.cameraFov, to.cameraFov, t),
+    cameraZoom: lerpNumber(from.cameraZoom, to.cameraZoom, t),
+  };
+}
+
+function syncProjectionAxesFromOrder() {
+  const nVis = axisController.visibleDims();
+  if (nVis <= 0) return;
+  axisController.axesOffset = (((axisController.axesOffset % nVis) + nVis) % nVis);
+  PARAMS.axesX = axisController.axesOrder[axisController.axesOffset % nVis] ?? 0;
+  PARAMS.axesY = axisController.axesOrder[(axisController.axesOffset + 1) % nVis] ?? 1;
+  PARAMS.axesZ = axisController.axesOrder[(axisController.axesOffset + 2) % nVis] ?? 2;
+}
+
+function applyAnimationState(state: AnimationKeyframeState) {
+  if (state.dimension === N && state.rotMatrix.length === rot.matrix.length) {
+    rot.matrix.set(state.rotMatrix);
+  }
+
+  axisController.setAxisOrder(completeAxisOrder(state.axesOrder));
+  axisController.axesOffset = state.axesOffset;
+  syncProjectionAxesFromOrder();
+
+  PARAMS.bloomIntensity = state.bloomIntensity;
+  PARAMS.motionBlurIntensity = state.motionBlurIntensity;
+  syncRenderEffects();
+
+  if (PARAMS.renderMode !== state.renderMode) setViewMode(state.renderMode);
+
+  camera.position.copy(state.cameraPosition);
+  camera.up.copy(state.cameraUp);
+  camera.fov = state.cameraFov;
+  camera.zoom = state.cameraZoom;
+  camera.updateProjectionMatrix();
+  controls.target.copy(state.cameraTarget);
+  controls.update();
+
+  updateAxisLegend();
+  renderAxisList();
+  projectAndRenderAll();
+}
+
 function renderReferenceLinesClean(gridWasVisible: boolean, axesWereVisible: boolean) {
   if (!gridWasVisible && !axesWereVisible) return;
 
@@ -718,6 +921,15 @@ function renderEffectsFrame() {
   gridGroup.visible = gridWasVisible;
   axes.visible = axesWereVisible;
   renderReferenceLinesClean(gridWasVisible, axesWereVisible);
+}
+
+function renderViewportFrame() {
+  projectAndRenderAll();
+  controls.update();
+  updateTransformActionButtons();
+  updateAxisGizmo();
+  if (hasRenderEffects()) renderEffectsFrame();
+  else renderer.render(scene, camera);
 }
 
 function bindRenderEffectControls() {
@@ -896,6 +1108,8 @@ viewportInteraction = new ViewportInteractionController({
   placeVertexMarker,
   pushUndoSnapshot,
   addPrimitiveInstanceAt,
+  insertKeyframe: () => animationTimeline?.addKeyframeAtCurrentFrame(),
+  removeLastKeyframe: () => animationTimeline?.removeLastKeyframe(),
   deleteSelected,
   hasActiveSelection,
   applySliceFilter,
@@ -1072,6 +1286,13 @@ if (M === 0 && extraInstances.length === 0) {
   selectObject(0);
 }
 
+animationTimeline = new KeyframeTimelineController({
+  captureState: captureAnimationState,
+  applyState: applyAnimationState,
+  interpolateState: interpolateAnimationState,
+  onSettingsChange: settings => viewportCapture.setRecordingSettings(settings.fps, settings.frameCount),
+});
+animationTimeline.bind();
 viewportCapture.bindControls();
 modalOverlayController.bindControls();
 bindRenderEffectControls();
@@ -1093,6 +1314,10 @@ new KeyboardShortcutController({
   setViewMode: mode => setViewMode(mode),
   toggleRecording: () => viewportCapture.toggleRecording(),
   captureFrame: () => viewportCapture.captureFrame(),
+  exportAnimation: () => viewportCapture.renderAnimation(),
+  toggleAnimationPlayback: () => animationTimeline?.togglePlayback(),
+  insertKeyframe: () => animationTimeline?.addKeyframeAtCurrentFrame(),
+  removeLastKeyframe: () => animationTimeline?.removeLastKeyframe(),
   toggleEditMode: () => setEditMode(!PARAMS.editMode),
   startTransformFromPointer: mode => viewportInteraction.startTransformFromLastPointer(mode),
   showAddObjectMenuAtPointer: () => viewportInteraction.showAddObjectMenuAtLastPointer(),
@@ -1112,16 +1337,14 @@ const clock = new THREE.Clock();
 
 function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
-  applyAutoRotation(dt);
+  if (animationTimeline?.isPlaying()) {
+    animationTimeline.update(dt);
+  } else if (!animationVideoRendering) {
+    applyAutoRotation(dt);
+  }
 
-  projectAndRenderAll();
-
-  controls.update();
-  keyboardCamera.update(dt);
-  updateTransformActionButtons();
-  updateAxisGizmo();
-  if (hasRenderEffects()) renderEffectsFrame();
-  else renderer.render(scene, camera);
+  if (!animationVideoRendering) keyboardCamera.update(dt);
+  renderViewportFrame();
   requestAnimationFrame(animate);
 }
 animate();

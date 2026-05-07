@@ -11,6 +11,10 @@ type KeyboardShortcutControllerOptions = {
   setViewMode: (mode: ViewMode) => void;
   toggleRecording: () => void;
   captureFrame: () => void;
+  exportAnimation: () => void;
+  toggleAnimationPlayback: () => void;
+  insertKeyframe: () => void;
+  removeLastKeyframe: () => void;
   toggleEditMode: () => void;
   startTransformFromPointer: (mode: TransformMode) => void;
   showAddObjectMenuAtPointer: () => void;
@@ -71,6 +75,29 @@ export class KeyboardShortcutController {
     }
 
     if (this.options.keyboardCamera.handleKeyDown(ev, key)) return;
+
+    if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && !ev.altKey && transformMode === 'none' && key === 'e') {
+      ev.preventDefault();
+      this.options.exportAnimation();
+      return;
+    }
+
+    if (!hasSystemMod && !ev.shiftKey && transformMode === 'none' && ev.code === 'Space') {
+      ev.preventDefault();
+      this.options.toggleAnimationPlayback();
+      return;
+    }
+
+    if (!hasSystemMod && !ev.shiftKey && transformMode === 'none' && key === 'i') {
+      ev.preventDefault();
+      this.options.insertKeyframe();
+      return;
+    }
+    if (!hasSystemMod && !ev.shiftKey && transformMode === 'none' && key === 'u') {
+      ev.preventDefault();
+      this.options.removeLastKeyframe();
+      return;
+    }
 
     if (!hasSystemMod && ev.shiftKey && transformMode === 'none') {
       if (key === 'r') {

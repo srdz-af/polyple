@@ -6,6 +6,7 @@ Use this as a parking lot for larger ideas. Pick an item and it can be broken do
 
 - [ ] Projection timeline and keyframes
   Save states for dimension count, axis order, rotations, perspective axes, background, texture, render mode, bloom, and motion blur, then interpolate between them.
+  Initial implementation covers N-D rotation, projection order/offset, render mode, bloom, motion blur, camera position/target/FOV/zoom, and camera framing. Background, texture, and object-state interpolation are still open.
 
 - [ ] Shareable scene URLs
   Encode the current scene state into the URL so interesting setups can be shared directly.

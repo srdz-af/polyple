@@ -24,7 +24,8 @@ https://srdz-af.github.io/BleND/
 - Vertex edit mode (move vertex)
 - Multiple objects, per-object visibility, rename, delete
 - Per-object surface settings (base color, metallic, roughness, alpha)
-- View modes: wireframe, transparent, solid, faceted
+- View modes: wireframe, transparent, rendered, faceted
+- Projection/camera keyframes with timeline playback
 - Undo/redo
 
 ## Quick Start
@@ -103,7 +104,7 @@ Use these names when referring to the main UI groups:
 - **Projection Controls**: the gizmo panel. It controls which dimensions are projected, how extra dimensions rotate, and how projection axes are arranged.
 - **Scene Controls**: the right-side panel. It controls objects, background, and per-object texture/material settings.
 - **Transformation Controls**: the circular bottom controls. They toggle edit mode and activate move, rotate, and scale.
-- **Render Options**: the rectangular bottom toolbar. It controls viewport render mode, recording, and screenshots.
+- **Render Options**: the rectangular bottom toolbar. It controls viewport render mode, animation playback/rendering, recording, and screenshots.
 
 ## Projection Controls
 
@@ -146,12 +147,19 @@ On mobile, touch and drag a Transformation Control to transform the selected obj
 
 Render Options are the rectangular bottom toolbar.
 
-- Wireframe / Transparent / Solid / Faceted: change viewport render mode
-- Record: start/stop viewport recording
-- Screenshot: download the current viewport frame
+- Wireframe / Transparent / Rendered / Faceted: change viewport render mode
+- Play / Pause or Space: preview the keyframed animation
+- Render menu: set FPS and frame count, render the animation as a video, record the live viewport, or capture a screenshot
+- Timeline: scrub through frames and jump to added keyframes
+- Timeline or canvas right click: insert a keyframe or remove the last keyframe at/before the current frame
+- I: insert keyframe at the current frame
+- U: remove the last keyframe at or before the current frame
+
+Keyframes capture the current N-D rotation, projection axis order, render mode, bloom, motion blur, camera position, camera target, FOV, and zoom. The render button exports the animation from frame 0 through the configured frame count. Live recording captures the viewport until stopped or until the configured frame count elapses.
 
 Shortcuts:
 
 - 1 / 2 / 3 / 4: switch render mode
+- Ctrl+Shift+E: export the animation as video
 - Shift+R: start/stop recording
 - Shift+S: download screenshot

@@ -6,9 +6,24 @@ type ViewportCaptureControllerOptions = {
   camera: THREE.Camera;
   gridGroup: THREE.Object3D;
   axes: THREE.Object3D;
+  renderButton: HTMLButtonElement | null;
   recordButton: HTMLButtonElement | null;
   captureButton: HTMLButtonElement | null;
   timerEl: HTMLSpanElement | null;
+  renderFrame?: () => void;
+  renderAnimationFrame?: (frame: number) => void;
+  onAnimationRenderStart?: () => void;
+  onAnimationRenderStop?: () => void;
+};
+
+type RecordingMode = 'viewport' | 'animation';
+
+type StartRecordingOptions = {
+  mode: RecordingMode;
+  filePrefix: string;
+  autoStopMs: number | null;
+  onStart?: () => void;
+  onStop?: () => void;
 };
 
 const VIDEO_RECORDER_MIME_CANDIDATES = [
@@ -18,7 +33,7 @@ const VIDEO_RECORDER_MIME_CANDIDATES = [
   'video/webm',
   'video/mp4',
 ] as const;
-const VIDEO_RECORDER_FPS = 60;
+const DEFAULT_VIDEO_RECORDER_FPS = 60;
 const VIDEO_RECORDER_MIN_BITRATE = 28_000_000;
 const VIDEO_RECORDER_MAX_BITRATE = 140_000_000;
 
@@ -77,11 +92,25 @@ export class ViewportCaptureController {
   private recordingFinalized = false;
   private recordingStartedAt = 0;
   private recordingTimerIntervalId: number | null = null;
+  private recordingStopTimeoutId: number | null = null;
+  private animationRenderTimeoutId: number | null = null;
+  private recordingFps = DEFAULT_VIDEO_RECORDER_FPS;
+  private recordingFrameCount = 180;
+  private recordingMode: RecordingMode | null = null;
+  private recordingFilePrefix = 'blend-viewport';
+  private recordingStopCallback: (() => void) | null = null;
 
   constructor(private readonly options: ViewportCaptureControllerOptions) {}
 
+  setRecordingSettings(fps: number, frameCount: number) {
+    this.recordingFps = Math.max(1, Math.min(120, Math.round(Number.isFinite(fps) ? fps : DEFAULT_VIDEO_RECORDER_FPS)));
+    this.recordingFrameCount = Math.max(1, Math.min(12000, Math.round(Number.isFinite(frameCount) ? frameCount : 180)));
+  }
+
   bindControls() {
     this.setRecordButtonState(false);
+    this.setRenderButtonState(false);
+    this.options.renderButton?.addEventListener('click', () => this.renderAnimation());
     this.options.recordButton?.addEventListener('click', () => this.toggleRecording());
     this.options.captureButton?.addEventListener('click', () => this.captureFrame());
   }
@@ -91,16 +120,61 @@ export class ViewportCaptureController {
       this.stopRecording();
       return;
     }
-    this.startRecording();
+    this.startRecording({
+      mode: 'viewport',
+      filePrefix: 'blend-viewport',
+      autoStopMs: Math.ceil((this.recordingFrameCount / this.recordingFps) * 1000),
+    });
+  }
+
+  renderAnimation() {
+    if (this.isRecording()) {
+      this.stopRecording();
+      return;
+    }
+    if (!this.options.renderAnimationFrame) {
+      alert('Animation rendering is not configured.');
+      return;
+    }
+
+    const frameCount = this.recordingFrameCount;
+    const frameDelayMs = 1000 / this.recordingFps;
+    let frame = 0;
+
+    const renderNextFrame = () => {
+      if (!this.isRecording() || this.recordingMode !== 'animation') return;
+
+      this.options.renderAnimationFrame?.(frame);
+      this.renderCanvasFrame();
+      this.requestCanvasStreamFrame();
+
+      frame += 1;
+      if (frame >= frameCount) {
+        this.animationRenderTimeoutId = window.setTimeout(() => this.stopRecording(), frameDelayMs);
+        return;
+      }
+      this.animationRenderTimeoutId = window.setTimeout(renderNextFrame, frameDelayMs);
+    };
+
+    this.startRecording({
+      mode: 'animation',
+      filePrefix: 'blend-animation',
+      autoStopMs: null,
+      onStart: () => {
+        this.options.onAnimationRenderStart?.();
+        renderNextFrame();
+      },
+      onStop: () => this.options.onAnimationRenderStop?.(),
+    });
   }
 
   captureFrame() {
-    const { gridGroup, axes, renderer, scene, camera } = this.options;
+    const { gridGroup, axes, renderer } = this.options;
     const previousGridVisibility = gridGroup.visible;
     const previousAxesVisibility = axes.visible;
     gridGroup.visible = false;
     axes.visible = false;
-    renderer.render(scene, camera);
+    this.renderCanvasFrame();
     try {
       const dataUrl = renderer.domElement.toDataURL('image/png');
       const a = document.createElement('a');
@@ -112,7 +186,7 @@ export class ViewportCaptureController {
     } finally {
       gridGroup.visible = previousGridVisibility;
       axes.visible = previousAxesVisibility;
-      renderer.render(scene, camera);
+      this.renderCanvasFrame();
     }
   }
 
@@ -140,6 +214,18 @@ export class ViewportCaptureController {
     timerEl.setAttribute('aria-hidden', 'true');
   }
 
+  private clearRecordingStopTimeout() {
+    if (this.recordingStopTimeoutId == null) return;
+    window.clearTimeout(this.recordingStopTimeoutId);
+    this.recordingStopTimeoutId = null;
+  }
+
+  private clearAnimationRenderTimeout() {
+    if (this.animationRenderTimeoutId == null) return;
+    window.clearTimeout(this.animationRenderTimeoutId);
+    this.animationRenderTimeoutId = null;
+  }
+
   private startRecordingTimer() {
     const { timerEl } = this.options;
     this.stopRecordingTimer();
@@ -154,13 +240,41 @@ export class ViewportCaptureController {
   private setRecordButtonState(recording: boolean) {
     const { recordButton } = this.options;
     if (!recordButton) return;
+    recordButton.disabled = this.recordingMode === 'animation';
     recordButton.classList.toggle('recording', recording);
     recordButton.classList.toggle('active', recording);
     const label = recording ? 'Stop viewport recording (Shift+R)' : 'Record viewport (Shift+R)';
     recordButton.title = label;
     recordButton.setAttribute('aria-label', label);
     const icon = recordButton.querySelector('.material-symbols-rounded');
-    if (icon) icon.textContent = recording ? 'stop' : 'movie';
+    if (icon) icon.textContent = recording ? 'stop' : 'screen_record';
+  }
+
+  private setRenderButtonState(rendering: boolean) {
+    const { renderButton } = this.options;
+    if (!renderButton) return;
+    renderButton.disabled = this.recordingMode === 'viewport';
+    renderButton.classList.toggle('recording', rendering);
+    renderButton.classList.toggle('active', rendering);
+    const label = rendering ? 'Stop animation render' : 'Render animation video (Ctrl+Shift+E)';
+    renderButton.title = label;
+    renderButton.setAttribute('aria-label', label);
+    const icon = renderButton.querySelector('.material-symbols-rounded');
+    if (icon) icon.textContent = rendering ? 'stop' : 'vr180_create2d';
+  }
+
+  private renderCanvasFrame() {
+    const { renderer, scene, camera } = this.options;
+    if (this.options.renderFrame) {
+      this.options.renderFrame();
+      return;
+    }
+    renderer.render(scene, camera);
+  }
+
+  private requestCanvasStreamFrame() {
+    const track = this.recorderStream?.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack | undefined;
+    track?.requestFrame?.();
   }
 
   private recommendedRecordingBitrate() {
@@ -171,7 +285,7 @@ export class ViewportCaptureController {
       : pixelCount >= (2560 * 1440)
         ? 0.2
         : 0.24;
-    const target = Math.round(pixelCount * VIDEO_RECORDER_FPS * bitsPerPixelFrame);
+    const target = Math.round(pixelCount * this.recordingFps * bitsPerPixelFrame);
     return Math.max(VIDEO_RECORDER_MIN_BITRATE, Math.min(VIDEO_RECORDER_MAX_BITRATE, target));
   }
 
@@ -179,21 +293,29 @@ export class ViewportCaptureController {
     if (this.recordingFinalized) return;
     this.recordingFinalized = true;
 
-    const { gridGroup, axes, renderer, scene, camera } = this.options;
+    const { gridGroup, axes } = this.options;
     const mimeType = this.recorderMimeType;
     const chunks = this.recorderChunks;
     const stream = this.recorderStream;
+    const filePrefix = this.recordingFilePrefix;
+    const stopCallback = this.recordingStopCallback;
 
     this.recorder = null;
     this.recorderStream = null;
     this.recorderChunks = [];
+    this.clearRecordingStopTimeout();
+    this.clearAnimationRenderTimeout();
 
     stream?.getTracks().forEach(track => track.stop());
     gridGroup.visible = this.gridVisibleBeforeCapture;
     axes.visible = this.axesVisibleBeforeCapture;
-    renderer.render(scene, camera);
+    this.renderCanvasFrame();
     this.stopRecordingTimer();
+    this.recordingMode = null;
+    this.recordingStopCallback = null;
     this.setRecordButtonState(false);
+    this.setRenderButtonState(false);
+    stopCallback?.();
 
     if (!downloadVideo) return;
     if (chunks.length === 0) {
@@ -202,11 +324,12 @@ export class ViewportCaptureController {
     }
     const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
     const ext = recordingFileExtensionFromMime(blob.type || mimeType);
-    downloadBlob(`blend-viewport-${captureTimestamp()}.${ext}`, blob);
+    downloadBlob(`${filePrefix}-${captureTimestamp()}.${ext}`, blob);
   }
 
   private stopRecording() {
     if (!this.recorder) return;
+    this.clearAnimationRenderTimeout();
     try {
       if (this.recorder.state !== 'inactive') {
         this.recorder.stop();
@@ -218,19 +341,19 @@ export class ViewportCaptureController {
     }
   }
 
-  private startRecording() {
+  private startRecording(options: StartRecordingOptions) {
     if (typeof MediaRecorder === 'undefined') {
       alert('Viewport recording is not supported in this browser.');
-      return;
+      return false;
     }
-    const { renderer, gridGroup, axes, scene, camera } = this.options;
+    const { renderer, gridGroup, axes } = this.options;
     const captureStream = renderer.domElement.captureStream?.bind(renderer.domElement);
     if (!captureStream) {
       alert('Viewport recording is not supported in this browser.');
-      return;
+      return false;
     }
 
-    const stream = captureStream(VIDEO_RECORDER_FPS);
+    const stream = captureStream(this.recordingFps);
     const mimeType = pickRecorderMimeType();
     const videoBitsPerSecond = this.recommendedRecordingBitrate();
     let recorder: MediaRecorder;
@@ -246,7 +369,7 @@ export class ViewportCaptureController {
       } catch {
         stream.getTracks().forEach(track => track.stop());
         alert('Unable to start viewport recording.');
-        return;
+        return false;
       }
     }
 
@@ -256,6 +379,9 @@ export class ViewportCaptureController {
     this.recorderMimeType = recorder.mimeType || mimeType || 'video/webm';
     this.gridVisibleBeforeCapture = gridGroup.visible;
     this.axesVisibleBeforeCapture = axes.visible;
+    this.recordingMode = options.mode;
+    this.recordingFilePrefix = options.filePrefix;
+    this.recordingStopCallback = options.onStop ?? null;
     this.recordingFinalized = false;
 
     recorder.ondataavailable = ev => {
@@ -271,15 +397,22 @@ export class ViewportCaptureController {
 
     gridGroup.visible = false;
     axes.visible = false;
-    renderer.render(scene, camera);
-    this.setRecordButtonState(true);
+    this.renderCanvasFrame();
+    this.setRecordButtonState(options.mode === 'viewport');
+    this.setRenderButtonState(options.mode === 'animation');
     this.startRecordingTimer();
 
     try {
       recorder.start(200);
+      if (options.autoStopMs != null) {
+        this.recordingStopTimeoutId = window.setTimeout(() => this.stopRecording(), options.autoStopMs);
+      }
+      options.onStart?.();
+      return true;
     } catch {
       this.finalizeRecording(false);
       alert('Unable to start viewport recording.');
+      return false;
     }
   }
 }

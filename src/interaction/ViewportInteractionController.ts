@@ -42,6 +42,8 @@ type ViewportInteractionControllerOptions = {
   placeVertexMarker: (instIdx: number, vertexIdx: number) => void;
   pushUndoSnapshot: () => void;
   addPrimitiveInstanceAt: (kind: PrimitiveKind, label: string, offset: THREE.Vector3, syncMode?: boolean) => void;
+  insertKeyframe: () => void;
+  removeLastKeyframe: () => void;
   deleteSelected: () => void;
   hasActiveSelection: () => boolean;
   applySliceFilter: () => void;
@@ -91,6 +93,8 @@ export class ViewportInteractionController {
     menu.replaceChildren();
     menu.classList.add('primitive-menu');
     const spawnPoint = this.pickPointOnTargetPlane({ clientX: this.lastPointer.x, clientY: this.lastPointer.y });
+    this.appendKeyframeActions(menu);
+    this.appendMenuSeparator(menu);
     for (const opt of this.options.primitiveMenuOptions) {
       const btn = document.createElement('button');
       btn.textContent = opt.label;
@@ -245,6 +249,8 @@ export class ViewportInteractionController {
       this.appendTransformAction(menu, 'Move vertex', 'move', ev);
     } else if (!this.options.hasActiveSelection()) {
       menu.classList.add('primitive-menu');
+      this.appendKeyframeActions(menu);
+      this.appendMenuSeparator(menu);
       for (const opt of this.options.primitiveMenuOptions) {
         const btn = document.createElement('button');
         btn.textContent = opt.label;
@@ -275,6 +281,30 @@ export class ViewportInteractionController {
     const y = Math.max(12, Math.min(clientY, window.innerHeight - 150));
     menu.style.left = `${x}px`;
     menu.style.top = `${y}px`;
+  }
+
+  private appendKeyframeActions(menu: HTMLDivElement) {
+    const insert = document.createElement('button');
+    insert.textContent = 'Insert keyframe';
+    insert.onclick = () => {
+      menu.style.display = 'none';
+      this.options.insertKeyframe();
+    };
+
+    const remove = document.createElement('button');
+    remove.textContent = 'Remove last keyframe';
+    remove.onclick = () => {
+      menu.style.display = 'none';
+      this.options.removeLastKeyframe();
+    };
+
+    menu.append(insert, remove);
+  }
+
+  private appendMenuSeparator(menu: HTMLDivElement) {
+    const separator = document.createElement('div');
+    separator.className = 'context-menu-separator';
+    menu.appendChild(separator);
   }
 
   private handleWheel(ev: WheelEvent) {
