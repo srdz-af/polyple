@@ -269,6 +269,17 @@ export class BackgroundController {
 
   async initializeSelector() {
     if (!this.selectorEl || this.swatchButtons.length === 0) return;
+    const swatchesStrip = this.selectorEl.querySelector<HTMLDivElement>('#background-swatches');
+    if (swatchesStrip && swatchesStrip.dataset.wheelScrollBound !== 'true') {
+      swatchesStrip.dataset.wheelScrollBound = 'true';
+      swatchesStrip.addEventListener('wheel', ev => {
+        if (swatchesStrip.scrollWidth <= swatchesStrip.clientWidth) return;
+        const delta = Math.abs(ev.deltaY) >= Math.abs(ev.deltaX) ? ev.deltaY : ev.deltaX;
+        if (Math.abs(delta) < 0.01) return;
+        swatchesStrip.scrollLeft += delta;
+        ev.preventDefault();
+      }, { passive: false });
+    }
 
     this.swatchButtons.forEach(button => {
       const key = normalizeBackgroundKey(button.dataset.hdri);
