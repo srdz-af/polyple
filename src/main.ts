@@ -9,7 +9,12 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { MAX_N, type ViewMode } from './constants';
 import { RotND } from './RotND';
 import { NDProjector, canonicalP } from './geometry/NDProjector';
-import { buildPrimitive, type PrimitiveKind } from './geometry/primitives';
+import {
+  buildPrimitive,
+  clonePrimitiveSurfaceTopology,
+  type PrimitiveKind,
+  type PrimitiveSurfaceTopology,
+} from './geometry/primitives';
 import {
   canonicalAxisMap,
   embedToMax,
@@ -355,6 +360,7 @@ let baseOriginalN = 0;
 let baseAxisMap: AxisMap = Array.from({ length: MAX_N }, (_, i) => i);
 let baseVisible = true;
 let baseSurface: SurfaceState = cloneSurface(DEFAULT_SURFACE);
+let baseSurfaceTopology: PrimitiveSurfaceTopology | undefined;
 keyboardCamera = new KeyboardCameraController({
   camera,
   controls,
@@ -376,6 +382,7 @@ function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
     N,
     X: new Float32Array(X),
     E: new Uint32Array(E),
+    surfaceTopology: clonePrimitiveSurfaceTopology(baseSurfaceTopology),
     M,
     source: dataSource,
     label: baseLabel,
@@ -394,6 +401,7 @@ function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
     instances: extraInstances.map(inst => ({
       X: new Float32Array(inst.X),
       E: new Uint32Array(inst.E),
+      surfaceTopology: clonePrimitiveSurfaceTopology(inst.surfaceTopology),
       M: inst.M,
       offset: inst.offset.clone(),
       label: inst.label,
@@ -422,7 +430,7 @@ function redoSceneSnapshot() {
 function applySnapshot(snap: SceneSnapshot<PrimitiveMode>) {
   PARAMS.N = snap.paramsN;
   PARAMS.primitive = snap.primitive;
-  rebuildState(snap.N, snap.X, snap.E, snap.source, snap.baseOrigN, snap.baseAxisMap);
+  rebuildState(snap.N, snap.X, snap.E, snap.source, snap.baseOrigN, snap.baseAxisMap, snap.surfaceTopology);
   if (snap.rotMatrix.length === rot.matrix.length) rot.matrix.set(snap.rotMatrix);
   baseLabel = snap.label;
   PARAMS.axesX = snap.axes.x; PARAMS.axesY = snap.axes.y; PARAMS.axesZ = snap.axes.z;
@@ -638,7 +646,7 @@ const objectListController = new ObjectListController({
 
 function restoreInstanceSnapshot(snap: InstanceSnapshot): Instance {
   const instanceRenderer = new HypercubeRenderer(scene);
-  instanceRenderer.build(snap.M, snap.E);
+  instanceRenderer.build(snap.M, snap.E, snap.surfaceTopology);
   const surface = normalizeSurface(snap.surface);
   instanceRenderer.setSurface(surface);
   instanceRenderer.setMode(PARAMS.renderMode);
@@ -648,6 +656,7 @@ function restoreInstanceSnapshot(snap: InstanceSnapshot): Instance {
     Y: new Float32Array(3 * snap.M),
     X: new Float32Array(snap.X),
     E: new Uint32Array(snap.E),
+    surfaceTopology: clonePrimitiveSurfaceTopology(snap.surfaceTopology),
     M: snap.M,
     offset: snap.offset.clone(),
     label: snap.label,
@@ -662,7 +671,7 @@ function restoreInstanceSnapshot(snap: InstanceSnapshot): Instance {
 
 const rendererND = new HypercubeRenderer(scene);
 if (M > 0) {
-  rendererND.build(M, E);
+  rendererND.build(M, E, baseSurfaceTopology);
   rendererND.setMode('solid');
 }
 
@@ -1093,6 +1102,7 @@ function handleTransformConstraintKey(key: string) {
 
 const primitiveMenuOptions: { label: string; kind: PrimitiveKind }[] = [
   { label: 'Hypercube', kind: 'hypercube' },
+  { label: 'Spiked hypercube', kind: 'spikedHypercube' },
   { label: 'Cross polytope', kind: 'cross' },
   { label: 'Simplex', kind: 'simplex' },
   { label: 'Simplex prism', kind: 'simplexPrism' },
@@ -1141,6 +1151,7 @@ function createPrimitiveData(kind: PrimitiveKind, dimension: number): InstanceGe
   return {
     verts: embedToMax(data.verts, dimension, axisMap),
     edges: data.edges,
+    surfaceTopology: clonePrimitiveSurfaceTopology(data.surfaceTopology),
     V: data.V,
     kind,
     axisMap,
@@ -1185,6 +1196,7 @@ function addInstanceAt(offset: THREE.Vector3, recordUndo = true) {
     data = {
       verts: new Float32Array(X),
       edges: new Uint32Array(E),
+      surfaceTopology: clonePrimitiveSurfaceTopology(baseSurfaceTopology),
       V: M,
       kind: PARAMS.primitive,
       axisMap: [...baseAxisMap],
@@ -1198,7 +1210,15 @@ function addInstanceAt(offset: THREE.Vector3, recordUndo = true) {
   insertInstance(data, offset, label, surface);
 }
 
-function rebuildState(newN: number, newX: Float32Array, newE: Uint32Array, source: DataSource, localN?: number, axisMap?: AxisMap) {
+function rebuildState(
+  newN: number,
+  newX: Float32Array,
+  newE: Uint32Array,
+  source: DataSource,
+  localN?: number,
+  axisMap?: AxisMap,
+  surfaceTopology?: PrimitiveSurfaceTopology,
+) {
   axisController.clearDynamicState();
   viewportInteraction?.cancelAxisShiftDrag();
   controls.enableZoom = true;
@@ -1227,13 +1247,14 @@ function rebuildState(newN: number, newX: Float32Array, newE: Uint32Array, sourc
   baseOriginalN = localN ?? visibleDims();
   baseAxisMap = normalizeAxisMap(axisMap, baseOriginalN);
   baseSurface = cloneSurface(DEFAULT_SURFACE);
+  baseSurfaceTopology = clonePrimitiveSurfaceTopology(surfaceTopology);
   axisController.resetAxisOrder(N);
   PARAMS.axesX = axisController.axesOrder[0] ?? 0;
   PARAMS.axesY = axisController.axesOrder[1] ?? 1;
   PARAMS.axesZ = axisController.axesOrder[2] ?? 2;
   if (PARAMS.sliceDim >= ambientN) PARAMS.sliceDim = ambientN - 1;
   if (M > 0) {
-    rendererND.build(M, E);
+    rendererND.build(M, E, baseSurfaceTopology);
     rendererND.setSurface(baseSurface);
     rendererND.setMode(PARAMS.renderMode);
     if (setViewMode) setViewMode(currentMode);
@@ -1264,7 +1285,7 @@ function resetToIsometric() {
   const rebuilt = buildPrimitive(PARAMS.primitive, targetN);
   const axisMap = canonicalAxisMap(targetN);
   const embedded = embedToMax(rebuilt.verts, targetN, axisMap);
-  rebuildState(MAX_N, embedded, rebuilt.edges, 'primitive', targetN, axisMap);
+  rebuildState(MAX_N, embedded, rebuilt.edges, 'primitive', targetN, axisMap, rebuilt.surfaceTopology);
 
   controls.reset();
   camera.position.copy(DEFAULT_CAMERA_POSITION);

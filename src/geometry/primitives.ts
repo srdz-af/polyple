@@ -1,5 +1,6 @@
 export type PrimitiveKind =
   | 'hypercube'
+  | 'spikedHypercube'
   | 'cross'
   | 'simplex'
   | 'simplexPrism'
@@ -7,15 +8,31 @@ export type PrimitiveKind =
   | 'cell24'
   | 'duoprism';
 
+export type PrimitiveSurfaceTopology = {
+  triangles: Uint32Array;
+  facetIds: Uint16Array;
+};
+
 export type PrimitiveGeometry = {
   verts: Float32Array;
   edges: Uint32Array;
+  surfaceTopology?: PrimitiveSurfaceTopology;
   V: number;
 };
 
 function addEdge(edges: number[], a: number, b: number) {
   if (a === b) return;
   edges.push(a, b);
+}
+
+export function clonePrimitiveSurfaceTopology(
+  topology?: PrimitiveSurfaceTopology,
+): PrimitiveSurfaceTopology | undefined {
+  if (!topology) return undefined;
+  return {
+    triangles: new Uint32Array(topology.triangles),
+    facetIds: new Uint16Array(topology.facetIds),
+  };
 }
 
 function normalizeToHalfExtent(verts: Float32Array) {
@@ -67,6 +84,78 @@ export function hypercubeEdges(N: number): PrimitiveGeometry {
   }
 
   return { verts, edges: new Uint32Array(edges), V };
+}
+
+export function spikedHypercubeEdges(N: number): PrimitiveGeometry {
+  const cornerCount = 1 << N;
+  const apexCount = 2 * N;
+  const V = cornerCount + apexCount;
+  const verts = new Float32Array(N * V);
+  const baseExtent = 0.28;
+  const spikeExtent = 0.5;
+
+  for (let v = 0; v < cornerCount; v++) {
+    for (let d = 0; d < N; d++) {
+      verts[d * V + v] = ((v >> d) & 1) ? baseExtent : -baseExtent;
+    }
+  }
+
+  const apexIndex = (axis: number, positive: boolean) => cornerCount + axis * 2 + (positive ? 1 : 0);
+  for (let axis = 0; axis < N; axis++) {
+    const negativeApex = apexIndex(axis, false);
+    const positiveApex = apexIndex(axis, true);
+    verts[axis * V + negativeApex] = -spikeExtent;
+    verts[axis * V + positiveApex] = spikeExtent;
+  }
+
+  const edges: number[] = [];
+  for (let v = 0; v < cornerCount; v++) {
+    for (let d = 0; d < N; d++) {
+      const u = v ^ (1 << d);
+      if (u > v) addEdge(edges, v, u);
+    }
+  }
+
+  for (let axis = 0; axis < N; axis++) {
+    for (const positive of [false, true]) {
+      const apex = apexIndex(axis, positive);
+      const bitValue = positive ? 1 : 0;
+      for (let v = 0; v < cornerCount; v++) {
+        if (((v >> axis) & 1) === bitValue) addEdge(edges, apex, v);
+      }
+    }
+  }
+
+  const triangles: number[] = [];
+  const facetIds: number[] = [];
+  let facetId = 0;
+  for (let axis = 0; axis < N; axis++) {
+    for (const positive of [false, true]) {
+      const apex = apexIndex(axis, positive);
+      const bitValue = positive ? 1 : 0;
+      for (let edgeAxis = 0; edgeAxis < N; edgeAxis++) {
+        if (edgeAxis === axis) continue;
+        const edgeBit = 1 << edgeAxis;
+        for (let base = 0; base < cornerCount; base++) {
+          if (((base >> axis) & 1) !== bitValue) continue;
+          if ((base & edgeBit) !== 0) continue;
+          triangles.push(apex, base, base | edgeBit);
+          facetIds.push(facetId);
+        }
+      }
+      facetId++;
+    }
+  }
+
+  return {
+    verts,
+    edges: new Uint32Array(edges),
+    surfaceTopology: {
+      triangles: new Uint32Array(triangles),
+      facetIds: new Uint16Array(facetIds),
+    },
+    V,
+  };
 }
 
 export function crossPolytopeEdges(N: number): PrimitiveGeometry {
@@ -275,6 +364,8 @@ export function buildPrimitive(kind: PrimitiveKind, N: number): PrimitiveGeometr
   switch (kind) {
     case 'hypercube':
       return hypercubeEdges(N);
+    case 'spikedHypercube':
+      return spikedHypercubeEdges(N);
     case 'cross':
       return crossPolytopeEdges(N);
     case 'simplex':

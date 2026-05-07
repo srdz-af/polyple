@@ -23,7 +23,7 @@ const FACET_LIGHTNESS_STOPS = [0.40, 0.54, 0.68];
 const FACET_SATURATION = 0.92;
 const FACET_COLOR_COUNT = FACET_HUE_STOPS.length * FACET_LIGHTNESS_STOPS.length;
 
-type SurfaceTopology = {
+export type SurfaceTopology = {
   triangles: Uint32Array;
   facetIds: Uint16Array;
 };
@@ -87,7 +87,7 @@ export class HypercubeRenderer {
     });
   }
 
-  build(M: number, edges: Uint32Array): void {
+  build(M: number, edges: Uint32Array, surfaceTopology?: SurfaceTopology): void {
     this.dispose();
     this.M = M;
     this.allEdges = edges;
@@ -113,7 +113,10 @@ export class HypercubeRenderer {
 
     this.surfaceNeedsUpdate = true;
     this.visibleVertexMask = undefined;
-    this.surfaceTopology = undefined;
+    this.surfaceTopology = surfaceTopology ? {
+      triangles: new Uint32Array(surfaceTopology.triangles),
+      facetIds: new Uint16Array(surfaceTopology.facetIds),
+    } : undefined;
     this.facetColorCache.clear();
     this.hullBuilder.reset(M, edges);
   }
@@ -352,6 +355,9 @@ export class HypercubeRenderer {
   private buildSurfaceTopologyFromCurrentPoints(): SurfaceTopology | undefined {
     if (this.points.length < 4) return undefined;
 
+    const hypercubeTopology = this.buildHypercubeSurfaceTopology();
+    if (hypercubeTopology) return hypercubeTopology;
+
     let hull: ConvexHull;
     try {
       hull = new ConvexHull().setFromPoints(this.points);
@@ -376,6 +382,40 @@ export class HypercubeRenderer {
         if (anchor === b || b === c || anchor === c) continue;
         triangles.push(anchor, b, c);
         facetIds.push(facetIdsByFace[faceIdx]);
+      }
+    }
+
+    if (triangles.length < 3 || facetIds.length === 0) return undefined;
+    return {
+      triangles: new Uint32Array(triangles),
+      facetIds: new Uint16Array(facetIds),
+    };
+  }
+
+  private buildHypercubeSurfaceTopology(): SurfaceTopology | undefined {
+    const dim = this.detectHypercubeDimension(this.M, this.allEdges);
+    if (dim <= 0 || dim > 30) return undefined;
+
+    const triangles: number[] = [];
+    const facetIds: number[] = [];
+    let facetId = 0;
+    const vertexCount = this.M;
+
+    for (let axisA = 0; axisA < dim; axisA++) {
+      for (let axisB = axisA + 1; axisB < dim; axisB++) {
+        const bitA = 1 << axisA;
+        const bitB = 1 << axisB;
+        for (let base = 0; base < vertexCount; base++) {
+          if ((base & bitA) !== 0 || (base & bitB) !== 0) continue;
+          const v00 = base;
+          const v10 = base | bitA;
+          const v01 = base | bitB;
+          const v11 = base | bitA | bitB;
+
+          triangles.push(v00, v10, v11, v00, v11, v01);
+          facetIds.push(facetId, facetId);
+          facetId++;
+        }
       }
     }
 
@@ -447,6 +487,30 @@ export class HypercubeRenderer {
     const color = new THREE.Color().setHSL(hue / 360, FACET_SATURATION, lightness);
     this.facetColorCache.set(facetId, color);
     return color;
+  }
+
+  private detectHypercubeDimension(vertexCount: number, edges: Uint32Array<ArrayBufferLike>): number {
+    if (vertexCount < 4 || (vertexCount & (vertexCount - 1)) !== 0) return 0;
+    const dim = Math.log2(vertexCount);
+    if (!Number.isInteger(dim) || dim <= 0) return 0;
+    const expectedEdgeCount = (vertexCount * dim) / 2;
+    if ((edges.length & 1) !== 0 || (edges.length / 2) !== expectedEdgeCount) return 0;
+
+    const degree = new Uint16Array(vertexCount);
+    for (let i = 0; i < edges.length; i += 2) {
+      const a = edges[i];
+      const b = edges[i + 1];
+      if (a >= vertexCount || b >= vertexCount || a === b) return 0;
+      const xor = a ^ b;
+      if (xor === 0 || (xor & (xor - 1)) !== 0) return 0;
+      degree[a]++;
+      degree[b]++;
+    }
+    for (let i = 0; i < vertexCount; i++) {
+      if (degree[i] !== dim) return 0;
+    }
+
+    return dim;
   }
 
 }
