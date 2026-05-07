@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { ConvexHull, type Face } from 'three/examples/jsm/math/ConvexHull.js';
 import type { ViewMode } from '../constants';
 import { HullGeometryBuilder, type VertexPoint } from './hullGeometry';
 
@@ -15,6 +16,22 @@ const DEFAULT_SURFACE: SurfaceMaterial = {
   alpha: 1.0,
 };
 const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+const COPLANAR_NORMAL_EPS = 1e-4;
+const COPLANAR_CONST_EPS = 1e-4;
+const FACET_HUE_STOPS = [0, 20, 40, 55, 80, 105, 130, 155, 180, 205, 230, 255, 280, 305, 330];
+const FACET_LIGHTNESS_STOPS = [0.40, 0.54, 0.68];
+const FACET_SATURATION = 0.92;
+const FACET_COLOR_COUNT = FACET_HUE_STOPS.length * FACET_LIGHTNESS_STOPS.length;
+
+type SurfaceTopology = {
+  triangles: Uint32Array;
+  facetIds: Uint16Array;
+};
+
+type FaceInfo = {
+  face: Face;
+  planeConstant: number;
+};
 
 export class HypercubeRenderer {
   scene: THREE.Scene;
@@ -31,12 +48,14 @@ export class HypercubeRenderer {
   private solidMaterial: THREE.MeshStandardMaterial;
   private facetedMaterial: THREE.MeshStandardMaterial;
   private mode: ViewMode = 'wireframe';
-  private hullNeedsUpdate = false;
+  private surfaceNeedsUpdate = false;
   private points: VertexPoint[] = [];
   private visibleVertexMask?: Uint8Array;
   private transform = new THREE.Matrix4();
   private tmp = new THREE.Vector3();
   private surface: SurfaceMaterial = { ...DEFAULT_SURFACE };
+  private surfaceTopology?: SurfaceTopology;
+  private facetColorCache = new Map<number, THREE.Color>();
   private hullBuilder = new HullGeometryBuilder();
 
   constructor(scene: THREE.Scene) {
@@ -92,8 +111,10 @@ export class HypercubeRenderer {
     this.mesh.visible = this.mode !== 'wireframe';
     this.group.add(this.mesh);
 
-    this.hullNeedsUpdate = true;
+    this.surfaceNeedsUpdate = true;
     this.visibleVertexMask = undefined;
+    this.surfaceTopology = undefined;
+    this.facetColorCache.clear();
     this.hullBuilder.reset(M, edges);
   }
 
@@ -123,7 +144,7 @@ export class HypercubeRenderer {
     this.geometry.computeBoundingBox();
 
     if (this.mode !== 'wireframe') {
-      this.hullNeedsUpdate = true;
+      this.surfaceNeedsUpdate = true;
       this.updateHullGeometry();
     }
   }
@@ -143,7 +164,7 @@ export class HypercubeRenderer {
       if (mode !== 'faceted') this.applySurfaceMaterial();
     }
 
-    this.hullNeedsUpdate = mode !== 'wireframe';
+    this.surfaceNeedsUpdate = mode !== 'wireframe';
     if (mode !== 'wireframe') this.updateHullGeometry();
   }
 
@@ -193,7 +214,7 @@ export class HypercubeRenderer {
 
   refreshSurface(): void {
     if (this.mode === 'wireframe' || !this.mesh) return;
-    this.hullNeedsUpdate = true;
+    this.surfaceNeedsUpdate = true;
     this.updateHullGeometry();
   }
 
@@ -230,8 +251,31 @@ export class HypercubeRenderer {
   }
 
   private updateHullGeometry(): void {
-    if (!this.mesh || !this.hullNeedsUpdate || this.mode === 'wireframe') return;
+    if (!this.mesh || !this.surfaceNeedsUpdate || this.mode === 'wireframe') return;
 
+    if (!this.surfaceTopology) this.surfaceTopology = this.buildSurfaceTopologyFromCurrentPoints();
+    const geometry = this.surfaceTopology
+      ? this.buildSurfaceGeometryFromTopology(this.surfaceTopology)
+      : this.buildSurfaceGeometryFromHullFallback();
+    const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+    if (!positionAttr || positionAttr.count < 3) {
+      this.mesh.geometry.dispose();
+      this.mesh.geometry = geometry;
+      this.mesh.visible = false;
+      this.surfaceNeedsUpdate = false;
+      return;
+    }
+
+    geometry.computeVertexNormals();
+    geometry.computeBoundingSphere();
+    geometry.computeBoundingBox();
+    this.mesh.geometry.dispose();
+    this.mesh.geometry = geometry;
+    this.mesh.visible = true;
+    this.surfaceNeedsUpdate = false;
+  }
+
+  private buildSurfaceGeometryFromHullFallback(): THREE.BufferGeometry {
     const indices = this.visibleVertexMask
       ? this.points.reduce<number[]>((acc, _p, idx) => {
           if (this.visibleVertexMask![idx] === 1) acc.push(idx);
@@ -239,28 +283,170 @@ export class HypercubeRenderer {
         }, [])
       : this.points.map((_p, idx) => idx);
 
-    if (indices.length < 4) {
-      this.mesh.visible = false;
-      this.hullNeedsUpdate = false;
-      return;
+    if (indices.length < 4) return new THREE.BufferGeometry();
+    return this.hullBuilder.build(indices.map(idx => this.points[idx]));
+  }
+
+  private buildSurfaceGeometryFromTopology(topology: SurfaceTopology): THREE.BufferGeometry {
+    const triangles = topology.triangles;
+    const facetIds = topology.facetIds;
+    if (triangles.length < 3 || facetIds.length * 3 !== triangles.length) return new THREE.BufferGeometry();
+
+    const keep = this.visibleVertexMask;
+    let visibleTriangleCount = 0;
+    for (let i = 0; i < triangles.length; i += 3) {
+      const a = triangles[i];
+      const b = triangles[i + 1];
+      const c = triangles[i + 2];
+      if (keep && !(keep[a] && keep[b] && keep[c])) continue;
+      visibleTriangleCount++;
+    }
+    if (visibleTriangleCount <= 0) return new THREE.BufferGeometry();
+
+    const positions = new Float32Array(visibleTriangleCount * 9);
+    const colors = this.mode === 'faceted' ? new Float32Array(visibleTriangleCount * 9) : null;
+    let vertexWrite = 0;
+    let colorWrite = 0;
+    let triangleWrite = 0;
+
+    for (let i = 0; i < triangles.length; i += 3) {
+      const a = triangles[i];
+      const b = triangles[i + 1];
+      const c = triangles[i + 2];
+      if (keep && !(keep[a] && keep[b] && keep[c])) continue;
+
+      const pa = this.points[a];
+      const pb = this.points[b];
+      const pc = this.points[c];
+      positions[vertexWrite++] = pa.x;
+      positions[vertexWrite++] = pa.y;
+      positions[vertexWrite++] = pa.z;
+      positions[vertexWrite++] = pb.x;
+      positions[vertexWrite++] = pb.y;
+      positions[vertexWrite++] = pb.z;
+      positions[vertexWrite++] = pc.x;
+      positions[vertexWrite++] = pc.y;
+      positions[vertexWrite++] = pc.z;
+
+      if (colors) {
+        const facetId = facetIds[i / 3] ?? 0;
+        const color = this.facetColorForFacet(facetId);
+        for (let v = 0; v < 3; v++) {
+          colors[colorWrite++] = color.r;
+          colors[colorWrite++] = color.g;
+          colors[colorWrite++] = color.b;
+        }
+      }
+
+      triangleWrite++;
     }
 
-    const geometry = this.hullBuilder.build(indices.map(idx => this.points[idx]));
-    const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
-    if (!positionAttr || positionAttr.count < 3) {
-      this.mesh.geometry.dispose();
-      this.mesh.geometry = geometry;
-      this.mesh.visible = false;
-      this.hullNeedsUpdate = false;
-      return;
+    if (triangleWrite <= 0) return new THREE.BufferGeometry();
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    if (colors) geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    return geometry;
+  }
+
+  private buildSurfaceTopologyFromCurrentPoints(): SurfaceTopology | undefined {
+    if (this.points.length < 4) return undefined;
+
+    let hull: ConvexHull;
+    try {
+      hull = new ConvexHull().setFromPoints(this.points);
+    } catch {
+      return undefined;
     }
 
-    geometry.computeVertexNormals();
-    geometry.computeBoundingSphere();
-    this.mesh.geometry.dispose();
-    this.mesh.geometry = geometry;
-    this.mesh.visible = true;
-    this.hullNeedsUpdate = false;
+    const faceInfos = hull.faces.map(face => this.collectFaceInfo(face));
+    if (faceInfos.length === 0) return undefined;
+
+    const facetIdsByFace = this.groupCoplanarFaces(faceInfos);
+    const triangles: number[] = [];
+    const facetIds: number[] = [];
+
+    for (let faceIdx = 0; faceIdx < faceInfos.length; faceIdx++) {
+      const polygon = this.collectFacePolygon(faceInfos[faceIdx].face);
+      if (polygon.length < 3) continue;
+      const anchor = polygon[0].__vertexId;
+      for (let i = 1; i < polygon.length - 1; i++) {
+        const b = polygon[i].__vertexId;
+        const c = polygon[i + 1].__vertexId;
+        if (anchor === b || b === c || anchor === c) continue;
+        triangles.push(anchor, b, c);
+        facetIds.push(facetIdsByFace[faceIdx]);
+      }
+    }
+
+    if (triangles.length < 3 || facetIds.length === 0) return undefined;
+    return {
+      triangles: new Uint32Array(triangles),
+      facetIds: new Uint16Array(facetIds),
+    };
+  }
+
+  private collectFacePolygon(face: Face): VertexPoint[] {
+    const polygon: VertexPoint[] = [];
+    let edge = face.edge;
+    do {
+      polygon.push(edge.head().point as VertexPoint);
+      edge = edge.next;
+    } while (edge !== face.edge);
+    return polygon;
+  }
+
+  private collectFaceInfo(face: Face): FaceInfo {
+    const polygon = this.collectFacePolygon(face);
+    const planeConstant = polygon.length > 0 ? face.normal.dot(polygon[0]) : 0;
+    return { face, planeConstant };
+  }
+
+  private groupCoplanarFaces(faceInfos: FaceInfo[]): Uint16Array {
+    const assigned = new Uint8Array(faceInfos.length);
+    const facetIdsByFace = new Uint16Array(faceInfos.length);
+    let nextFacetId = 0;
+
+    for (let i = 0; i < faceInfos.length; i++) {
+      if (assigned[i]) continue;
+      assigned[i] = 1;
+      facetIdsByFace[i] = nextFacetId;
+      for (let j = i + 1; j < faceInfos.length; j++) {
+        if (assigned[j]) continue;
+        if (!this.areCoplanar(faceInfos[i], faceInfos[j])) continue;
+        assigned[j] = 1;
+        facetIdsByFace[j] = nextFacetId;
+      }
+      nextFacetId++;
+    }
+
+    return facetIdsByFace;
+  }
+
+  private areCoplanar(a: FaceInfo, b: FaceInfo): boolean {
+    const normalDot = a.face.normal.dot(b.face.normal);
+    if (Math.abs(normalDot) < (1 - COPLANAR_NORMAL_EPS)) return false;
+    const scale = Math.max(1, Math.abs(a.planeConstant), Math.abs(b.planeConstant));
+    if (normalDot >= 0) {
+      return Math.abs(a.planeConstant - b.planeConstant) <= (COPLANAR_CONST_EPS * scale);
+    }
+    return Math.abs(a.planeConstant + b.planeConstant) <= (COPLANAR_CONST_EPS * scale);
+  }
+
+  private facetColorForFacet(facetId: number): THREE.Color {
+    const cached = this.facetColorCache.get(facetId);
+    if (cached) return cached;
+
+    const colorIdx = ((facetId % FACET_COLOR_COUNT) + FACET_COLOR_COUNT) % FACET_COLOR_COUNT;
+    const hueIdx = colorIdx % FACET_HUE_STOPS.length;
+    const lightnessIdx = Math.floor(colorIdx / FACET_HUE_STOPS.length) % FACET_LIGHTNESS_STOPS.length;
+    const hue = FACET_HUE_STOPS[hueIdx];
+    let lightness = FACET_LIGHTNESS_STOPS[lightnessIdx];
+    if (hue >= 45 && hue <= 75) lightness = Math.max(0.34, lightness - 0.08);
+
+    const color = new THREE.Color().setHSL(hue / 360, FACET_SATURATION, lightness);
+    this.facetColorCache.set(facetId, color);
+    return color;
   }
 
 }
