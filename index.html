@@ -5,7 +5,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/x-icon" href="./favicon.ico" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=1k,2k,add,chevron_left,chevron_right,delete,deployed_code,edit,help,keyboard_arrow_down,keyboard_arrow_up,open_with,pause,play_arrow,refresh,screen_record,screenshot_frame_2,settings,speed_1_5x,speed_2x,stop,sync_alt,visibility,visibility_off,vr180_create2d,vrpano,zoom_out_map&display=block" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=1k,2k,add,chevron_left,chevron_right,delete,edit,filter_b_and_w,grid_on,help,high_quality,imagesmode,keyboard_arrow_down,keyboard_arrow_up,open_with,pause,play_arrow,refresh,screen_record,screenshot_frame_2,settings,speed_1_5x,speed_2x,stop,sync_alt,visibility,visibility_off,vr180_create2d,vrpano,zoom_out_map&display=block" />
     <title>BleND</title>
     <style>
       :root {
@@ -357,7 +357,7 @@
         z-index: 26;
         display: none;
         width: auto;
-        padding: 10px;
+        padding: 6px;
         border-radius: 7px;
         background: var(--ui-bg);
         box-shadow: var(--ui-shadow);
@@ -393,11 +393,17 @@
       }
       #render-actions {
         display: flex;
+        justify-content: flex-start;
         align-items: center;
-        gap: 5px;
+        justify-self: start;
+        width: 100%;
+        gap: 2px;
         margin: 0;
         padding: 0;
         border: 0;
+      }
+      #full-resolution-capture-toggle {
+        margin-left: auto;
       }
       #animation-keyframe-menu button {
         flex: 1 1 0;
@@ -570,89 +576,10 @@
       #animation-play-button .material-symbols-rounded,
       #render-menu-toggle .material-symbols-rounded,
       #transform-actions .material-symbols-rounded {
+        display: inline-block;
         font-size: 18px;
-      }
-      #view-toggle .render-mode-icon-stack {
-        position: relative;
-        display: grid;
-        place-items: center;
-        width: 20px;
-        height: 20px;
-      }
-      #view-toggle .render-mode-icon-stack > * {
-        grid-area: 1 / 1;
-        place-self: center;
-      }
-      #view-toggle button[data-mode] .render-mode-icon {
-        display: grid;
-        place-items: center;
-        width: 20px;
-        height: 20px;
-        font-size: 20px;
-        line-height: 20px;
-        font-variation-settings:
-          "FILL" 0,
-          "wght" 220,
-          "GRAD" 0,
-          "opsz" 24;
-        opacity: 0.94;
-        position: relative;
-        z-index: 2;
-      }
-      #view-toggle .render-mode-icon-outline {
-        font-variation-settings:
-          "FILL" 0,
-          "wght" 160,
-          "GRAD" 0,
-          "opsz" 24;
-        opacity: 1;
-      }
-      #view-toggle .render-mode-cube-fill {
-        position: relative;
-        display: block;
-        width: 13.5px;
-        height: 13.5px;
-        border-radius: 2px;
-        background: currentColor;
-        clip-path: polygon(50% 0, 100% 26%, 100% 74%, 50% 100%, 0 74%, 0 26%);
-        opacity: 0.88;
-        overflow: hidden;
-        z-index: 1;
-      }
-      #view-toggle .render-mode-cube-fill::after {
-        content: "";
-        position: absolute;
-        inset: 0;
-        background:
-          linear-gradient(150deg, rgba(255,255,255,0.28) 0 33%, transparent 34%),
-          linear-gradient(30deg, transparent 0 48%, rgba(0,0,0,0.18) 49% 100%);
-      }
-      #view-toggle button[data-mode="transparent"] .render-mode-cube-fill {
-        opacity: 0.26;
-      }
-      #view-toggle button[data-mode="solid"] .render-mode-cube-fill {
-        opacity: 0.92;
-      }
-      #view-toggle button[data-mode="faceted"] .render-mode-cube-fill {
-        background: linear-gradient(135deg, #e7eefc 4%, #7fd0ff 36%, #f0c674 63%, #ff7a59 96%);
-        opacity: 1;
-      }
-      #view-toggle button[data-mode="solid"] .render-mode-icon-outline,
-      #view-toggle button[data-mode="faceted"] .render-mode-icon-outline {
-        font-variation-settings:
-          "FILL" 0,
-          "wght" 260,
-          "GRAD" 0,
-          "opsz" 24;
-        color: rgba(255,255,255,0.72);
-        opacity: 0.78;
-      }
-      #view-toggle button.active .render-mode-icon,
-      #view-toggle button.active .render-mode-icon-outline {
-        opacity: 1;
-      }
-      #view-toggle button[data-mode="transparent"].active .render-mode-cube-fill {
-        opacity: 0.42;
+        line-height: 1;
+        vertical-align: middle;
       }
       #axis-gizmo {
         position: relative;
@@ -2195,27 +2122,13 @@
       <div id="render-options">
         <div id="view-toggle" aria-label="Render modes">
           <button data-mode="wireframe" aria-label="Wireframe mode" title="Wireframe">
-            <span class="render-mode-icon-stack" aria-hidden="true">
-              <span class="material-symbols-rounded render-mode-icon render-mode-icon-outline">deployed_code</span>
-            </span>
-          </button>
-          <button data-mode="transparent" aria-label="Transparent mode" title="Transparent">
-            <span class="render-mode-icon-stack" aria-hidden="true">
-              <span class="render-mode-cube-fill"></span>
-              <span class="material-symbols-rounded render-mode-icon render-mode-icon-outline">deployed_code</span>
-            </span>
+            <span class="material-symbols-rounded" aria-hidden="true">grid_on</span>
           </button>
           <button data-mode="solid" class="active" aria-label="Rendered mode" title="Rendered">
-            <span class="render-mode-icon-stack" aria-hidden="true">
-              <span class="render-mode-cube-fill"></span>
-              <span class="material-symbols-rounded render-mode-icon render-mode-icon-outline">deployed_code</span>
-            </span>
+            <span class="material-symbols-rounded" aria-hidden="true">imagesmode</span>
           </button>
           <button data-mode="faceted" aria-label="Faceted mode" title="Faceted">
-            <span class="render-mode-icon-stack" aria-hidden="true">
-              <span class="render-mode-cube-fill"></span>
-              <span class="material-symbols-rounded render-mode-icon render-mode-icon-outline">deployed_code</span>
-            </span>
+            <span class="material-symbols-rounded" aria-hidden="true">filter_b_and_w</span>
           </button>
         </div>
         <button id="animation-play-button" type="button" aria-label="Play animation" aria-pressed="false" title="Play animation">
@@ -2244,6 +2157,16 @@
               <span id="record-viewport-timer" aria-live="polite" aria-hidden="true">00:00</span>
               <button id="capture-frame-button" type="button" aria-label="Download current frame (Shift+S)" title="Download current frame (Shift+S)">
                 <span class="material-symbols-rounded" aria-hidden="true">screenshot_frame_2</span>
+              </button>
+              <button
+                id="full-resolution-capture-toggle"
+                type="button"
+                class="active"
+                aria-label="Full-resolution capture on"
+                aria-pressed="true"
+                title="Full-resolution capture on"
+              >
+                <span class="material-symbols-rounded" aria-hidden="true">high_quality</span>
               </button>
             </div>
           </div>
