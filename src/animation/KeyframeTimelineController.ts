@@ -19,6 +19,7 @@ export type AnimationKeyframeState = {
 export type AnimationSettings = {
   fps: number;
   frameCount: number;
+  fullResolution: boolean;
 };
 
 type Keyframe = {
@@ -35,6 +36,7 @@ type KeyframeTimelineControllerOptions = {
 
 const DEFAULT_FPS = 60;
 const DEFAULT_FRAME_COUNT = 180;
+const DEFAULT_FULL_RESOLUTION = true;
 const MIN_FPS = 1;
 const MAX_FPS = 120;
 const MIN_FRAME_COUNT = 1;
@@ -56,6 +58,7 @@ export class KeyframeTimelineController {
   private readonly menuEl = document.getElementById('render-menu') as HTMLDivElement | null;
   private readonly fpsInput = document.getElementById('recording-fps') as HTMLInputElement | null;
   private readonly frameCountInput = document.getElementById('animation-frame-count') as HTMLInputElement | null;
+  private readonly fullResolutionToggleButton = document.getElementById('full-resolution-capture-toggle') as HTMLButtonElement | null;
   private readonly addKeyframeButton = document.getElementById('add-keyframe-button') as HTMLButtonElement | null;
   private readonly removeKeyframeButton = document.getElementById('remove-keyframe-button') as HTMLButtonElement | null;
   private readonly keyframeMenuEl = document.getElementById('animation-keyframe-menu') as HTMLDivElement | null;
@@ -67,7 +70,11 @@ export class KeyframeTimelineController {
   private readonly frameOutput = document.getElementById('animation-current-frame') as HTMLOutputElement | null;
 
   private readonly keyframes = new Map<number, AnimationKeyframeState>();
-  private settings: AnimationSettings = { fps: DEFAULT_FPS, frameCount: DEFAULT_FRAME_COUNT };
+  private settings: AnimationSettings = {
+    fps: DEFAULT_FPS,
+    frameCount: DEFAULT_FRAME_COUNT,
+    fullResolution: DEFAULT_FULL_RESOLUTION,
+  };
   private currentFrame = 0;
   private playing = false;
   private playheadDragPointerId = -1;
@@ -92,6 +99,7 @@ export class KeyframeTimelineController {
 
     this.fpsInput?.addEventListener('input', () => this.syncSettingsFromInputs());
     this.frameCountInput?.addEventListener('input', () => this.syncSettingsFromInputs());
+    this.fullResolutionToggleButton?.addEventListener('click', () => this.toggleFullResolutionCapture());
     this.addKeyframeButton?.addEventListener('click', () => {
       this.addKeyframeAtCurrentFrame();
       this.closeKeyframeMenu();
@@ -104,6 +112,7 @@ export class KeyframeTimelineController {
     this.timelineEl?.addEventListener('contextmenu', ev => this.openKeyframeMenu(ev));
     this.playheadEl?.addEventListener('pointerdown', ev => this.startPlayheadDrag(ev));
 
+    this.syncFullResolutionButton();
     this.syncSettingsFromInputs();
     this.render();
   }
@@ -217,7 +226,11 @@ export class KeyframeTimelineController {
       MAX_FRAME_COUNT,
     );
 
-    this.settings = { fps, frameCount };
+    this.settings = {
+      fps,
+      frameCount,
+      fullResolution: this.settings.fullResolution,
+    };
     if (this.fpsInput) this.fpsInput.value = String(fps);
     if (this.frameCountInput) this.frameCountInput.value = String(frameCount);
 
@@ -229,6 +242,22 @@ export class KeyframeTimelineController {
 
     this.options.onSettingsChange?.(this.getSettings());
     this.render();
+  }
+
+  private toggleFullResolutionCapture() {
+    this.settings.fullResolution = !this.settings.fullResolution;
+    this.syncFullResolutionButton();
+    this.options.onSettingsChange?.(this.getSettings());
+  }
+
+  private syncFullResolutionButton() {
+    if (!this.fullResolutionToggleButton) return;
+    this.fullResolutionToggleButton.classList.toggle('active', this.settings.fullResolution);
+    this.fullResolutionToggleButton.setAttribute('aria-pressed', String(this.settings.fullResolution));
+    const state = this.settings.fullResolution ? 'on' : 'off';
+    const label = `Full-resolution capture ${state}`;
+    this.fullResolutionToggleButton.title = label;
+    this.fullResolutionToggleButton.setAttribute('aria-label', label);
   }
 
   private removeKeyframeAtCurrentFrame() {

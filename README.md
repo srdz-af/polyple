@@ -24,7 +24,7 @@ https://srdz-af.github.io/BleND/
 - Vertex edit mode (move vertex)
 - Multiple objects, per-object visibility, rename, delete
 - Per-object surface settings (base color, metallic, roughness, alpha)
-- View modes: wireframe, transparent, rendered, faceted
+- View modes: wireframe, rendered, faceted
 - Projection/camera keyframes with timeline playback
 - Undo/redo
 
@@ -147,7 +147,7 @@ On mobile, touch and drag a Transformation Control to transform the selected obj
 
 Render Options are the rectangular bottom toolbar.
 
-- Wireframe / Transparent / Rendered / Faceted: change viewport render mode
+- Wireframe / Rendered / Faceted: change viewport render mode
 - Play / Pause or Space: preview the keyframed animation
 - Render menu: set FPS and frame count, render the animation as a video, record the live viewport, or capture a screenshot
 - Timeline: scrub through frames and jump to added keyframes
@@ -159,7 +159,7 @@ Keyframes capture the current N-D rotation, projection axis order, render mode, 
 
 Shortcuts:
 
-- 1 / 2 / 3 / 4: switch render mode
+- 1 / 2 / 3: switch render mode
 - Ctrl+Shift+E: export the animation as video
 - Shift+R: start/stop recording
 - Shift+S: download screenshot

@@ -375,9 +375,8 @@ export class BackgroundController {
   }
 
   private updateSwatchUI() {
-    const plainOnly = this.getRenderMode() !== 'solid';
-    const controlsEnabled = this.getRenderMode() === 'solid' && this.activeBackgroundKey !== PLAIN_BACKGROUND_KEY;
-    this.selectorEl?.classList.toggle('plain-only', plainOnly);
+    const controlsEnabled = this.activeBackgroundKey != null && this.activeBackgroundKey !== PLAIN_BACKGROUND_KEY;
+    this.selectorEl?.classList.remove('plain-only');
     this.controlsEl?.classList.toggle('disabled', !controlsEnabled);
     if (this.blurInput) this.blurInput.disabled = !controlsEnabled;
     if (this.lightnessInput) this.lightnessInput.disabled = !controlsEnabled;
@@ -388,12 +387,11 @@ export class BackgroundController {
 
     this.swatchButtons.forEach(button => {
       const key = normalizeBackgroundKey(button.dataset.hdri);
-      const available = !plainOnly || key === PLAIN_BACKGROUND_KEY;
       const loading = isHdriBackgroundKey(key) && key === this.hdrBackgroundLoadingKey;
       const active = key === this.activeBackgroundKey;
       button.classList.toggle('loading', loading);
       button.classList.toggle('active', active);
-      button.disabled = !available || loading;
+      button.disabled = loading;
       button.setAttribute('aria-pressed', active ? 'true' : 'false');
     });
   }
