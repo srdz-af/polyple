@@ -475,7 +475,7 @@ export class ViewportCaptureController {
 
   private restoreCaptureResolution() {
     if (!this.captureResolutionAdjusted) return;
-    this.options.setCaptureResolutionMode?.(this.fullResolutionCapture);
+    this.options.setCaptureResolutionMode?.(true);
     this.captureResolutionAdjusted = false;
   }
 }

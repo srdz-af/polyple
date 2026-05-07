@@ -5,7 +5,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/x-icon" href="./favicon.ico" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=1k,2k,add,chevron_left,chevron_right,delete,edit,filter_b_and_w,grid_on,help,high_quality,imagesmode,keyboard_arrow_down,keyboard_arrow_up,open_with,pause,play_arrow,refresh,screen_record,screenshot_frame_2,settings,speed_1_5x,speed_2x,stop,sync_alt,visibility,visibility_off,vr180_create2d,vrpano,zoom_out_map&display=block" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded&icon_names=chevron_left,chevron_right,edit,grid_on,help,keyboard_arrow_down,keyboard_arrow_up,movie,opacity,open_with,photo_camera,play_arrow,radio_button_checked,refresh,stop,sync_alt,view_in_ar,visibility,visibility_off,vrpano,zoom_out_map&display=block" />
     <title>BleND</title>
     <style>
       :root {
@@ -59,12 +59,12 @@
         display: contents;
       }
       #render-options,
-      #render-menu,
-      #animation-timeline,
       #gizmo-dock,
       #scene-controls,
       #context-menu,
       #tooltip,
+      #quick-links a,
+      #quick-links button,
       #help-dialog,
       #mobile-onboarding-dialog,
       #mobile-onboarding-track-wrap,
@@ -79,14 +79,12 @@
       #mobile-onboarding-open,
       #mobile-onboarding-close,
       #mobile-onboarding-actions button,
-      #animation-current-frame,
       #record-viewport-timer {
         backdrop-filter: var(--ui-glass-filter);
         -webkit-backdrop-filter: var(--ui-glass-filter);
         background-clip: padding-box;
       }
       #background-controls input[type="range"],
-      #render-effects-controls input[type="range"],
       #texture-controls input[type="range"] {
         appearance: none;
         -webkit-appearance: none;
@@ -97,19 +95,16 @@
         cursor: pointer;
       }
       #background-controls input[type="range"]:disabled,
-      #render-effects-controls input[type="range"]:disabled,
       #texture-controls input[type="range"]:disabled {
         cursor: default;
         opacity: 0.48;
       }
       #background-controls input[type="range"]:focus-visible,
-      #render-effects-controls input[type="range"]:focus-visible,
       #texture-controls input[type="range"]:focus-visible {
         outline: 2px solid rgba(255,255,255,0.55);
         outline-offset: 2px;
       }
       #background-controls input[type="range"]::-webkit-slider-runnable-track,
-      #render-effects-controls input[type="range"]::-webkit-slider-runnable-track,
       #texture-controls input[type="range"]::-webkit-slider-runnable-track {
         height: 3px;
         border-radius: 999px;
@@ -117,7 +112,6 @@
         box-shadow: none;
       }
       #background-controls input[type="range"]::-webkit-slider-thumb,
-      #render-effects-controls input[type="range"]::-webkit-slider-thumb,
       #texture-controls input[type="range"]::-webkit-slider-thumb {
         -webkit-appearance: none;
         appearance: none;
@@ -130,27 +124,22 @@
         box-shadow: none;
       }
       #background-controls input[type="range"]::-moz-range-track,
-      #render-effects-controls input[type="range"]::-moz-range-track,
       #texture-controls input[type="range"]::-moz-range-track,
       #background-controls input[type="range"]::-moz-range-progress,
-      #render-effects-controls input[type="range"]::-moz-range-progress,
       #texture-controls input[type="range"]::-moz-range-progress {
         height: 3px;
         border: 0;
         border-radius: 999px;
       }
       #background-controls input[type="range"]::-moz-range-track,
-      #render-effects-controls input[type="range"]::-moz-range-track,
       #texture-controls input[type="range"]::-moz-range-track {
         background: var(--ui-slider-track);
       }
       #background-controls input[type="range"]::-moz-range-progress,
-      #render-effects-controls input[type="range"]::-moz-range-progress,
       #texture-controls input[type="range"]::-moz-range-progress {
         background: var(--ui-slider-fill);
       }
       #background-controls input[type="range"]::-moz-range-thumb,
-      #render-effects-controls input[type="range"]::-moz-range-thumb,
       #texture-controls input[type="range"]::-moz-range-thumb {
         width: 9px;
         height: 9px;
@@ -250,7 +239,6 @@
       body.pane-collapsed #pane-toggle .hide-icon { display: none; }
       body.pane-collapsed #object-list,
       body.pane-collapsed #background-selector,
-      body.pane-collapsed #render-effects,
       body.pane-collapsed #texture-panel {
         display: none;
       }
@@ -262,7 +250,7 @@
         position: fixed;
         top: auto;
         right: auto;
-        bottom: calc(34px + var(--safe-bottom));
+        bottom: calc(12px + var(--safe-bottom));
         left: 50%;
         z-index: 20;
         display: flex;
@@ -277,7 +265,8 @@
         background: var(--ui-bg);
         box-shadow: var(--ui-shadow);
         max-width: calc(100vw - 24px - var(--safe-left) - var(--safe-right));
-        overflow: visible;
+        overflow-x: auto;
+        overflow-y: hidden;
         scrollbar-width: none;
         transform: translateX(-50%);
       }
@@ -286,29 +275,23 @@
       }
       #view-toggle,
       #render-actions,
-      #render-menu-wrap,
       #transform-actions {
         display: inline-flex;
         flex-wrap: nowrap;
         align-items: center;
         gap: 2px;
       }
-      #render-menu-wrap,
+      #render-actions,
       #transform-actions {
         margin-left: 3px;
         padding-left: 5px;
         border-left: 1px solid var(--ui-border);
-      }
-      #render-menu-wrap {
-        position: static;
       }
       #render-actions {
         align-items: center;
       }
       #view-toggle button,
       #render-actions button,
-      #animation-play-button,
-      #render-menu-toggle,
       #transform-actions button {
         display: grid;
         place-items: center;
@@ -327,223 +310,20 @@
       }
       #view-toggle button.active,
       #render-actions button.active,
-      #animation-play-button.active,
-      #render-menu-toggle.active,
       #transform-actions button.active {
         background: var(--ui-blue);
         color: var(--ui-text-strong);
       }
       #view-toggle button:hover,
       #render-actions button:hover,
-      #animation-play-button:hover,
-      #render-menu-toggle:hover,
       #transform-actions button:hover { background: var(--ui-bg-hover); color: var(--ui-text-strong); }
       #view-toggle button.active:hover,
       #render-actions button.active:hover,
-      #animation-play-button.active:hover,
-      #render-menu-toggle.active:hover,
       #transform-actions button.active:hover { background: var(--ui-blue-hover); }
       #render-actions button.recording,
       #render-actions button.recording:hover {
         background: rgba(201, 56, 56, 0.86);
         color: #fff;
-      }
-      #render-menu {
-        box-sizing: border-box;
-        position: absolute;
-        left: 0;
-        right: 0;
-        bottom: calc(100% + 7px);
-        z-index: 26;
-        display: none;
-        width: auto;
-        padding: 6px;
-        border-radius: 7px;
-        background: var(--ui-bg);
-        box-shadow: var(--ui-shadow);
-        color: var(--ui-text);
-        font: 12px/1.35 var(--ui-font);
-      }
-      #render-menu.open {
-        display: grid;
-        gap: 9px;
-      }
-      .render-menu-row {
-        display: grid;
-        grid-template-columns: 64px 1fr;
-        align-items: center;
-        gap: 8px;
-      }
-      .render-menu-row label {
-        color: var(--ui-text);
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.2px;
-      }
-      .render-menu-row input {
-        box-sizing: border-box;
-        width: 100%;
-        height: 28px;
-        padding: 0 8px;
-        border: 0;
-        border-radius: 4px;
-        background: var(--ui-bg-soft);
-        color: var(--ui-text-strong);
-        font: 12px/1 var(--ui-font);
-      }
-      #render-actions {
-        display: flex;
-        justify-content: flex-start;
-        align-items: center;
-        justify-self: start;
-        width: 100%;
-        gap: 2px;
-        margin: 0;
-        padding: 0;
-        border: 0;
-      }
-      #full-resolution-capture-toggle {
-        margin-left: auto;
-      }
-      #animation-keyframe-menu button {
-        flex: 1 1 0;
-        height: 28px;
-        padding: 0 8px;
-        border: 0;
-        border-radius: 4px;
-        background: var(--ui-bg-soft);
-        color: var(--ui-text);
-        font: 700 11px/1 var(--ui-font);
-        cursor: pointer;
-      }
-      #animation-keyframe-menu button:hover {
-        background: var(--ui-bg-hover);
-        color: var(--ui-text-strong);
-      }
-      #animation-keyframe-menu button:disabled {
-        opacity: 0.4;
-        cursor: default;
-      }
-      #animation-timeline {
-        box-sizing: border-box;
-        position: fixed;
-        left: calc(12px + var(--safe-left));
-        right: calc(12px + var(--safe-right));
-        bottom: calc(8px + var(--safe-bottom));
-        z-index: 19;
-        width: auto;
-        max-width: none;
-        height: 22px;
-        padding: 4px 8px 4px 54px;
-        border-radius: 6px;
-        background: var(--ui-bg);
-        box-shadow: var(--ui-shadow);
-        overflow-x: hidden;
-        overflow-y: hidden;
-        overscroll-behavior-x: contain;
-        scrollbar-width: none;
-        transform: none;
-        cursor: pointer;
-      }
-      #animation-timeline::-webkit-scrollbar {
-        display: none;
-      }
-      #animation-keyframe-menu {
-        position: fixed;
-        z-index: 30;
-        display: none;
-        grid-template-columns: 1fr;
-        gap: 4px;
-        width: 140px;
-        padding: 6px;
-        border-radius: 6px;
-        background: var(--ui-bg);
-        box-shadow: var(--ui-shadow);
-      }
-      #animation-keyframe-menu.open {
-        display: grid;
-      }
-      #animation-current-frame {
-        position: absolute;
-        left: 6px;
-        top: 4px;
-        width: 42px;
-        height: 14px;
-        border-radius: 4px;
-        background: transparent;
-        color: var(--ui-text);
-        font: 700 10px/14px "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-        text-align: center;
-        pointer-events: none;
-        font-variant-numeric: tabular-nums;
-      }
-      #animation-timeline-content {
-        position: relative;
-        height: 14px;
-        min-width: 100%;
-      }
-      #animation-timeline-track,
-      #animation-timeline-progress,
-      #animation-keyframe-markers,
-      #animation-playhead {
-        position: absolute;
-      }
-      #animation-timeline-track {
-        left: 0;
-        right: 0;
-        top: 50%;
-        height: 3px;
-        border-radius: 999px;
-        background: rgba(116, 124, 138, 0.28);
-        transform: translateY(-50%);
-      }
-      #animation-timeline-progress {
-        left: 0;
-        top: 0;
-        bottom: 0;
-        width: 0%;
-        border-radius: inherit;
-        background: rgba(188, 193, 202, 0.82);
-      }
-      #animation-keyframe-markers {
-        inset: 0;
-      }
-      .animation-keyframe-marker {
-        position: absolute;
-        top: 50%;
-        width: 8px;
-        height: 8px;
-        padding: 0;
-        border: 0;
-        border-radius: 50%;
-        background: #f0c674;
-        box-shadow: 0 0 8px rgba(240, 198, 116, 0.5);
-        transform: translate(-50%, -50%);
-        cursor: pointer;
-      }
-      .animation-keyframe-marker.active {
-        background: #fff;
-      }
-      #animation-playhead {
-        top: 0;
-        bottom: 0;
-        left: 0%;
-        width: 18px;
-        border-radius: 2px;
-        background: transparent;
-        transform: translateX(-9px);
-        cursor: ew-resize;
-        touch-action: none;
-      }
-      #animation-playhead::before {
-        content: "";
-        position: absolute;
-        left: 8px;
-        top: 0;
-        bottom: 0;
-        width: 2px;
-        border-radius: 2px;
-        background: #fff;
       }
       #record-viewport-timer {
         display: none;
@@ -565,21 +345,14 @@
       }
       #view-toggle button:disabled,
       #render-actions button:disabled,
-      #animation-play-button:disabled,
-      #render-menu-toggle:disabled,
       #transform-actions button:disabled {
         opacity: 0.45;
         cursor: default;
       }
       #view-toggle .material-symbols-rounded,
       #render-actions .material-symbols-rounded,
-      #animation-play-button .material-symbols-rounded,
-      #render-menu-toggle .material-symbols-rounded,
       #transform-actions .material-symbols-rounded {
-        display: inline-block;
         font-size: 18px;
-        line-height: 1;
-        vertical-align: middle;
       }
       #axis-gizmo {
         position: relative;
@@ -775,28 +548,37 @@
         overflow: hidden;
         border-radius: 50%;
         border-width: 0;
-        background: var(--ui-bg-soft);
-        color: var(--ui-text);
+        background: color-mix(in srgb, var(--extra-axis-color) 22%, transparent);
+        color: var(--extra-axis-color);
         font: 700 10px/1 var(--ui-font);
         transform: translateY(-50%);
         z-index: 4;
       }
       .extra-axis-gizmo button.auto-toggle:hover {
         transform: translateY(-50%);
-        background: var(--ui-bg-hover);
-        color: var(--ui-text-strong);
-        filter: none;
+        filter: brightness(1.2);
       }
       .extra-axis-gizmo button.auto-toggle .material-symbols-rounded {
         font-size: 17px;
         line-height: 1;
       }
-      .extra-axis-gizmo button.auto-toggle.active {
-        background: var(--ui-blue);
-        color: var(--ui-text-strong);
+      .extra-axis-gizmo button.auto-toggle .auto-speed-label {
+        display: block;
+        font: 800 10px/1 var(--ui-font);
       }
-      .extra-axis-gizmo button.auto-toggle.active:hover {
-        background: var(--ui-blue-hover);
+      .extra-axis-gizmo button.auto-toggle .stop-icon {
+        display: none;
+      }
+      .extra-axis-gizmo button.auto-toggle.active {
+        background: var(--extra-axis-color);
+        border-color: var(--extra-axis-color);
+        color: #10141a;
+      }
+      .extra-axis-gizmo button.auto-toggle.active .play-icon {
+        display: none;
+      }
+      .extra-axis-gizmo button.auto-toggle.active .stop-icon {
+        display: block;
       }
       .extra-axis-gizmo button.perspective-toggle {
         left: -25px;
@@ -816,27 +598,22 @@
         overflow: hidden;
         border-radius: 50%;
         border-width: 0;
-        background: var(--ui-bg-soft);
-        color: var(--ui-text);
+        background: color-mix(in srgb, var(--extra-axis-color) 22%, transparent);
+        color: var(--extra-axis-color);
         transform: translateY(-50%);
         z-index: 4;
       }
       .extra-axis-gizmo button.perspective-toggle:hover {
         transform: translateY(-50%);
-        background: var(--ui-bg-hover);
-        color: var(--ui-text-strong);
-        filter: none;
+        filter: brightness(1.2);
       }
       .extra-axis-gizmo button.perspective-toggle .material-symbols-rounded {
         font-size: 17px;
         line-height: 1;
       }
       .extra-axis-gizmo button.perspective-toggle.active {
-        background: var(--ui-blue);
-        color: var(--ui-text-strong);
-      }
-      .extra-axis-gizmo button.perspective-toggle.active:hover {
-        background: var(--ui-blue-hover);
+        background: var(--extra-axis-color);
+        color: #10141a;
       }
       .extra-axis-gizmo button.axis-order-handle {
         left: auto;
@@ -931,16 +708,10 @@
       }
       .extra-axis-drop-placeholder {
         box-sizing: border-box;
-        flex: 0 0 86px;
-        width: 86px;
-        height: 86px;
         border-radius: 12px;
-        background:
-          linear-gradient(135deg, rgba(255,255,255,0.12), rgba(255,255,255,0.02)),
-          rgba(148, 163, 184, 0.14);
-        box-shadow:
-          inset 0 0 0 2px rgba(226, 232, 240, 0.22),
-          0 0 18px rgba(15, 23, 42, 0.16);
+        border: 1px dashed var(--ui-border);
+        background: rgba(148, 163, 184, 0.12);
+        box-shadow: inset 0 0 0 1px rgba(191, 212, 255, 0.12);
       }
       .extra-axis-drag-ghost {
         position: fixed;
@@ -966,14 +737,8 @@
       #background-selector,
       #background-selector h4,
       #background-swatches button,
-      #background-quality-toggle,
-      #background-quality-toggle button,
       #background-controls label,
       #background-controls output,
-      #render-effects,
-      #render-effects h4,
-      #render-effects-controls label,
-      #render-effects-controls output,
       #texture-panel,
       #texture-panel h4,
       #texture-controls label,
@@ -981,9 +746,6 @@
       #texture-preset-controls label,
       #texture-preset-select,
       #texture-preset-save,
-      #render-menu,
-      #animation-timeline,
-      #animation-current-frame,
       #record-viewport-timer {
         user-select: none;
         -webkit-user-select: none;
@@ -996,6 +758,7 @@
         color: inherit;
         padding: 0 0 16px 0;
         border: 0;
+        border-bottom: 1px solid var(--ui-border-soft);
         border-radius: 0;
         font: inherit;
         margin-bottom: 16px;
@@ -1064,52 +827,11 @@
         color: inherit;
         padding: 0 0 16px 0;
         border: 0;
+        border-bottom: 1px solid var(--ui-border-soft);
         border-radius: 0;
         font: inherit;
         margin-bottom: 16px;
         box-shadow: none;
-        position: relative;
-      }
-      #render-effects {
-        background: transparent;
-        color: inherit;
-        padding: 0 0 16px 0;
-        border: 0;
-        border-radius: 0;
-        font: inherit;
-        margin-bottom: 16px;
-        box-shadow: none;
-        position: relative;
-      }
-      #texture-panel {
-        position: relative;
-      }
-      #background-selector::before,
-      #render-effects::before,
-      #texture-panel::before {
-        content: "";
-        position: absolute;
-        left: 2px;
-        right: 2px;
-        top: -8px;
-        height: 1px;
-        background: linear-gradient(
-          90deg,
-          transparent 0%,
-          rgba(255, 255, 255, 0.2) 14%,
-          rgba(255, 255, 255, 0.12) 50%,
-          rgba(255, 255, 255, 0.04) 86%,
-          transparent 100%
-        );
-        opacity: 0.78;
-        pointer-events: none;
-      }
-      .section-title-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        margin: 0 0 14px 0;
       }
       #background-selector h4 {
         margin: 0 0 14px 0;
@@ -1118,9 +840,6 @@
         letter-spacing: 0.2px;
         line-height: 1.45;
         color: var(--ui-text-strong);
-      }
-      #background-selector .section-title-row h4 {
-        margin: 0;
       }
       #background-swatches {
         display: flex;
@@ -1226,9 +945,6 @@
         align-items: center;
         gap: 14px;
       }
-      #background-controls .background-row.quality-row {
-        grid-template-columns: 64px minmax(0, 1fr);
-      }
       #background-controls label {
         color: var(--ui-text);
         font-size: 11px;
@@ -1240,82 +956,6 @@
         width: 100%;
       }
       #background-controls output {
-        text-align: right;
-        color: var(--ui-muted);
-        font-variant-numeric: tabular-nums;
-        font-size: 11px;
-        line-height: 1.45;
-      }
-      #background-quality-toggle {
-        display: inline-flex;
-        align-items: center;
-        flex: 0 0 auto;
-        gap: 2px;
-        padding: 0;
-        border-radius: 0;
-        background: transparent;
-      }
-      #background-quality-toggle button {
-        display: grid;
-        place-items: center;
-        width: 30px;
-        height: 30px;
-        padding: 0;
-        border: 0;
-        border-radius: 3px;
-        background: transparent;
-        color: var(--ui-text);
-        cursor: pointer;
-        transition: background 120ms ease, color 120ms ease, opacity 120ms ease;
-      }
-      #background-quality-toggle button.active {
-        background: var(--ui-blue);
-        color: var(--ui-text-strong);
-      }
-      #background-quality-toggle button:hover:not(:disabled) {
-        background: var(--ui-bg-hover);
-        color: var(--ui-text-strong);
-      }
-      #background-quality-toggle button.active:hover {
-        background: var(--ui-blue-hover);
-      }
-      #background-quality-toggle button:disabled {
-        cursor: default;
-        opacity: 0.45;
-      }
-      #background-quality-toggle .material-symbols-rounded {
-        font-size: 18px;
-        line-height: 1;
-      }
-      #render-effects h4 {
-        margin: 0 0 14px 0;
-        font-size: 12px;
-        font-weight: 700;
-        letter-spacing: 0.2px;
-        line-height: 1.45;
-        color: var(--ui-text-strong);
-      }
-      #render-effects-controls {
-        display: grid;
-        gap: 12px;
-      }
-      #render-effects-controls .render-effect-row {
-        display: grid;
-        grid-template-columns: 82px minmax(0, 1fr) 52px;
-        align-items: center;
-        gap: 14px;
-      }
-      #render-effects-controls label {
-        color: var(--ui-text);
-        font-size: 11px;
-        font-weight: 600;
-        letter-spacing: 0.2px;
-        line-height: 1.45;
-      }
-      #render-effects-controls input[type="range"] {
-        width: 100%;
-      }
-      #render-effects-controls output {
         text-align: right;
         color: var(--ui-muted);
         font-variant-numeric: tabular-nums;
@@ -1540,36 +1180,18 @@
         box-shadow: var(--ui-shadow);
         display: none;
         min-width: 160px;
-        width: max-content;
-        max-width: min(260px, calc(100vw - 24px));
-        overflow: hidden;
         font: 13px/1.4 var(--ui-font);
       }
-      #context-menu.primitive-menu {
-        grid-template-columns: minmax(0, 1fr);
-        width: min(196px, calc(100vw - 24px));
-        max-width: calc(100vw - 24px);
-      }
       #context-menu button {
-        box-sizing: border-box;
         width: 100%;
         padding: 8px 12px;
         background: transparent;
         border: none;
         color: inherit;
         text-align: left;
-        white-space: nowrap;
         cursor: pointer;
       }
-      #context-menu.primitive-menu button {
-        padding: 7px 10px;
-      }
       #context-menu button:hover { background: var(--ui-bg-hover); color: var(--ui-text-strong); }
-      #context-menu .context-menu-separator {
-        height: 1px;
-        margin: 4px 8px;
-        background: rgba(148, 156, 170, 0.28);
-      }
       #tooltip {
         position: fixed;
         z-index: 30;
@@ -1588,10 +1210,53 @@
         transition: opacity 80ms ease;
       }
       #tooltip.visible { opacity: 1; }
+      #quick-links {
+        position: absolute;
+        right: 12px;
+        bottom: 12px;
+        z-index: 20;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+      #quick-links a,
+      #quick-links button {
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        padding: 0;
+        background: var(--ui-bg);
+        color: var(--ui-text);
+        border-radius: 50%;
+        border: 1px solid var(--ui-border);
+        box-shadow: var(--ui-shadow);
+        text-decoration: none;
+        cursor: pointer;
+        transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+      }
+      #quick-links a:hover,
+      #quick-links button:hover {
+        background: var(--ui-bg-hover);
+        border-color: var(--ui-border);
+        color: var(--ui-text-strong);
+        transform: translateY(-1px);
+      }
+      #github-link img {
+        display: block;
+        width: 20px;
+        height: 20px;
+      }
+      #help-toggle .material-symbols-rounded {
+        font-size: 22px;
+      }
+      #help-toggle {
+        font: 700 22px/1 var(--ui-font);
+      }
       #transform-actions {
         position: fixed;
         left: calc(12px + var(--safe-left));
-        bottom: calc(34px + var(--safe-bottom));
+        bottom: calc(12px + var(--safe-bottom));
         z-index: 20;
         display: inline-flex;
         flex-wrap: nowrap;
@@ -1869,7 +1534,7 @@
           position: fixed;
           left: calc(8px + var(--safe-left));
           right: calc(8px + var(--safe-right));
-          bottom: calc(34px + var(--safe-bottom));
+          bottom: calc(8px + var(--safe-bottom));
           z-index: 20;
           display: flex;
           align-items: center;
@@ -1882,7 +1547,8 @@
           pointer-events: auto;
         }
         #bottom-controls #render-options,
-        #bottom-controls #transform-actions {
+        #bottom-controls #transform-actions,
+        #bottom-controls #quick-links {
           position: static;
           top: auto;
           right: auto;
@@ -1899,27 +1565,13 @@
           padding: 4px;
           border-radius: 6px;
           max-width: 100%;
-          overflow: visible;
+          overflow-x: auto;
+          overflow-y: hidden;
           scrollbar-width: none;
           order: 2;
         }
         #render-options::-webkit-scrollbar {
           display: none;
-        }
-        #animation-timeline {
-          box-sizing: border-box;
-          left: calc(8px + var(--safe-left));
-          right: calc(8px + var(--safe-right));
-          bottom: calc(6px + var(--safe-bottom));
-          width: auto;
-          max-width: none;
-          height: 20px;
-          padding-left: 46px;
-          transform: none;
-        }
-        #animation-current-frame {
-          width: 34px;
-          font-size: 9px;
         }
         #pane {
           top: calc(8px + var(--safe-top));
@@ -2033,36 +1685,21 @@
         .extra-axis-gizmo {
           margin: 0 24px 0 22px;
         }
-        .extra-axis-drop-placeholder {
-          flex-basis: 86px;
-          margin: 0 24px 0 22px;
-        }
         #view-toggle,
-        #render-menu-wrap {
+        #render-actions {
           flex-wrap: nowrap;
           align-items: center;
           gap: 1px;
         }
         #view-toggle button,
-        #render-actions button,
-        #animation-play-button,
-        #render-menu-toggle,
-        #background-quality-toggle button {
+        #render-actions button {
           width: 26px;
           height: 26px;
         }
         #view-toggle .material-symbols-rounded,
         #render-actions .material-symbols-rounded,
-        #animation-play-button .material-symbols-rounded,
-        #render-menu-toggle .material-symbols-rounded,
-        #transform-actions .material-symbols-rounded,
-        #background-quality-toggle .material-symbols-rounded {
+        #transform-actions .material-symbols-rounded {
           font-size: 16px;
-        }
-        #render-menu {
-          left: 0;
-          right: 0;
-          width: auto;
         }
         #transform-actions {
           flex: 0 0 auto;
@@ -2072,6 +1709,10 @@
         #transform-actions button {
           width: 36px;
           height: 36px;
+        }
+        #quick-links {
+          order: 3;
+          display: none;
         }
         #record-viewport-timer {
           height: 26px;
@@ -2085,18 +1726,13 @@
         #background-selector {
           margin-bottom: 6px;
         }
-        #render-effects {
-          margin-bottom: 6px;
-        }
         #texture-preview-wrap {
           height: 108px;
         }
-        #render-effects-controls .render-effect-row,
         #texture-controls .texture-row {
           grid-template-columns: 1fr;
           gap: 4px;
         }
-        #render-effects-controls output,
         #texture-controls output {
           width: 100%;
           text-align: left;
@@ -2116,7 +1752,7 @@
         border: 0 !important;
       }
     </style>
-    <script type="module" crossorigin src="/BleND/assets/index-qyT91cy1.js"></script>
+    <script type="module" crossorigin src="/BleND/assets/index-DQJf14BS.js"></script>
   </head>
   <body>
     <div id="bottom-controls">
@@ -2125,67 +1761,25 @@
           <button data-mode="wireframe" aria-label="Wireframe mode" title="Wireframe">
             <span class="material-symbols-rounded" aria-hidden="true">grid_on</span>
           </button>
-          <button data-mode="solid" class="active" aria-label="Rendered mode" title="Rendered">
-            <span class="material-symbols-rounded" aria-hidden="true">imagesmode</span>
+          <button data-mode="transparent" aria-label="Transparent mode" title="Transparent">
+            <span class="material-symbols-rounded" aria-hidden="true">opacity</span>
+          </button>
+          <button data-mode="solid" class="active" aria-label="Solid mode" title="Solid">
+            <span class="material-symbols-rounded" aria-hidden="true">radio_button_checked</span>
           </button>
           <button data-mode="faceted" aria-label="Faceted mode" title="Faceted">
-            <span class="material-symbols-rounded" aria-hidden="true">filter_b_and_w</span>
+            <span class="material-symbols-rounded" aria-hidden="true">view_in_ar</span>
           </button>
         </div>
-        <button id="animation-play-button" type="button" aria-label="Play animation" aria-pressed="false" title="Play animation">
-          <span class="material-symbols-rounded" aria-hidden="true">play_arrow</span>
-        </button>
-        <div id="render-menu-wrap">
-          <button id="render-menu-toggle" type="button" aria-label="Render menu" aria-expanded="false" title="Render menu">
-            <span class="material-symbols-rounded" aria-hidden="true">settings</span>
+        <div id="render-actions" aria-label="Render capture actions">
+          <button id="record-viewport-button" type="button" aria-label="Record viewport (Shift+R)" title="Record viewport (Shift+R)">
+            <span class="material-symbols-rounded" aria-hidden="true">movie</span>
           </button>
-          <div id="render-menu" aria-label="Render settings menu">
-            <div class="render-menu-row">
-              <label for="recording-fps">FPS</label>
-              <input id="recording-fps" type="number" min="1" max="120" step="1" value="60" inputmode="numeric" />
-            </div>
-            <div class="render-menu-row">
-              <label for="animation-frame-count">Frames</label>
-              <input id="animation-frame-count" type="number" min="1" max="12000" step="1" value="180" inputmode="numeric" />
-            </div>
-            <div id="render-actions" aria-label="Render capture actions">
-              <button id="render-animation-button" type="button" aria-label="Render animation video (Ctrl+Shift+E)" title="Render animation video (Ctrl+Shift+E)">
-                <span class="material-symbols-rounded" aria-hidden="true">vr180_create2d</span>
-              </button>
-              <button id="record-viewport-button" type="button" aria-label="Record viewport (Shift+R)" title="Record viewport (Shift+R)">
-                <span class="material-symbols-rounded" aria-hidden="true">screen_record</span>
-              </button>
-              <span id="record-viewport-timer" aria-live="polite" aria-hidden="true">00:00</span>
-              <button id="capture-frame-button" type="button" aria-label="Download current frame (Shift+S)" title="Download current frame (Shift+S)">
-                <span class="material-symbols-rounded" aria-hidden="true">screenshot_frame_2</span>
-              </button>
-              <button
-                id="full-resolution-capture-toggle"
-                type="button"
-                class="active"
-                aria-label="Full-resolution capture on"
-                aria-pressed="true"
-                title="Full-resolution capture on"
-              >
-                <span class="material-symbols-rounded" aria-hidden="true">high_quality</span>
-              </button>
-            </div>
-          </div>
+          <span id="record-viewport-timer" aria-live="polite" aria-hidden="true">00:00</span>
+          <button id="capture-frame-button" type="button" aria-label="Download current frame (Shift+S)" title="Download current frame (Shift+S)">
+            <span class="material-symbols-rounded" aria-hidden="true">photo_camera</span>
+          </button>
         </div>
-      </div>
-      <div id="animation-timeline" aria-label="Animation timeline">
-        <output id="animation-current-frame" aria-live="polite">0/179</output>
-        <div id="animation-timeline-content">
-          <div id="animation-timeline-track">
-            <div id="animation-timeline-progress"></div>
-          </div>
-          <div id="animation-keyframe-markers"></div>
-          <div id="animation-playhead"></div>
-        </div>
-      </div>
-      <div id="animation-keyframe-menu" aria-label="Timeline keyframe menu">
-        <button id="add-keyframe-button" type="button">Add keyframe</button>
-        <button id="remove-keyframe-button" type="button">Remove keyframe</button>
       </div>
       <div id="transform-actions" aria-label="Transformation controls">
         <button id="edit-mode-toggle" type="button" aria-label="Toggle edit mode" aria-pressed="false" title="Edit mode">
@@ -2200,6 +1794,19 @@
         <button id="transform-scale-button" type="button" aria-label="Scale transform" title="Scale (S)">
           <span class="material-symbols-rounded" aria-hidden="true">zoom_out_map</span>
         </button>
+      </div>
+      <div id="quick-links">
+        <a
+          id="github-link"
+          href="https://github.com/srdz-af/BleND"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="GitHub repository"
+          title="GitHub repository"
+        >
+          <img src="./github-white-icon.webp" alt="GitHub" />
+        </a>
+        <button id="help-toggle" type="button" aria-label="Open controls help" title="Controls help"><span class="material-symbols-rounded" aria-hidden="true">help</span></button>
       </div>
     </div>
     <div id="pane">
@@ -2221,7 +1828,7 @@
             <button id="axis-cycle-button" type="button" aria-label="Shift projected axes" title="Shift projected axes">
               <span class="material-symbols-rounded" aria-hidden="true">sync_alt</span>
             </button>
-            <button id="axis-sync-rotations-button" type="button" aria-label="Reset extra-axis rotations" title="Reset extra-axis rotations">
+            <button id="axis-sync-rotations-button" type="button" aria-label="Sync extra-axis rotations" title="Sync extra-axis rotations">
               <span class="material-symbols-rounded" aria-hidden="true">refresh</span>
             </button>
           </div>
@@ -2244,17 +1851,7 @@
         <div id="axis-legend" style="display:none;"></div>
         <div id="object-list"></div>
         <div id="background-selector" role="group" aria-label="Background environment selector">
-          <div class="section-title-row">
-            <h4>Background</h4>
-            <div id="background-quality-toggle" role="group" aria-label="HDRI quality">
-              <button type="button" data-hdri-quality="sd" aria-label="Use 1K HDRI" aria-pressed="true" title="Use 1K HDRI">
-                <span class="material-symbols-rounded" aria-hidden="true">1k</span>
-              </button>
-              <button type="button" data-hdri-quality="hd" aria-label="Use 2K HDRI" aria-pressed="false" title="Use 2K HDRI">
-                <span class="material-symbols-rounded" aria-hidden="true">2k</span>
-              </button>
-            </div>
-          </div>
+          <h4>Background</h4>
           <div id="background-swatches">
             <button
               type="button"
@@ -2302,21 +1899,6 @@
               <label for="background-lightness">Lightness</label>
               <input id="background-lightness" type="range" min="0.2" max="2" step="0.01" value="1.00" />
               <output id="background-lightness-value">1.00</output>
-            </div>
-          </div>
-        </div>
-        <div id="render-effects" role="group" aria-label="Render effects">
-          <h4>Render Effects</h4>
-          <div id="render-effects-controls">
-            <div class="render-effect-row">
-              <label for="bloom-intensity">Bloom</label>
-              <input id="bloom-intensity" type="range" min="0" max="1" step="0.01" value="0.25" />
-              <output id="bloom-intensity-value">0.25</output>
-            </div>
-            <div class="render-effect-row">
-              <label for="motion-blur-intensity">Motion blur</label>
-              <input id="motion-blur-intensity" type="range" min="0" max="1" step="0.01" value="0.50" />
-              <output id="motion-blur-intensity-value">0.50</output>
             </div>
           </div>
         </div>
@@ -2371,20 +1953,14 @@
         <ul id="help-content">
           <li><strong>Orbit:</strong> left drag. <strong>Zoom:</strong> wheel.</li>
           <li><strong>Shift axes button:</strong> click the axis cycle button to shift which dimensions are projected as X/Y/Z.</li>
-          <li><strong>Reset rotations button:</strong> reset extra-axis rotations without stopping active auto-rotation.</li>
           <li><strong>Perspective depth:</strong> use the depth button on an extra-axis gizmo to include/exclude that axis from perspective depth.</li>
           <li><strong>XYZ gizmo:</strong> drag the gizmo to move/orbit the view, or tap an endpoint to snap the camera to that axis.</li>
           <li><strong>Extra-axis gizmos:</strong> drag a gizmo to rotate through that extra dimension's projection plane.</li>
           <li><strong>Axis auto-rotate:</strong> use the tiny play button on a gizmo to cycle 1x, 2x, 3x, then stop for that axis plane.</li>
           <li><strong>Axis order handles:</strong> drag the handle beside an extra-axis gizmo to reorder extra dimensions.</li>
           <li><strong>Axis swapping:</strong> drag an extra-axis gizmo over an XYZ tip to swap it with that projected axis.</li>
-          <li><strong>Faceted mode:</strong> every object uses the same opaque multicolor material with one color per coplanar outer face region.</li>
-          <li><strong>Keyframes:</strong> right click the timeline or viewport to insert a keyframe or remove the last keyframe. The timeline shows the current frame and keyframe markers.</li>
-          <li><strong>Insert keyframe:</strong> press <code>I</code> at the current frame.</li>
-          <li><strong>Remove keyframe:</strong> press <code>U</code> to remove the last keyframe at or before the current frame.</li>
-          <li><strong>Animation playback:</strong> use the play button or Space to preview the keyframed animation.</li>
-          <li><strong>Render menu:</strong> set FPS and frame count, render the animation as video, record the live viewport, or capture a screenshot.</li>
-          <li><strong>Add object:</strong> <code>Shift + A</code> opens the primitive library.</li>
+          <li><strong>Faceted mode:</strong> every object uses the same solid multicolor material with one color per coplanar outer face region.</li>
+          <li><strong>Add object:</strong> <code>Shift + A</code>.</li>
           <li><strong>Transform selected object:</strong> <code>G</code> move, <code>R</code> rotate, <code>S</code> scale.</li>
           <li><strong>Mobile transforms:</strong> touch and drag the Move/Rotate/Scale Transformation Controls, then release to confirm.</li>
           <li><strong>Delete selected object:</strong> <code>X</code>.</li>
@@ -2423,7 +1999,6 @@
                 <li><strong>Axis order handles:</strong> drag the handle beside an extra-axis gizmo to reorder extra dimensions.</li>
                 <li><strong>Axis swapping:</strong> drag an extra-axis gizmo over an XYZ tip to swap it with that projected axis.</li>
                 <li><strong>Gizmo use:</strong> drag a gizmo to rotate through that axis plane.</li>
-                <li><strong>Reset rotations:</strong> tap the reset button beside the XYZ gizmo to zero extra-axis rotations while keeping auto-rotation active.</li>
                 <li><strong>Auto rotate by axis:</strong> tap the small play button on a gizmo to cycle 1x, 2x, 3x, then stop.</li>
                 <li><strong>Depth button:</strong> tap the depth icon on a gizmo to toggle that axis in perspective depth.</li>
               </ul>
@@ -2441,7 +2016,7 @@
               <h3>4. Render And Scene Controls</h3>
               <p>Use the bottom Render Options and the Scene Controls panel for the rest of the workflow.</p>
               <ul>
-                <li><strong>Render Options:</strong> switch render mode, play the animation, render animation video, record the viewport, or capture a screenshot.</li>
+                <li><strong>Render Options:</strong> switch render mode, record the viewport, or capture a screenshot.</li>
                 <li><strong>Scene Controls:</strong> manage objects, backgrounds, and texture settings.</li>
               </ul>
             </article>
