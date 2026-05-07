@@ -75,6 +75,24 @@ export class KeyboardCameraController {
     this.keys.ctrl = false;
   }
 
+  recenterCamera() {
+    this.smoothingActive = false;
+    this.targetOffset.copy(this.options.defaultCameraPosition);
+    this.currentOffset.copy(this.options.defaultCameraPosition);
+    this.setCameraToOriginOffset(this.options.defaultCameraPosition);
+  }
+
+  resetFocus() {
+    const { camera, controls, defaultCameraPosition } = this.options;
+    const offset = camera.position.clone().sub(controls.target);
+    if (offset.lengthSq() < 1e-8) offset.copy(defaultCameraPosition);
+
+    this.smoothingActive = false;
+    this.targetOffset.copy(offset);
+    this.currentOffset.copy(offset);
+    this.setCameraToOriginOffset(offset);
+  }
+
   update(dt: number) {
     this.applyInput(dt);
     this.applySmoothing(dt);

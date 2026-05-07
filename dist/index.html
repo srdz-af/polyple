@@ -5,7 +5,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/x-icon" href="./favicon.ico" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=1k,2k,add,chevron_left,chevron_right,delete,edit,filter_b_and_w,grid_on,help,high_quality,imagesmode,keyboard_arrow_down,keyboard_arrow_up,open_with,pause,play_arrow,refresh,screen_record,screenshot_frame_2,settings,speed_1_5x,speed_2x,stop,sync_alt,visibility,visibility_off,vr180_create2d,vrpano,zoom_out_map&display=block" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=1k,2k,add,chevron_left,chevron_right,delete,edit,filter_b_and_w,grid_on,help,high_quality,imagesmode,keyboard_arrow_down,keyboard_arrow_up,open_with,pause,play_arrow,recenter,refresh,reset_focus,screen_record,screenshot_frame_2,settings,speed_1_5x,speed_2x,stop,sync_alt,visibility,visibility_off,vr180_create2d,vrpano,zoom_out_map&display=block" />
     <title>BleND</title>
     <style>
       :root {
@@ -26,6 +26,8 @@
         --ui-blue-soft: rgba(49,89,183,0.38);
         --ui-slider-track: rgba(164,170,180,0.7);
         --ui-slider-fill: rgba(188,193,202,0.95);
+        --scene-control-label-width: 82px;
+        --scene-control-value-width: 66px;
         --ui-shadow: 0 16px 36px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.05);
         --ui-glass-filter: blur(16px) saturate(0.82);
         --ui-font: Helvetica, "Helvetica Neue", Arial, sans-serif;
@@ -70,6 +72,8 @@
       #mobile-onboarding-track-wrap,
       #axis-cycle-button,
       #axis-sync-rotations-button,
+      #camera-recenter-button,
+      #focus-reset-button,
       #pane-toggle,
       #texture-preview-wrap,
       #texture-controls input[type="color"],
@@ -624,24 +628,38 @@
         justify-content: center;
       }
       #axis-cycle-button,
-      #axis-sync-rotations-button {
+      #axis-sync-rotations-button,
+      #camera-recenter-button,
+      #focus-reset-button {
         position: absolute;
-        left: -25px;
-        right: auto;
         z-index: 4;
         width: 24px;
         height: 24px;
         border-radius: 50%;
         transform: translateY(-50%);
       }
-      #axis-cycle-button {
+      #axis-cycle-button,
+      #axis-sync-rotations-button {
+        left: -25px;
+        right: auto;
+      }
+      #camera-recenter-button,
+      #focus-reset-button {
+        left: auto;
+        right: -25px;
+      }
+      #axis-cycle-button,
+      #camera-recenter-button {
         top: calc(50% - 14px);
       }
-      #axis-sync-rotations-button {
+      #axis-sync-rotations-button,
+      #focus-reset-button {
         top: calc(50% + 14px);
       }
       #axis-cycle-button:hover,
-      #axis-sync-rotations-button:hover {
+      #axis-sync-rotations-button:hover,
+      #camera-recenter-button:hover,
+      #focus-reset-button:hover {
         background: var(--ui-bg-hover);
         color: var(--ui-text-strong);
         border-color: var(--ui-border);
@@ -914,6 +932,8 @@
       }
       #axis-cycle-button,
       #axis-sync-rotations-button,
+      #camera-recenter-button,
+      #focus-reset-button,
       #pane-toggle {
         display: grid;
         place-items: center;
@@ -924,7 +944,9 @@
         transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
       }
       #axis-cycle-button,
-      #axis-sync-rotations-button {
+      #axis-sync-rotations-button,
+      #camera-recenter-button,
+      #focus-reset-button {
         width: 24px;
         height: 24px;
         border: 0;
@@ -942,7 +964,9 @@
         border-color: var(--ui-border);
       }
       #axis-cycle-button .material-symbols-rounded,
-      #axis-sync-rotations-button .material-symbols-rounded {
+      #axis-sync-rotations-button .material-symbols-rounded,
+      #camera-recenter-button .material-symbols-rounded,
+      #focus-reset-button .material-symbols-rounded {
         font-size: 17px;
       }
       #pane-toggle .material-symbols-rounded {
@@ -1241,12 +1265,12 @@
       }
       #background-controls .background-row {
         display: grid;
-        grid-template-columns: 64px minmax(0, 1fr) 52px;
+        grid-template-columns: var(--scene-control-label-width) minmax(0, 1fr) var(--scene-control-value-width);
         align-items: center;
         gap: 14px;
       }
       #background-controls .background-row.quality-row {
-        grid-template-columns: 64px minmax(0, 1fr);
+        grid-template-columns: var(--scene-control-label-width) minmax(0, 1fr);
       }
       #background-controls label {
         color: var(--ui-text);
@@ -1257,6 +1281,7 @@
       }
       #background-controls input[type="range"] {
         width: 100%;
+        min-width: 0;
       }
       #background-controls output {
         text-align: right;
@@ -1320,7 +1345,7 @@
       }
       #render-effects-controls .render-effect-row {
         display: grid;
-        grid-template-columns: 82px minmax(0, 1fr) 52px;
+        grid-template-columns: var(--scene-control-label-width) minmax(0, 1fr) var(--scene-control-value-width);
         align-items: center;
         gap: 14px;
       }
@@ -1333,6 +1358,7 @@
       }
       #render-effects-controls input[type="range"] {
         width: 100%;
+        min-width: 0;
       }
       #render-effects-controls output {
         text-align: right;
@@ -1393,7 +1419,7 @@
       }
       #texture-controls .texture-row {
         display: grid;
-        grid-template-columns: 82px minmax(0, 1fr) 66px;
+        grid-template-columns: var(--scene-control-label-width) minmax(0, 1fr) var(--scene-control-value-width);
         align-items: center;
         gap: 14px;
       }
@@ -1429,6 +1455,7 @@
       }
       #texture-controls input[type="range"] {
         width: 100%;
+        min-width: 0;
       }
       #texture-controls output {
         display: block;
@@ -2118,11 +2145,16 @@
         #texture-preview-wrap {
           height: 108px;
         }
+        #background-controls .background-row,
         #render-effects-controls .render-effect-row,
         #texture-controls .texture-row {
           grid-template-columns: 1fr;
           gap: 4px;
         }
+        #background-controls .background-row.quality-row {
+          grid-template-columns: 1fr;
+        }
+        #background-controls output,
         #render-effects-controls output,
         #texture-controls output {
           width: 100%;
@@ -2143,7 +2175,7 @@
         border: 0 !important;
       }
     </style>
-    <script type="module" crossorigin src="/BleND/assets/index-etEpKNv_.js"></script>
+    <script type="module" crossorigin src="/BleND/assets/index-Co_HYhsh.js"></script>
   </head>
   <body>
     <div id="camera-view-overlay" aria-hidden="true"></div>
@@ -2259,6 +2291,12 @@
             <button id="axis-sync-rotations-button" type="button" aria-label="Reset extra-axis rotations" title="Reset extra-axis rotations">
               <span class="material-symbols-rounded" aria-hidden="true">refresh</span>
             </button>
+            <button id="camera-recenter-button" type="button" aria-label="Recenter camera" title="Recenter camera">
+              <span class="material-symbols-rounded" aria-hidden="true">recenter</span>
+            </button>
+            <button id="focus-reset-button" type="button" aria-label="Reset focus" title="Reset focus">
+              <span class="material-symbols-rounded" aria-hidden="true">reset_focus</span>
+            </button>
           </div>
         </div>
         <div id="extra-axis-scroll-wrap">
@@ -2330,13 +2368,13 @@
           <div id="background-controls">
             <div class="background-row">
               <label for="background-blur">Blur</label>
-              <input id="background-blur" type="range" min="0" max="1" step="0.01" value="0.35" />
-              <output id="background-blur-value">0.35</output>
+              <input id="background-blur" type="range" min="0" max="1" step="0.01" value="0.00" />
+              <output id="background-blur-value">0.00</output>
             </div>
             <div class="background-row">
-              <label for="background-lightness">Lightness</label>
-              <input id="background-lightness" type="range" min="0.2" max="2" step="0.01" value="1.00" />
-              <output id="background-lightness-value">1.00</output>
+              <label for="background-lightness">Brightness</label>
+              <input id="background-lightness" type="range" min="0" max="2" step="0.01" value="0.00" />
+              <output id="background-lightness-value">0.00</output>
             </div>
           </div>
         </div>
@@ -2345,13 +2383,13 @@
           <div id="render-effects-controls">
             <div class="render-effect-row">
               <label for="bloom-intensity">Bloom</label>
-              <input id="bloom-intensity" type="range" min="0" max="1" step="0.01" value="0.25" />
-              <output id="bloom-intensity-value">0.25</output>
+              <input id="bloom-intensity" type="range" min="0" max="1" step="0.01" value="0.00" />
+              <output id="bloom-intensity-value">0.00</output>
             </div>
             <div class="render-effect-row">
               <label for="motion-blur-intensity">Motion blur</label>
-              <input id="motion-blur-intensity" type="range" min="0" max="1" step="0.01" value="0.50" />
-              <output id="motion-blur-intensity-value">0.50</output>
+              <input id="motion-blur-intensity" type="range" min="0" max="1" step="0.01" value="0.00" />
+              <output id="motion-blur-intensity-value">0.00</output>
             </div>
           </div>
         </div>
@@ -2409,7 +2447,7 @@
           <li><strong>Perspective depth:</strong> use the depth button on an extra-axis gizmo to include/exclude that axis from perspective depth.</li>
           <li><strong>XYZ gizmo:</strong> drag the gizmo to move/orbit the view, or tap an endpoint to snap the camera to that axis.</li>
           <li><strong>Extra-axis gizmos:</strong> drag a gizmo to rotate through that extra dimension's projection plane.</li>
-          <li><strong>Axis auto-rotate:</strong> use the tiny play button on a gizmo to cycle 1x, 2x, 3x, then stop for that axis plane.</li>
+          <li><strong>Axis auto-rotate:</strong> use the tiny play button on a gizmo to cycle 1x, 2x, 3x, then stop for that axis plane. Press <code>P</code> to play/pause active extra-axis rotations.</li>
           <li><strong>Axis order handles:</strong> drag the handle beside an extra-axis gizmo to reorder extra dimensions.</li>
           <li><strong>Axis swapping:</strong> drag an extra-axis gizmo over an XYZ tip to swap it with that projected axis.</li>
           <li><strong>Faceted mode:</strong> every object uses the same opaque multicolor material with one color per coplanar outer face region.</li>

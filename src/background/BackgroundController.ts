@@ -6,8 +6,8 @@ const HDR_BACKGROUND_SELECTION_KEY = 'blend.hdriSelection.v1';
 const HDR_BACKGROUND_BLUR_KEY = 'blend.hdriBlur.v1';
 const HDR_BACKGROUND_LIGHTNESS_KEY = 'blend.hdriLightness.v1';
 const HDR_BACKGROUND_QUALITY_KEY = 'blend.hdriQuality.v1';
-const HDR_BACKGROUND_BLUR_DEFAULT = 0.35;
-const HDR_BACKGROUND_LIGHTNESS_DEFAULT = 1.0;
+const HDR_BACKGROUND_BLUR_DEFAULT = 0;
+const HDR_BACKGROUND_LIGHTNESS_DEFAULT = 0;
 const PLAIN_BACKGROUND_KEY = 'plain' as const;
 const DEFAULT_SOLID_BACKGROUND_KEY = 'ferndale' as const;
 const DEFAULT_HDR_QUALITY = 'sd' as const;
@@ -108,7 +108,7 @@ const hdrBackgroundOptionByKey = new Map<HdriBackgroundKey, HdriBackgroundOption
 const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
 
 function clampHdrLightness(value: number) {
-  return Math.max(0.2, Math.min(2.0, value));
+  return Math.max(0, Math.min(2.0, value));
 }
 
 function readStoredNumber(key: string, fallback: number) {

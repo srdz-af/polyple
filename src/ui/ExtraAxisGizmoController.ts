@@ -79,6 +79,7 @@ export class ExtraAxisGizmoController {
   private readonly anglePlaneKeys = new Map<number, string>();
   private readonly selectedPerspectiveDims = new Set<number>([3]);
   private readonly autoRotateSpeeds = new Map<number, number>();
+  private readonly pausedAutoRotateSpeeds = new Map<number, number>();
   private readonly drag = {
     active: false,
     moved: false,
@@ -217,6 +218,7 @@ export class ExtraAxisGizmoController {
 
   clearDynamicState() {
     this.autoRotateSpeeds.clear();
+    this.pausedAutoRotateSpeeds.clear();
     this.angles.clear();
     this.anglePlaneKeys.clear();
   }
@@ -256,6 +258,28 @@ export class ExtraAxisGizmoController {
     if (!rotated) return;
     this.sync();
     this.options.applySceneBackground();
+  }
+
+  toggleActiveAutoRotations() {
+    const planes = this.currentPlanes();
+    if (!planes.length) return;
+
+    const activePlanes = planes.filter(plane => (this.autoRotateSpeeds.get(plane.depthDim) ?? 0) > 0);
+    if (activePlanes.length) {
+      this.pausedAutoRotateSpeeds.clear();
+      for (const plane of activePlanes) {
+        this.pausedAutoRotateSpeeds.set(plane.depthDim, this.autoRotateSpeeds.get(plane.depthDim) ?? 1);
+      }
+      for (const plane of planes) this.setAutoRotateSpeed(plane.depthDim, 0);
+      return;
+    }
+
+    const hasPausedSpeed = planes.some(plane => (this.pausedAutoRotateSpeeds.get(plane.depthDim) ?? 0) > 0);
+    for (const plane of planes) {
+      const speed = hasPausedSpeed ? this.pausedAutoRotateSpeeds.get(plane.depthDim) ?? 0 : 1;
+      this.setAutoRotateSpeed(plane.depthDim, speed);
+    }
+    this.pausedAutoRotateSpeeds.clear();
   }
 
   syncRotationAngles() {

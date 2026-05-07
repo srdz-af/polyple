@@ -245,6 +245,10 @@ export class AxisGizmoController {
     this.extraAxisGizmos.applyAutoRotation(dt);
   }
 
+  toggleActiveAutoRotations() {
+    this.extraAxisGizmos.toggleActiveAutoRotations();
+  }
+
   snapCameraToAxis(axis: THREE.Vector3) {
     const { camera, controls, worldUp } = this.options;
     const target = controls.target.clone();

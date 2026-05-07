@@ -55,8 +55,8 @@ import type {
 
 type PrimitiveMode = PrimitiveKind;
 
-const DEFAULT_BLOOM_INTENSITY = 0.25;
-const DEFAULT_MOTION_BLUR_INTENSITY = 0.5;
+const DEFAULT_BLOOM_INTENSITY = 0;
+const DEFAULT_MOTION_BLUR_INTENSITY = 0;
 const MAX_VIEWPORT_PIXEL_RATIO = 2;
 const LOW_RES_CAPTURE_PIXEL_RATIO_SCALE = 0.5;
 
@@ -199,6 +199,8 @@ const transformScaleButton = document.getElementById('transform-scale-button') a
 const dimensionValue = document.getElementById('dimension-value') as HTMLOutputElement | null;
 const dimensionDownButton = document.getElementById('dimension-down') as HTMLButtonElement | null;
 const dimensionUpButton = document.getElementById('dimension-up') as HTMLButtonElement | null;
+const cameraRecenterButton = document.getElementById('camera-recenter-button') as HTMLButtonElement | null;
+const focusResetButton = document.getElementById('focus-reset-button') as HTMLButtonElement | null;
 const bloomIntensityInput = document.getElementById('bloom-intensity') as HTMLInputElement | null;
 const bloomIntensityValue = document.getElementById('bloom-intensity-value') as HTMLOutputElement | null;
 const motionBlurIntensityInput = document.getElementById('motion-blur-intensity') as HTMLInputElement | null;
@@ -1358,6 +1360,8 @@ editModeToggle?.addEventListener('click', () => setEditMode(!PARAMS.editMode));
 });
 dimensionDownButton?.addEventListener('click', () => setNewPrimitiveDimension(PARAMS.N - 1));
 dimensionUpButton?.addEventListener('click', () => setNewPrimitiveDimension(PARAMS.N + 1));
+cameraRecenterButton?.addEventListener('click', () => keyboardCamera.recenterCamera());
+focusResetButton?.addEventListener('click', () => keyboardCamera.resetFocus());
 new KeyboardShortcutController({
   isModalOpen: () => modalOverlayController.isOpen(),
   getTransformMode: () => transformController.mode,
@@ -1368,6 +1372,7 @@ new KeyboardShortcutController({
   captureFrame: () => viewportCapture.captureFrame(),
   exportAnimation: () => viewportCapture.renderAnimation(),
   toggleAnimationPlayback: () => animationTimeline?.togglePlayback(),
+  toggleAxisAutoRotations: () => axisController.toggleActiveAutoRotations(),
   insertKeyframe: () => animationTimeline?.addKeyframeAtCurrentFrame(),
   removeLastKeyframe: () => animationTimeline?.removeLastKeyframe(),
   toggleEditMode: () => setEditMode(!PARAMS.editMode),

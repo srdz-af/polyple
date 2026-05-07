@@ -13,6 +13,7 @@ type KeyboardShortcutControllerOptions = {
   captureFrame: () => void;
   exportAnimation: () => void;
   toggleAnimationPlayback: () => void;
+  toggleAxisAutoRotations: () => void;
   insertKeyframe: () => void;
   removeLastKeyframe: () => void;
   toggleEditMode: () => void;
@@ -85,6 +86,12 @@ export class KeyboardShortcutController {
     if (!hasSystemMod && !ev.shiftKey && transformMode === 'none' && ev.code === 'Space') {
       ev.preventDefault();
       this.options.toggleAnimationPlayback();
+      return;
+    }
+
+    if (!hasSystemMod && transformMode === 'none' && key === 'p') {
+      ev.preventDefault();
+      this.options.toggleAxisAutoRotations();
       return;
     }
 
