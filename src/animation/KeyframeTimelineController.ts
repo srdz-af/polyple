@@ -20,6 +20,8 @@ export type AnimationSettings = {
   fps: number;
   frameCount: number;
   fullResolution: boolean;
+  cameraWidth: number;
+  cameraHeight: number;
 };
 
 type Keyframe = {
@@ -41,6 +43,20 @@ const MIN_FPS = 1;
 const MAX_FPS = 120;
 const MIN_FRAME_COUNT = 1;
 const MAX_FRAME_COUNT = 12000;
+const MIN_CAMERA_DIMENSION = 16;
+const MAX_CAMERA_DIMENSION = 16384;
+
+function viewportDimension(value: number, fallback: number) {
+  const rounded = Math.round(Number.isFinite(value) ? value : fallback);
+  return clamp(rounded, MIN_CAMERA_DIMENSION, MAX_CAMERA_DIMENSION);
+}
+
+function viewportDimensions() {
+  return {
+    width: viewportDimension(window.innerWidth, 1280),
+    height: viewportDimension(window.innerHeight, 720),
+  };
+}
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -58,6 +74,8 @@ export class KeyframeTimelineController {
   private readonly menuEl = document.getElementById('render-menu') as HTMLDivElement | null;
   private readonly fpsInput = document.getElementById('recording-fps') as HTMLInputElement | null;
   private readonly frameCountInput = document.getElementById('animation-frame-count') as HTMLInputElement | null;
+  private readonly cameraWidthInput = document.getElementById('camera-width') as HTMLInputElement | null;
+  private readonly cameraHeightInput = document.getElementById('camera-height') as HTMLInputElement | null;
   private readonly fullResolutionToggleButton = document.getElementById('full-resolution-capture-toggle') as HTMLButtonElement | null;
   private readonly addKeyframeButton = document.getElementById('add-keyframe-button') as HTMLButtonElement | null;
   private readonly removeKeyframeButton = document.getElementById('remove-keyframe-button') as HTMLButtonElement | null;
@@ -70,10 +88,13 @@ export class KeyframeTimelineController {
   private readonly frameOutput = document.getElementById('animation-current-frame') as HTMLOutputElement | null;
 
   private readonly keyframes = new Map<number, AnimationKeyframeState>();
+  private cameraDimensionsFollowViewport = true;
   private settings: AnimationSettings = {
     fps: DEFAULT_FPS,
     frameCount: DEFAULT_FRAME_COUNT,
     fullResolution: DEFAULT_FULL_RESOLUTION,
+    cameraWidth: viewportDimensions().width,
+    cameraHeight: viewportDimensions().height,
   };
   private currentFrame = 0;
   private playing = false;
@@ -84,6 +105,8 @@ export class KeyframeTimelineController {
   bind() {
     if (this.fpsInput) this.fpsInput.value = String(this.settings.fps);
     if (this.frameCountInput) this.frameCountInput.value = String(this.settings.frameCount);
+    if (this.cameraWidthInput) this.cameraWidthInput.value = String(this.settings.cameraWidth);
+    if (this.cameraHeightInput) this.cameraHeightInput.value = String(this.settings.cameraHeight);
 
     this.playButton?.addEventListener('click', () => this.togglePlayback());
     this.menuToggleButton?.addEventListener('click', ev => {
@@ -97,8 +120,10 @@ export class KeyframeTimelineController {
       this.closeKeyframeMenu();
     });
 
-    this.fpsInput?.addEventListener('input', () => this.syncSettingsFromInputs());
-    this.frameCountInput?.addEventListener('input', () => this.syncSettingsFromInputs());
+    this.fpsInput?.addEventListener('change', () => this.syncSettingsFromInputs());
+    this.frameCountInput?.addEventListener('change', () => this.syncSettingsFromInputs());
+    this.cameraWidthInput?.addEventListener('change', () => this.handleCameraDimensionsInput());
+    this.cameraHeightInput?.addEventListener('change', () => this.handleCameraDimensionsInput());
     this.fullResolutionToggleButton?.addEventListener('click', () => this.toggleFullResolutionCapture());
     this.addKeyframeButton?.addEventListener('click', () => {
       this.addKeyframeAtCurrentFrame();
@@ -111,6 +136,7 @@ export class KeyframeTimelineController {
     this.timelineEl?.addEventListener('pointerdown', ev => this.scrubToPointer(ev));
     this.timelineEl?.addEventListener('contextmenu', ev => this.openKeyframeMenu(ev));
     this.playheadEl?.addEventListener('pointerdown', ev => this.startPlayheadDrag(ev));
+    window.addEventListener('resize', this.handleWindowResize);
 
     this.syncFullResolutionButton();
     this.syncSettingsFromInputs();
@@ -225,14 +251,38 @@ export class KeyframeTimelineController {
       MIN_FRAME_COUNT,
       MAX_FRAME_COUNT,
     );
+    let cameraWidth = this.settings.cameraWidth;
+    let cameraHeight = this.settings.cameraHeight;
+    if (this.cameraDimensionsFollowViewport) {
+      const viewport = viewportDimensions();
+      cameraWidth = viewport.width;
+      cameraHeight = viewport.height;
+    } else {
+      cameraWidth = readPositiveInteger(
+        this.cameraWidthInput,
+        this.settings.cameraWidth,
+        MIN_CAMERA_DIMENSION,
+        MAX_CAMERA_DIMENSION,
+      );
+      cameraHeight = readPositiveInteger(
+        this.cameraHeightInput,
+        this.settings.cameraHeight,
+        MIN_CAMERA_DIMENSION,
+        MAX_CAMERA_DIMENSION,
+      );
+    }
 
     this.settings = {
       fps,
       frameCount,
       fullResolution: this.settings.fullResolution,
+      cameraWidth,
+      cameraHeight,
     };
     if (this.fpsInput) this.fpsInput.value = String(fps);
     if (this.frameCountInput) this.frameCountInput.value = String(frameCount);
+    if (this.cameraWidthInput) this.cameraWidthInput.value = String(cameraWidth);
+    if (this.cameraHeightInput) this.cameraHeightInput.value = String(cameraHeight);
 
     const maxFrame = Math.max(0, frameCount - 1);
     for (const frame of Array.from(this.keyframes.keys())) {
@@ -243,6 +293,30 @@ export class KeyframeTimelineController {
     this.options.onSettingsChange?.(this.getSettings());
     this.render();
   }
+
+  private handleCameraDimensionsInput() {
+    const cameraWidthRaw = this.cameraWidthInput?.value.trim() ?? '';
+    const cameraHeightRaw = this.cameraHeightInput?.value.trim() ?? '';
+    this.cameraDimensionsFollowViewport = !cameraWidthRaw || !cameraHeightRaw;
+    this.syncSettingsFromInputs();
+  }
+
+  private readonly handleWindowResize = () => {
+    if (!this.cameraDimensionsFollowViewport) return;
+    const viewport = viewportDimensions();
+    if (
+      viewport.width === this.settings.cameraWidth
+      && viewport.height === this.settings.cameraHeight
+    ) return;
+    this.settings = {
+      ...this.settings,
+      cameraWidth: viewport.width,
+      cameraHeight: viewport.height,
+    };
+    if (this.cameraWidthInput) this.cameraWidthInput.value = String(viewport.width);
+    if (this.cameraHeightInput) this.cameraHeightInput.value = String(viewport.height);
+    this.options.onSettingsChange?.(this.getSettings());
+  };
 
   private toggleFullResolutionCapture() {
     this.settings.fullResolution = !this.settings.fullResolution;

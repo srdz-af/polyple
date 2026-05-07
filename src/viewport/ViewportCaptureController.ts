@@ -6,6 +6,7 @@ type ViewportCaptureControllerOptions = {
   camera: THREE.Camera;
   gridGroup: THREE.Object3D;
   axes: THREE.Object3D;
+  cameraOverlayEl?: HTMLDivElement | null;
   renderButton: HTMLButtonElement | null;
   recordButton: HTMLButtonElement | null;
   captureButton: HTMLButtonElement | null;
@@ -28,6 +29,13 @@ type StartRecordingOptions = {
   onStop?: () => void;
 };
 
+type CaptureCropRect = {
+  sx: number;
+  sy: number;
+  sw: number;
+  sh: number;
+};
+
 const VIDEO_RECORDER_MIME_CANDIDATES = [
   'video/webm;codecs=vp9,opus',
   'video/webm;codecs=vp8,opus',
@@ -38,8 +46,8 @@ const VIDEO_RECORDER_MIME_CANDIDATES = [
 const DEFAULT_VIDEO_RECORDER_FPS = 60;
 const VIDEO_RECORDER_MIN_BITRATE = 28_000_000;
 const VIDEO_RECORDER_MAX_BITRATE = 140_000_000;
-
-const recorderBufferSize = new THREE.Vector2();
+const MIN_CAMERA_CAPTURE_DIMENSION = 16;
+const MAX_CAMERA_CAPTURE_DIMENSION = 16384;
 
 function captureTimestamp() {
   const now = new Date();
@@ -59,6 +67,11 @@ function downloadBlob(name: string, blob: Blob) {
 function recordingFileExtensionFromMime(mimeType: string) {
   if (mimeType.includes('mp4')) return 'mp4';
   return 'webm';
+}
+
+function clampCaptureDimension(value: number, fallback: number) {
+  const rounded = Math.round(Number.isFinite(value) ? value : fallback);
+  return Math.max(MIN_CAMERA_CAPTURE_DIMENSION, Math.min(MAX_CAMERA_CAPTURE_DIMENSION, rounded));
 }
 
 function formatRecordingElapsed(ms: number) {
@@ -100,26 +113,45 @@ export class ViewportCaptureController {
   private recordingFps = DEFAULT_VIDEO_RECORDER_FPS;
   private recordingFrameCount = 180;
   private fullResolutionCapture = true;
+  private cameraCaptureWidth = clampCaptureDimension(window.innerWidth, 1280);
+  private cameraCaptureHeight = clampCaptureDimension(window.innerHeight, 720);
   private recordingMode: RecordingMode | null = null;
   private recordingFilePrefix = 'blend-viewport';
   private recordingStopCallback: (() => void) | null = null;
   private manualFrameCapture = false;
   private captureResolutionAdjusted = false;
+  private captureCanvas: HTMLCanvasElement | null = null;
+  private captureCanvasContext: CanvasRenderingContext2D | null = null;
+  private captureBlitRafId: number | null = null;
 
   constructor(private readonly options: ViewportCaptureControllerOptions) {}
 
-  setRecordingSettings(fps: number, frameCount: number, fullResolution = this.fullResolutionCapture) {
+  setRecordingSettings(
+    fps: number,
+    frameCount: number,
+    fullResolution = this.fullResolutionCapture,
+    cameraWidth = this.cameraCaptureWidth,
+    cameraHeight = this.cameraCaptureHeight,
+  ) {
     this.recordingFps = Math.max(1, Math.min(120, Math.round(Number.isFinite(fps) ? fps : DEFAULT_VIDEO_RECORDER_FPS)));
     this.recordingFrameCount = Math.max(1, Math.min(12000, Math.round(Number.isFinite(frameCount) ? frameCount : 180)));
     this.fullResolutionCapture = !!fullResolution;
+    this.cameraCaptureWidth = clampCaptureDimension(cameraWidth, this.cameraCaptureWidth);
+    this.cameraCaptureHeight = clampCaptureDimension(cameraHeight, this.cameraCaptureHeight);
+    this.updateCameraViewOverlay();
   }
 
   bindControls() {
     this.setRecordButtonState(false);
     this.setRenderButtonState(false);
+    this.updateCameraViewOverlay();
     this.options.renderButton?.addEventListener('click', () => this.renderAnimation());
     this.options.recordButton?.addEventListener('click', () => this.toggleRecording());
     this.options.captureButton?.addEventListener('click', () => this.captureFrame());
+  }
+
+  onViewportResize() {
+    this.updateCameraViewOverlay();
   }
 
   toggleRecording() {
@@ -153,6 +185,7 @@ export class ViewportCaptureController {
 
       this.options.renderAnimationFrame?.(frame);
       this.renderCanvasFrame();
+      this.drawRendererToCaptureCanvas();
       this.requestCanvasStreamFrame();
 
       frame += 1;
@@ -182,7 +215,7 @@ export class ViewportCaptureController {
       return;
     }
 
-    const { gridGroup, axes, renderer } = this.options;
+    const { gridGroup, axes } = this.options;
     const previousGridVisibility = gridGroup.visible;
     const previousAxesVisibility = axes.visible;
     this.applyCaptureResolution();
@@ -190,7 +223,8 @@ export class ViewportCaptureController {
     axes.visible = false;
     this.renderCanvasFrame();
     try {
-      const dataUrl = renderer.domElement.toDataURL('image/png');
+      if (!this.drawRendererToCaptureCanvas()) throw new Error('capture-failed');
+      const dataUrl = this.captureCanvas!.toDataURL('image/png');
       const a = document.createElement('a');
       a.href = dataUrl;
       a.download = `blend-frame-${captureTimestamp()}.png`;
@@ -284,6 +318,104 @@ export class ViewportCaptureController {
     if (icon) icon.textContent = rendering ? 'stop' : 'vr180_create2d';
   }
 
+  private captureOutputSize() {
+    return {
+      width: clampCaptureDimension(this.cameraCaptureWidth, window.innerWidth),
+      height: clampCaptureDimension(this.cameraCaptureHeight, window.innerHeight),
+    };
+  }
+
+  private captureCropRect(targetWidth: number, targetHeight: number): CaptureCropRect {
+    const sourceCanvas = this.options.renderer.domElement;
+    const sourceWidth = Math.max(1, sourceCanvas.width);
+    const sourceHeight = Math.max(1, sourceCanvas.height);
+    const rect = this.options.renderer.domElement.getBoundingClientRect();
+    const cssWidth = Math.max(1, rect.width);
+    const cssHeight = Math.max(1, rect.height);
+    const fitScale = Math.min(1, cssWidth / targetWidth, cssHeight / targetHeight);
+    const frameCssWidth = targetWidth * fitScale;
+    const frameCssHeight = targetHeight * fitScale;
+
+    const cropWidth = Math.max(1, frameCssWidth * (sourceWidth / cssWidth));
+    const cropHeight = Math.max(1, frameCssHeight * (sourceHeight / cssHeight));
+
+    const sx = Math.max(0, (sourceWidth - cropWidth) * 0.5);
+    const sy = Math.max(0, (sourceHeight - cropHeight) * 0.5);
+    return { sx, sy, sw: cropWidth, sh: cropHeight };
+  }
+
+  private ensureCaptureCanvas(width: number, height: number) {
+    if (!this.captureCanvas) {
+      this.captureCanvas = document.createElement('canvas');
+      this.captureCanvasContext = this.captureCanvas.getContext('2d', { alpha: false });
+    }
+    if (!this.captureCanvas || !this.captureCanvasContext) return false;
+    if (this.captureCanvas.width !== width) this.captureCanvas.width = width;
+    if (this.captureCanvas.height !== height) this.captureCanvas.height = height;
+    return true;
+  }
+
+  private drawRendererToCaptureCanvas() {
+    const { width, height } = this.captureOutputSize();
+    if (!this.ensureCaptureCanvas(width, height)) return false;
+    const context = this.captureCanvasContext!;
+    const sourceCanvas = this.options.renderer.domElement;
+    const crop = this.captureCropRect(width, height);
+    context.drawImage(
+      sourceCanvas,
+      crop.sx,
+      crop.sy,
+      crop.sw,
+      crop.sh,
+      0,
+      0,
+      width,
+      height,
+    );
+    return true;
+  }
+
+  private updateCameraViewOverlay() {
+    const overlayEl = this.options.cameraOverlayEl;
+    if (!overlayEl) return;
+
+    const { width: targetWidth, height: targetHeight } = this.captureOutputSize();
+    const rect = this.options.renderer.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      overlayEl.style.display = 'none';
+      return;
+    }
+
+    const fitScale = Math.min(1, rect.width / targetWidth, rect.height / targetHeight);
+    const overlayWidth = targetWidth * fitScale;
+    const overlayHeight = targetHeight * fitScale;
+
+    overlayEl.style.display = 'block';
+    overlayEl.style.left = `${rect.left + ((rect.width - overlayWidth) * 0.5)}px`;
+    overlayEl.style.top = `${rect.top + ((rect.height - overlayHeight) * 0.5)}px`;
+    overlayEl.style.width = `${overlayWidth}px`;
+    overlayEl.style.height = `${overlayHeight}px`;
+  }
+
+  private startCaptureBlitLoop() {
+    this.stopCaptureBlitLoop();
+    const blit = () => {
+      if (!this.isRecording() || this.recordingMode !== 'viewport') {
+        this.captureBlitRafId = null;
+        return;
+      }
+      this.drawRendererToCaptureCanvas();
+      this.captureBlitRafId = window.requestAnimationFrame(blit);
+    };
+    blit();
+  }
+
+  private stopCaptureBlitLoop() {
+    if (this.captureBlitRafId == null) return;
+    window.cancelAnimationFrame(this.captureBlitRafId);
+    this.captureBlitRafId = null;
+  }
+
   private renderCanvasFrame() {
     const { renderer, scene, camera } = this.options;
     if (this.options.renderFrame) {
@@ -314,8 +446,8 @@ export class ViewportCaptureController {
   }
 
   private recommendedRecordingBitrate() {
-    this.options.renderer.getDrawingBufferSize(recorderBufferSize);
-    const pixelCount = Math.max(1, recorderBufferSize.x * recorderBufferSize.y);
+    const { width, height } = this.captureOutputSize();
+    const pixelCount = Math.max(1, width * height);
     const bitsPerPixelFrame = pixelCount >= (3840 * 2160)
       ? 0.16
       : pixelCount >= (2560 * 1440)
@@ -339,6 +471,7 @@ export class ViewportCaptureController {
     this.recorder = null;
     this.recorderStream = null;
     this.recorderChunks = [];
+    this.stopCaptureBlitLoop();
     this.clearRecordingStopTimeout();
     this.clearFinalStopTimeout();
     this.clearAnimationRenderTimeout();
@@ -368,6 +501,7 @@ export class ViewportCaptureController {
 
   private stopRecording() {
     if (!this.recorder) return;
+    this.stopCaptureBlitLoop();
     this.clearFinalStopTimeout();
     this.clearAnimationRenderTimeout();
     try {
@@ -387,9 +521,14 @@ export class ViewportCaptureController {
       alert('Viewport recording is not supported in this browser.');
       return false;
     }
-    const { renderer, gridGroup, axes } = this.options;
+    const { gridGroup, axes } = this.options;
     this.applyCaptureResolution();
-    const captureStream = renderer.domElement.captureStream?.bind(renderer.domElement);
+    if (!this.drawRendererToCaptureCanvas() || !this.captureCanvas) {
+      this.restoreCaptureResolution();
+      alert('Viewport capture canvas is unavailable.');
+      return false;
+    }
+    const captureStream = this.captureCanvas.captureStream?.bind(this.captureCanvas);
     if (!captureStream) {
       this.restoreCaptureResolution();
       alert('Viewport recording is not supported in this browser.');
@@ -449,12 +588,16 @@ export class ViewportCaptureController {
     gridGroup.visible = false;
     axes.visible = false;
     this.renderCanvasFrame();
+    this.drawRendererToCaptureCanvas();
     this.setRecordButtonState(options.mode === 'viewport');
     this.setRenderButtonState(options.mode === 'animation');
     this.startRecordingTimer();
 
     try {
       recorder.start(200);
+      if (options.mode === 'viewport' && !this.manualFrameCapture) {
+        this.startCaptureBlitLoop();
+      }
       if (options.autoStopMs != null) {
         this.recordingStopTimeoutId = window.setTimeout(() => this.stopRecording(), options.autoStopMs);
       }

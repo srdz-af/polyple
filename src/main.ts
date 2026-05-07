@@ -186,6 +186,7 @@ const renderAnimationButton = document.getElementById('render-animation-button')
 const recordViewportButton = document.getElementById('record-viewport-button') as HTMLButtonElement | null;
 const recordViewportTimer = document.getElementById('record-viewport-timer') as HTMLSpanElement | null;
 const captureFrameButton = document.getElementById('capture-frame-button') as HTMLButtonElement | null;
+const cameraViewOverlay = document.getElementById('camera-view-overlay') as HTMLDivElement | null;
 const editModeToggle = document.getElementById('edit-mode-toggle') as HTMLButtonElement | null;
 const transformMoveButton = document.getElementById('transform-move-button') as HTMLButtonElement | null;
 const transformRotateButton = document.getElementById('transform-rotate-button') as HTMLButtonElement | null;
@@ -310,6 +311,7 @@ const viewportCapture = new ViewportCaptureController({
   camera,
   gridGroup,
   axes,
+  cameraOverlayEl: cameraViewOverlay,
   renderButton: renderAnimationButton,
   recordButton: recordViewportButton,
   captureButton: captureFrameButton,
@@ -1312,6 +1314,8 @@ animationTimeline = new KeyframeTimelineController({
       settings.fps,
       settings.frameCount,
       settings.fullResolution,
+      settings.cameraWidth,
+      settings.cameraHeight,
     );
     if (!settings.fullResolution) {
       backgroundController.setHdrQuality('sd');
@@ -1383,6 +1387,7 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
   composer.setSize(w, h);
+  viewportCapture.onViewportResize();
   paneController.syncToViewport();
   textureEditor.updatePanel();
 });

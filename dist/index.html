@@ -368,6 +368,14 @@
         display: grid;
         gap: 9px;
       }
+      .render-menu-row-dimensions {
+        grid-template-columns: 64px 1fr;
+      }
+      .render-menu-dimension-inputs {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 6px;
+      }
       .render-menu-row {
         display: grid;
         grid-template-columns: 64px 1fr;
@@ -390,6 +398,17 @@
         background: var(--ui-bg-soft);
         color: var(--ui-text-strong);
         font: 12px/1 var(--ui-font);
+      }
+      #camera-view-overlay {
+        position: fixed;
+        z-index: 9;
+        display: none;
+        box-sizing: border-box;
+        border: 1px solid rgba(245, 248, 255, 0.9);
+        box-shadow:
+          0 0 0 9999px rgba(0, 0, 0, 0.45),
+          inset 0 0 0 1px rgba(0, 0, 0, 0.45);
+        pointer-events: none;
       }
       #render-actions {
         display: flex;
@@ -2116,9 +2135,10 @@
         border: 0 !important;
       }
     </style>
-    <script type="module" crossorigin src="/BleND/assets/index-DgjAGcMn.js"></script>
+    <script type="module" crossorigin src="/BleND/assets/index-DcvFmADu.js"></script>
   </head>
   <body>
+    <div id="camera-view-overlay" aria-hidden="true"></div>
     <div id="bottom-controls">
       <div id="render-options">
         <div id="view-toggle" aria-label="Render modes">
@@ -2147,6 +2167,13 @@
             <div class="render-menu-row">
               <label for="animation-frame-count">Frames</label>
               <input id="animation-frame-count" type="number" min="1" max="12000" step="1" value="180" inputmode="numeric" />
+            </div>
+            <div class="render-menu-row render-menu-row-dimensions">
+              <label>Camera</label>
+              <div class="render-menu-dimension-inputs">
+                <input id="camera-width" type="number" min="16" max="16384" step="1" value="0" inputmode="numeric" placeholder="Width" aria-label="Camera width in pixels" title="Camera width in pixels" />
+                <input id="camera-height" type="number" min="16" max="16384" step="1" value="0" inputmode="numeric" placeholder="Height" aria-label="Camera height in pixels" title="Camera height in pixels" />
+              </div>
             </div>
             <div id="render-actions" aria-label="Render capture actions">
               <button id="render-animation-button" type="button" aria-label="Render animation video (Ctrl+Shift+E)" title="Render animation video (Ctrl+Shift+E)">
