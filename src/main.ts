@@ -247,19 +247,17 @@ composer.addPass(bloomPass);
 composer.addPass(afterimagePass);
 const captureResolutionViewportSize = new THREE.Vector2();
 const fullViewportPixelRatio = () => Math.min(window.devicePixelRatio, MAX_VIEWPORT_PIXEL_RATIO);
-let downsampleSceneOnly = false;
 
 function setCaptureResolutionMode(fullResolution: boolean) {
   renderer.getSize(captureResolutionViewportSize);
   const fullPixelRatio = fullViewportPixelRatio();
-  const scenePixelRatio = fullResolution
+  const targetPixelRatio = fullResolution
     ? fullPixelRatio
     : Math.max(0.25, fullPixelRatio * LOW_RES_CAPTURE_PIXEL_RATIO_SCALE);
-  downsampleSceneOnly = !fullResolution;
 
-  renderer.setPixelRatio(fullPixelRatio);
+  renderer.setPixelRatio(targetPixelRatio);
   renderer.setSize(captureResolutionViewportSize.x, captureResolutionViewportSize.y, false);
-  composer.setPixelRatio(scenePixelRatio);
+  composer.setPixelRatio(targetPixelRatio);
   composer.setSize(captureResolutionViewportSize.x, captureResolutionViewportSize.y);
 }
 
@@ -945,7 +943,7 @@ function renderViewportFrame() {
   controls.update();
   updateTransformActionButtons();
   updateAxisGizmo();
-  if (hasRenderEffects() || downsampleSceneOnly) renderEffectsFrame();
+  if (hasRenderEffects()) renderEffectsFrame();
   else renderer.render(scene, camera);
 }
 
@@ -1307,17 +1305,11 @@ animationTimeline = new KeyframeTimelineController({
   captureState: captureAnimationState,
   applyState: applyAnimationState,
   interpolateState: interpolateAnimationState,
-  onSettingsChange: settings => {
-    viewportCapture.setRecordingSettings(
-      settings.fps,
-      settings.frameCount,
-      settings.fullResolution,
-    );
-    if (!settings.fullResolution) {
-      backgroundController.setHdrQuality('sd');
-    }
-    setCaptureResolutionMode(settings.fullResolution);
-  },
+  onSettingsChange: settings => viewportCapture.setRecordingSettings(
+    settings.fps,
+    settings.frameCount,
+    settings.fullResolution,
+  ),
 });
 animationTimeline.bind();
 viewportCapture.bindControls();
