@@ -17,10 +17,10 @@ const ZOOM_MIN_DISTANCE = 0.2;
 const ZOOM_MAX_DISTANCE = 80;
 
 export function viewModeShortcutIndex(ev: KeyboardEvent) {
-  const keyMatch = /^[1-3]$/.test(ev.key) ? Number.parseInt(ev.key, 10) - 1 : -1;
+  const keyMatch = /^[1-4]$/.test(ev.key) ? Number.parseInt(ev.key, 10) - 1 : -1;
   if (keyMatch >= 0) return keyMatch;
 
-  const codeMatch = /^(?:Digit|Numpad)([1-3])$/.exec(ev.code);
+  const codeMatch = /^(?:Digit|Numpad)([1-4])$/.exec(ev.code);
   return codeMatch ? Number.parseInt(codeMatch[1], 10) - 1 : -1;
 }
 

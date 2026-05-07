@@ -10,7 +10,6 @@ type ViewportCaptureControllerOptions = {
   recordButton: HTMLButtonElement | null;
   captureButton: HTMLButtonElement | null;
   timerEl: HTMLSpanElement | null;
-  setCaptureResolutionMode?: (fullResolution: boolean) => void;
   renderFrame?: () => void;
   renderAnimationFrame?: (frame: number) => void;
   onAnimationRenderStart?: () => void;
@@ -99,19 +98,16 @@ export class ViewportCaptureController {
   private animationRenderTimeoutId: number | null = null;
   private recordingFps = DEFAULT_VIDEO_RECORDER_FPS;
   private recordingFrameCount = 180;
-  private fullResolutionCapture = true;
   private recordingMode: RecordingMode | null = null;
   private recordingFilePrefix = 'blend-viewport';
   private recordingStopCallback: (() => void) | null = null;
   private manualFrameCapture = false;
-  private captureResolutionAdjusted = false;
 
   constructor(private readonly options: ViewportCaptureControllerOptions) {}
 
-  setRecordingSettings(fps: number, frameCount: number, fullResolution = this.fullResolutionCapture) {
+  setRecordingSettings(fps: number, frameCount: number) {
     this.recordingFps = Math.max(1, Math.min(120, Math.round(Number.isFinite(fps) ? fps : DEFAULT_VIDEO_RECORDER_FPS)));
     this.recordingFrameCount = Math.max(1, Math.min(12000, Math.round(Number.isFinite(frameCount) ? frameCount : 180)));
-    this.fullResolutionCapture = !!fullResolution;
   }
 
   bindControls() {
@@ -177,15 +173,9 @@ export class ViewportCaptureController {
   }
 
   captureFrame() {
-    if (this.isRecording()) {
-      alert('Stop the current recording before taking a screenshot.');
-      return;
-    }
-
     const { gridGroup, axes, renderer } = this.options;
     const previousGridVisibility = gridGroup.visible;
     const previousAxesVisibility = axes.visible;
-    this.applyCaptureResolution();
     gridGroup.visible = false;
     axes.visible = false;
     this.renderCanvasFrame();
@@ -200,7 +190,6 @@ export class ViewportCaptureController {
     } finally {
       gridGroup.visible = previousGridVisibility;
       axes.visible = previousAxesVisibility;
-      this.restoreCaptureResolution();
       this.renderCanvasFrame();
     }
   }
@@ -346,7 +335,6 @@ export class ViewportCaptureController {
     stream?.getTracks().forEach(track => track.stop());
     gridGroup.visible = this.gridVisibleBeforeCapture;
     axes.visible = this.axesVisibleBeforeCapture;
-    this.restoreCaptureResolution();
     this.renderCanvasFrame();
     this.stopRecordingTimer();
     this.recordingMode = null;
@@ -388,10 +376,8 @@ export class ViewportCaptureController {
       return false;
     }
     const { renderer, gridGroup, axes } = this.options;
-    this.applyCaptureResolution();
     const captureStream = renderer.domElement.captureStream?.bind(renderer.domElement);
     if (!captureStream) {
-      this.restoreCaptureResolution();
       alert('Viewport recording is not supported in this browser.');
       return false;
     }
@@ -418,7 +404,6 @@ export class ViewportCaptureController {
           : new MediaRecorder(stream);
       } catch {
         stream.getTracks().forEach(track => track.stop());
-        this.restoreCaptureResolution();
         alert('Unable to start viewport recording.');
         return false;
       }
@@ -465,17 +450,5 @@ export class ViewportCaptureController {
       alert('Unable to start viewport recording.');
       return false;
     }
-  }
-
-  private applyCaptureResolution() {
-    if (this.captureResolutionAdjusted || this.fullResolutionCapture) return;
-    this.options.setCaptureResolutionMode?.(false);
-    this.captureResolutionAdjusted = true;
-  }
-
-  private restoreCaptureResolution() {
-    if (!this.captureResolutionAdjusted) return;
-    this.options.setCaptureResolutionMode?.(true);
-    this.captureResolutionAdjusted = false;
   }
 }

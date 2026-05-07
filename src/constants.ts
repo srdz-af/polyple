@@ -11,6 +11,6 @@ export const AXIS_PALETTE = [
   '#ecf0f1',
 ] as const;
 
-export type ViewMode = 'wireframe' | 'solid' | 'faceted';
+export type ViewMode = 'wireframe' | 'transparent' | 'solid' | 'faceted';
 
-export const VIEW_MODES: readonly ViewMode[] = ['wireframe', 'solid', 'faceted'];
+export const VIEW_MODES: readonly ViewMode[] = ['wireframe', 'transparent', 'solid', 'faceted'];

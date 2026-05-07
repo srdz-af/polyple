@@ -52,8 +52,6 @@ type PrimitiveMode = PrimitiveKind;
 
 const DEFAULT_BLOOM_INTENSITY = 0.25;
 const DEFAULT_MOTION_BLUR_INTENSITY = 0.5;
-const MAX_VIEWPORT_PIXEL_RATIO = 2;
-const LOW_RES_CAPTURE_PIXEL_RATIO_SCALE = 0.5;
 
 class SmoothAfterimagePass extends Pass {
   uniforms: {
@@ -207,7 +205,7 @@ app.appendChild(renderer.domElement);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.1;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_VIEWPORT_PIXEL_RATIO));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
 const scene = new THREE.Scene();
 const baseBackground = new THREE.Color(0x10141a);
@@ -245,22 +243,6 @@ const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, windo
 const afterimagePass = new SmoothAfterimagePass();
 composer.addPass(bloomPass);
 composer.addPass(afterimagePass);
-const captureResolutionViewportSize = new THREE.Vector2();
-const fullViewportPixelRatio = () => Math.min(window.devicePixelRatio, MAX_VIEWPORT_PIXEL_RATIO);
-
-function setCaptureResolutionMode(fullResolution: boolean) {
-  renderer.getSize(captureResolutionViewportSize);
-  const fullPixelRatio = fullViewportPixelRatio();
-  const targetPixelRatio = fullResolution
-    ? fullPixelRatio
-    : Math.max(0.25, fullPixelRatio * LOW_RES_CAPTURE_PIXEL_RATIO_SCALE);
-
-  renderer.setPixelRatio(targetPixelRatio);
-  renderer.setSize(captureResolutionViewportSize.x, captureResolutionViewportSize.y, false);
-  composer.setPixelRatio(targetPixelRatio);
-  composer.setSize(captureResolutionViewportSize.x, captureResolutionViewportSize.y);
-}
-
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 const worldUp = new THREE.Vector3(0, 1, 0);
@@ -312,7 +294,6 @@ const viewportCapture = new ViewportCaptureController({
   recordButton: recordViewportButton,
   captureButton: captureFrameButton,
   timerEl: recordViewportTimer,
-  setCaptureResolutionMode,
   renderFrame: () => renderViewportFrame(),
   renderAnimationFrame: frame => animationTimeline?.seekToFrame(frame, true),
   onAnimationRenderStart: () => {
@@ -907,12 +888,16 @@ function renderReferenceLinesClean(gridWasVisible: boolean, axesWereVisible: boo
   renderer.autoClear = false;
   scene.background = null;
 
-  gridGroup.visible = false;
-  axes.visible = false;
-  scene.overrideMaterial = referenceLineDepthMaterial;
-  renderer.clearDepth();
-  renderer.render(scene, camera);
-  scene.overrideMaterial = previousOverrideMaterial;
+  if (PARAMS.renderMode !== 'transparent') {
+    gridGroup.visible = false;
+    axes.visible = false;
+    scene.overrideMaterial = referenceLineDepthMaterial;
+    renderer.clearDepth();
+    renderer.render(scene, camera);
+    scene.overrideMaterial = previousOverrideMaterial;
+  } else {
+    renderer.clearDepth();
+  }
 
   for (const { child } of childVisibility) {
     child.visible = (child === gridGroup && gridWasVisible) || (child === axes && axesWereVisible);
@@ -1305,11 +1290,7 @@ animationTimeline = new KeyframeTimelineController({
   captureState: captureAnimationState,
   applyState: applyAnimationState,
   interpolateState: interpolateAnimationState,
-  onSettingsChange: settings => viewportCapture.setRecordingSettings(
-    settings.fps,
-    settings.frameCount,
-    settings.fullResolution,
-  ),
+  onSettingsChange: settings => viewportCapture.setRecordingSettings(settings.fps, settings.frameCount),
 });
 animationTimeline.bind();
 viewportCapture.bindControls();

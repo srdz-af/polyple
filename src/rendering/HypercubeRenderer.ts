@@ -132,9 +132,9 @@ export class HypercubeRenderer {
     this.mode = mode;
 
     if (this.line) {
-      this.line.visible = mode === 'wireframe';
-      this.line.material.depthTest = true;
-      this.line.renderOrder = 0;
+      this.line.visible = mode === 'wireframe' || mode === 'transparent';
+      this.line.material.depthTest = mode !== 'transparent';
+      this.line.renderOrder = mode === 'transparent' ? 5 : 0;
     }
 
     if (this.mesh) {
@@ -223,9 +223,15 @@ export class HypercubeRenderer {
     material.color.setHex(this.surface.color);
     material.metalness = this.surface.metalness;
     material.roughness = this.surface.roughness;
-    material.transparent = this.surface.alpha < 0.999;
-    material.opacity = this.surface.alpha;
-    material.depthWrite = !material.transparent;
+    if (this.mode === 'transparent') {
+      material.transparent = true;
+      material.opacity = 0.5;
+      material.depthWrite = false;
+    } else {
+      material.transparent = this.surface.alpha < 0.999;
+      material.opacity = this.surface.alpha;
+      material.depthWrite = !material.transparent;
+    }
     material.needsUpdate = true;
   }
 
