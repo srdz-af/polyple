@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { ViewMode } from '../constants';
-import type { PrimitiveKind } from '../geometry/primitives';
+import { clonePrimitiveSurfaceTopology, type PrimitiveKind, type PrimitiveSurfaceTopology } from '../geometry/primitives';
 import type { AxisMap } from '../geometry/projectionUtils';
 import type { NDProjector } from '../geometry/NDProjector';
 import { HypercubeRenderer } from '../rendering/HypercubeRenderer';
@@ -10,6 +10,7 @@ import type { Instance } from './types';
 export type InstanceGeometryData = {
   verts: Float32Array;
   edges: Uint32Array;
+  surfaceTopology?: PrimitiveSurfaceTopology;
   V: number;
   kind: PrimitiveKind;
   axisMap: AxisMap;
@@ -32,7 +33,7 @@ type InstanceFactoryOptions = {
 
 export function createSceneInstance(options: InstanceFactoryOptions): Instance {
   const renderer = new HypercubeRenderer(options.scene);
-  renderer.build(options.data.V, options.data.edges);
+  renderer.build(options.data.V, options.data.edges, options.data.surfaceTopology);
   const surface = cloneSurface(normalizeSurface(options.surface));
   renderer.setSurface(surface);
 
@@ -61,6 +62,7 @@ export function createSceneInstance(options: InstanceFactoryOptions): Instance {
     Y,
     X: options.data.verts,
     E: options.data.edges,
+    surfaceTopology: clonePrimitiveSurfaceTopology(options.data.surfaceTopology),
     M: options.data.V,
     offset: options.offset.clone(),
     label: options.label,

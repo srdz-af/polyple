@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { PrimitiveKind } from '../geometry/primitives';
+import type { PrimitiveKind, PrimitiveSurfaceTopology } from '../geometry/primitives';
 import type { HypercubeRenderer } from '../rendering/HypercubeRenderer';
 import type { AxisMap } from '../geometry/projectionUtils';
 import type { SurfaceState } from './surface';
@@ -12,6 +12,7 @@ export type TransformState = { pos: THREE.Vector3; rot: THREE.Vector3; scale: TH
 export type InstanceSnapshot = {
   X: Float32Array;
   E: Uint32Array;
+  surfaceTopology?: PrimitiveSurfaceTopology;
   M: number;
   offset: THREE.Vector3;
   label: string;
@@ -27,6 +28,7 @@ export type SceneSnapshot<TPrimitiveMode> = {
   N: number;
   X: Float32Array;
   E: Uint32Array;
+  surfaceTopology?: PrimitiveSurfaceTopology;
   M: number;
   source: DataSource;
   label: string;
@@ -50,6 +52,7 @@ export type Instance = {
   Y: Float32Array;
   X: Float32Array;
   E: Uint32Array;
+  surfaceTopology?: PrimitiveSurfaceTopology;
   M: number;
   offset: THREE.Vector3;
   label: string;
