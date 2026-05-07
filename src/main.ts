@@ -247,17 +247,19 @@ composer.addPass(bloomPass);
 composer.addPass(afterimagePass);
 const captureResolutionViewportSize = new THREE.Vector2();
 const fullViewportPixelRatio = () => Math.min(window.devicePixelRatio, MAX_VIEWPORT_PIXEL_RATIO);
+let downsampleSceneOnly = false;
 
 function setCaptureResolutionMode(fullResolution: boolean) {
   renderer.getSize(captureResolutionViewportSize);
   const fullPixelRatio = fullViewportPixelRatio();
-  const targetPixelRatio = fullResolution
+  const scenePixelRatio = fullResolution
     ? fullPixelRatio
     : Math.max(0.25, fullPixelRatio * LOW_RES_CAPTURE_PIXEL_RATIO_SCALE);
+  downsampleSceneOnly = !fullResolution;
 
-  renderer.setPixelRatio(targetPixelRatio);
+  renderer.setPixelRatio(fullPixelRatio);
   renderer.setSize(captureResolutionViewportSize.x, captureResolutionViewportSize.y, false);
-  composer.setPixelRatio(targetPixelRatio);
+  composer.setPixelRatio(scenePixelRatio);
   composer.setSize(captureResolutionViewportSize.x, captureResolutionViewportSize.y);
 }
 
@@ -943,7 +945,7 @@ function renderViewportFrame() {
   controls.update();
   updateTransformActionButtons();
   updateAxisGizmo();
-  if (hasRenderEffects()) renderEffectsFrame();
+  if (hasRenderEffects() || downsampleSceneOnly) renderEffectsFrame();
   else renderer.render(scene, camera);
 }
 
@@ -1305,11 +1307,14 @@ animationTimeline = new KeyframeTimelineController({
   captureState: captureAnimationState,
   applyState: applyAnimationState,
   interpolateState: interpolateAnimationState,
-  onSettingsChange: settings => viewportCapture.setRecordingSettings(
-    settings.fps,
-    settings.frameCount,
-    settings.fullResolution,
-  ),
+  onSettingsChange: settings => {
+    viewportCapture.setRecordingSettings(
+      settings.fps,
+      settings.frameCount,
+      settings.fullResolution,
+    );
+    setCaptureResolutionMode(settings.fullResolution);
+  },
 });
 animationTimeline.bind();
 viewportCapture.bindControls();
