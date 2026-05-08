@@ -16,6 +16,9 @@ type PrimitiveMenuOption = {
   kind: PrimitiveKind;
 };
 
+const OBJECT_FOCUS_DOUBLE_CLICK_MS = 220;
+const OBJECT_FOCUS_DOUBLE_CLICK_MAX_DIST = 8;
+
 type ViewportInteractionControllerOptions = {
   renderer: THREE.WebGLRenderer;
   camera: THREE.PerspectiveCamera;
@@ -58,6 +61,12 @@ export class ViewportInteractionController {
   private readonly tmpVec = new THREE.Vector3();
   private lastPointer = { x: window.innerWidth - 180, y: window.innerHeight - 80 };
   private deletePending = false;
+  private readonly lastObjectClick = {
+    time: Number.NEGATIVE_INFINITY,
+    x: 0,
+    y: 0,
+    instIdx: Number.NaN,
+  };
   private readonly axisDrag = {
     active: false,
     lastX: 0,
@@ -77,7 +86,6 @@ export class ViewportInteractionController {
     canvas.addEventListener('wheel', ev => this.handleWheel(ev));
     canvas.addEventListener('mousedown', ev => this.handleMiddleMouseDown(ev), { capture: true });
     canvas.addEventListener('pointerdown', ev => this.handlePointerDown(ev));
-    canvas.addEventListener('dblclick', ev => this.handleDoubleClick(ev));
 
     window.addEventListener('click', () => this.hideContextMenuIfIdle());
     window.addEventListener('pointermove', ev => this.handleWindowPointerMove(ev));
@@ -355,7 +363,14 @@ export class ViewportInteractionController {
     }
 
     if (ev.button !== 0) return;
-    this.selectObjectFromPointer(ev);
+    const selected = this.selectObjectFromPointer(ev);
+    if (selected !== this.options.noSelection && this.isObjectFocusDoubleClick(ev, selected)) {
+      ev.preventDefault();
+      this.options.focusObjectOrigin(selected);
+      this.resetLastObjectClick();
+    } else {
+      this.recordObjectClick(ev, selected);
+    }
   }
 
   private handleWindowPointerMove(ev: PointerEvent) {
@@ -466,12 +481,27 @@ export class ViewportInteractionController {
     return bestInst;
   }
 
-  private handleDoubleClick(ev: MouseEvent) {
-    if (this.options.transformController.isActive()) return;
-    ev.preventDefault();
-    this.lastPointer = { x: ev.clientX, y: ev.clientY };
-    const focused = this.selectObjectFromPointer(ev);
-    if (focused !== this.options.noSelection) this.options.focusObjectOrigin(focused);
+  private isObjectFocusDoubleClick(ev: PointerEvent, instIdx: number) {
+    const now = performance.now();
+    const dt = now - this.lastObjectClick.time;
+    const dx = ev.clientX - this.lastObjectClick.x;
+    const dy = ev.clientY - this.lastObjectClick.y;
+    return this.lastObjectClick.instIdx === instIdx
+      && dt > 0
+      && dt <= OBJECT_FOCUS_DOUBLE_CLICK_MS
+      && ((dx * dx) + (dy * dy)) <= OBJECT_FOCUS_DOUBLE_CLICK_MAX_DIST * OBJECT_FOCUS_DOUBLE_CLICK_MAX_DIST;
+  }
+
+  private recordObjectClick(ev: PointerEvent, instIdx: number) {
+    this.lastObjectClick.time = performance.now();
+    this.lastObjectClick.x = ev.clientX;
+    this.lastObjectClick.y = ev.clientY;
+    this.lastObjectClick.instIdx = instIdx;
+  }
+
+  private resetLastObjectClick() {
+    this.lastObjectClick.time = Number.NEGATIVE_INFINITY;
+    this.lastObjectClick.instIdx = Number.NaN;
   }
 
   private nearestInstanceByVertex(mx: number, my: number, width: number, height: number) {

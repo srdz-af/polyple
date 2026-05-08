@@ -15,6 +15,7 @@ const ORBIT_RATE = 1.9;
 const ZOOM_RATE = 2.6;
 const ZOOM_MIN_DISTANCE = 0.2;
 const ZOOM_MAX_DISTANCE = 80;
+const FOCUS_TRANSITION_SECONDS = 0.62;
 
 export function viewModeShortcutIndex(ev: KeyboardEvent) {
   const keyMatch = /^[1-3]$/.test(ev.key) ? Number.parseInt(ev.key, 10) - 1 : -1;
@@ -29,6 +30,10 @@ export class KeyboardCameraController {
   private readonly spherical = new THREE.Spherical();
   private readonly targetOffset = new THREE.Vector3();
   private readonly currentOffset = new THREE.Vector3();
+  private readonly focusStartTarget = new THREE.Vector3();
+  private readonly focusEndTarget = new THREE.Vector3();
+  private readonly focusCurrentTarget = new THREE.Vector3();
+  private readonly focusOffset = new THREE.Vector3();
   private readonly keys = {
     left: false,
     right: false,
@@ -37,6 +42,8 @@ export class KeyboardCameraController {
     ctrl: false,
   };
   private smoothingActive = false;
+  private focusTransitionActive = false;
+  private focusTransitionElapsed = 0;
 
   constructor(private readonly options: KeyboardCameraControllerOptions) {}
 
@@ -77,6 +84,7 @@ export class KeyboardCameraController {
 
   recenterCamera() {
     this.smoothingActive = false;
+    this.focusTransitionActive = false;
     this.targetOffset.copy(this.options.defaultCameraPosition);
     this.currentOffset.copy(this.options.defaultCameraPosition);
     this.setCameraToTargetOffset(this.options.controls.target, this.options.defaultCameraPosition);
@@ -88,6 +96,7 @@ export class KeyboardCameraController {
     if (offset.lengthSq() < 1e-8) offset.copy(defaultCameraPosition);
 
     this.smoothingActive = false;
+    this.focusTransitionActive = false;
     this.targetOffset.copy(offset);
     this.currentOffset.copy(offset);
     this.setCameraToTargetOffset(DEFAULT_ORBIT_TARGET, offset);
@@ -101,12 +110,17 @@ export class KeyboardCameraController {
     this.smoothingActive = false;
     this.targetOffset.copy(offset);
     this.currentOffset.copy(offset);
-    this.setCameraToTargetOffset(target, offset);
+    this.focusOffset.copy(offset);
+    this.focusStartTarget.copy(controls.target);
+    this.focusEndTarget.copy(target);
+    this.focusTransitionElapsed = 0;
+    this.focusTransitionActive = true;
   }
 
   update(dt: number) {
     this.applyInput(dt);
     this.applySmoothing(dt);
+    this.applyFocusTransition(dt);
   }
 
   private setCameraToTargetOffset(target: THREE.Vector3, offset: THREE.Vector3) {
@@ -140,6 +154,7 @@ export class KeyboardCameraController {
     if (this.options.isTransformActive()) return;
     const horizontal = Number(this.keys.left) - Number(this.keys.right);
     const vertical = Number(this.keys.down) - Number(this.keys.up);
+    if (horizontal !== 0 || vertical !== 0) this.focusTransitionActive = false;
 
     if (this.keys.ctrl) {
       if (vertical === 0) return;
@@ -164,6 +179,20 @@ export class KeyboardCameraController {
       this.smoothingActive = false;
     }
     this.setCameraToTargetOffset(this.options.controls.target, this.currentOffset);
+  }
+
+  private applyFocusTransition(dt: number) {
+    if (!this.focusTransitionActive) return;
+    this.focusTransitionElapsed += dt;
+    const t = Math.min(1, this.focusTransitionElapsed / FOCUS_TRANSITION_SECONDS);
+    const eased = 1 - Math.pow(1 - t, 3);
+    this.focusCurrentTarget.copy(this.focusStartTarget).lerp(this.focusEndTarget, eased);
+
+    if (t >= 1) {
+      this.focusTransitionActive = false;
+      this.focusCurrentTarget.copy(this.focusEndTarget);
+    }
+    this.setCameraToTargetOffset(this.focusCurrentTarget, this.focusOffset);
   }
 
   private orbitAroundOrigin(thetaDelta: number, phiDelta: number) {
