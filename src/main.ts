@@ -767,6 +767,7 @@ function unpackCellTopology(topology?: PackedCellTopology): CellTopology | undef
         ? { offsets: unpackU32(dim[0]), vertices: unpackU32(dim[1]) }
         : undefined
     )),
+    generatedKind: 'edited',
   };
 }
 
