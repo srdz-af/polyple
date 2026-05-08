@@ -339,6 +339,8 @@ const bloomIntensityInput = document.getElementById('bloom-intensity') as HTMLIn
 const bloomIntensityValue = document.getElementById('bloom-intensity-value') as HTMLOutputElement | null;
 const motionBlurIntensityInput = document.getElementById('motion-blur-intensity') as HTMLInputElement | null;
 const motionBlurIntensityValue = document.getElementById('motion-blur-intensity-value') as HTMLOutputElement | null;
+const sceneUndoButton = document.getElementById('scene-undo-button') as HTMLButtonElement | null;
+const sceneRedoButton = document.getElementById('scene-redo-button') as HTMLButtonElement | null;
 const sceneSaveButton = document.getElementById('scene-save-button') as HTMLButtonElement | null;
 const sceneLoadButton = document.getElementById('scene-load-button') as HTMLButtonElement | null;
 const sceneLoadInput = document.getElementById('scene-load-input') as HTMLInputElement | null;
@@ -492,7 +494,7 @@ const tmpVec = new THREE.Vector3();
 const tmpN = new Float32Array(32);
 const tmpCenter = new THREE.Vector3();
 let setViewMode: (mode: ViewMode) => void;
-let sceneHistory: SceneHistory<SceneSnapshot<PrimitiveMode>>;
+let sceneHistory: SceneHistory<PackedSceneUrlState>;
 let baseLabel = 'Hypercube';
 const BASE_SELECTION = -1;
 const NO_SELECTION = -2;
@@ -990,15 +992,16 @@ function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
 }
 
 function pushUndoSnapshot() {
+  if (sceneUrlApplying) return;
   sceneHistory.push();
 }
 
 function undoSceneSnapshot() {
-  sceneHistory.undo();
+  void sceneHistory.undo();
 }
 
 function redoSceneSnapshot() {
-  sceneHistory.redo();
+  void sceneHistory.redo();
 }
 
 function applySnapshot(snap: SceneSnapshot<PrimitiveMode>) {
@@ -1031,8 +1034,8 @@ function applySnapshot(snap: SceneSnapshot<PrimitiveMode>) {
 }
 
 sceneHistory = new SceneHistory({
-  capture: captureSnapshot,
-  apply: applySnapshot,
+  capture: captureSceneUrlState,
+  apply: applySceneUrlState,
   maxEntries: 20,
 });
 
@@ -2139,6 +2142,7 @@ animationTimeline = new KeyframeTimelineController({
     }
     setCaptureResolutionMode(settings.fullResolution);
   },
+  onBeforeKeyframeChange: () => pushUndoSnapshot(),
   onStateChange: () => requestSceneUrlUpdate(),
 });
 animationTimeline.bind();
@@ -2146,6 +2150,8 @@ viewportCapture.bindControls();
 modalOverlayController.bindControls();
 bindRenderEffectControls();
 editModeToggle?.addEventListener('click', () => setEditMode(!PARAMS.editMode));
+sceneUndoButton?.addEventListener('click', () => undoSceneSnapshot());
+sceneRedoButton?.addEventListener('click', () => redoSceneSnapshot());
 sceneSaveButton?.addEventListener('click', () => void saveSceneStateFile());
 sceneLoadButton?.addEventListener('click', () => sceneLoadInput?.click());
 sceneLoadInput?.addEventListener('change', () => {

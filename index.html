@@ -5,7 +5,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/x-icon" href="./favicon.ico" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=1k,2k,add,chevron_left,chevron_right,delete,download,edit,filter_b_and_w,grid_on,help,high_quality,imagesmode,keyboard_arrow_down,keyboard_arrow_up,open_with,pause,play_arrow,recenter,refresh,reset_focus,save,screen_record,screenshot_frame_2,settings,speed_1_5x,speed_2x,stop,sync_alt,upload_file,visibility,visibility_off,vr180_create2d,vrpano,zoom_out_map&display=block" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=1k,2k,add,chevron_left,chevron_right,delete,download,edit,filter_b_and_w,grid_on,help,high_quality,imagesmode,keyboard_arrow_down,keyboard_arrow_up,open_with,pause,play_arrow,recenter,redo,refresh,reset_focus,screen_record,screenshot_frame_2,settings,speed_1_5x,speed_2x,stop,sync_alt,undo,upload,visibility,visibility_off,vr180_create2d,vrpano,zoom_out_map&display=block" />
     <title>BleND</title>
     <style>
       :root {
@@ -74,6 +74,8 @@
       #axis-sync-rotations-button,
       #camera-recenter-button,
       #focus-reset-button,
+      #scene-undo-button,
+      #scene-redo-button,
       #scene-save-button,
       #scene-load-button,
       #pane-toggle,
@@ -240,6 +242,13 @@
         align-items: center;
         width: 154px;
         min-width: 0;
+      }
+      #gizmo-section-separator {
+        flex: 0 0 auto;
+        width: 86%;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, var(--ui-border), transparent);
+        opacity: 0.9;
       }
       #extra-axis-scrollbar {
         display: none;
@@ -941,6 +950,8 @@
       #axis-sync-rotations-button,
       #camera-recenter-button,
       #focus-reset-button,
+      #scene-undo-button,
+      #scene-redo-button,
       #scene-save-button,
       #scene-load-button,
       #pane-toggle {
@@ -956,6 +967,8 @@
       #axis-sync-rotations-button,
       #camera-recenter-button,
       #focus-reset-button,
+      #scene-undo-button,
+      #scene-redo-button,
       #scene-save-button,
       #scene-load-button {
         width: 24px;
@@ -970,6 +983,8 @@
         border-radius: 4px;
       }
       #pane-toggle:hover,
+      #scene-undo-button:hover,
+      #scene-redo-button:hover,
       #scene-save-button:hover,
       #scene-load-button:hover {
         background: var(--ui-bg-hover);
@@ -980,6 +995,8 @@
       #axis-sync-rotations-button .material-symbols-rounded,
       #camera-recenter-button .material-symbols-rounded,
       #focus-reset-button .material-symbols-rounded,
+      #scene-undo-button .material-symbols-rounded,
+      #scene-redo-button .material-symbols-rounded,
       #scene-save-button .material-symbols-rounded,
       #scene-load-button .material-symbols-rounded {
         font-size: 17px;
@@ -2099,6 +2116,14 @@
           min-width: 0;
           gap: 0;
         }
+        #gizmo-section-separator {
+          align-self: stretch;
+          width: 1px;
+          height: auto;
+          min-height: 104px;
+          margin: 0 4px;
+          background: linear-gradient(180deg, transparent, var(--ui-border), transparent);
+        }
         #extra-axis-scrollbar {
           display: block;
           position: relative;
@@ -2356,6 +2381,7 @@
             </button>
           </div>
         </div>
+        <div id="gizmo-section-separator" aria-hidden="true"></div>
         <div id="extra-axis-scroll-wrap">
           <div id="extra-axis-scrollbar" aria-hidden="true">
             <div id="extra-axis-scrollbar-thumb"></div>
@@ -2367,11 +2393,17 @@
         <div id="pane-header">
           <div id="pane-title">Scene Controls</div>
           <div id="pane-actions">
+            <button id="scene-undo-button" type="button" aria-label="Undo scene change" title="Undo">
+              <span class="material-symbols-rounded" aria-hidden="true">undo</span>
+            </button>
+            <button id="scene-redo-button" type="button" aria-label="Redo scene change" title="Redo">
+              <span class="material-symbols-rounded" aria-hidden="true">redo</span>
+            </button>
             <button id="scene-save-button" type="button" aria-label="Save scene URL" title="Save scene URL">
-              <span class="material-symbols-rounded" aria-hidden="true">save</span>
+              <span class="material-symbols-rounded" aria-hidden="true">download</span>
             </button>
             <button id="scene-load-button" type="button" aria-label="Load scene URL file" title="Load scene URL file">
-              <span class="material-symbols-rounded" aria-hidden="true">upload_file</span>
+              <span class="material-symbols-rounded" aria-hidden="true">upload</span>
             </button>
             <input id="scene-load-input" type="file" accept=".txt,text/plain" hidden />
             <button id="pane-toggle" type="button" aria-label="Hide panel details" aria-expanded="true" aria-controls="scene-controls" title="Hide panel details">

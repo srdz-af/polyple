@@ -1,6 +1,6 @@
 type SceneHistoryOptions<TSnapshot> = {
   capture: () => TSnapshot;
-  apply: (snapshot: TSnapshot) => void;
+  apply: (snapshot: TSnapshot) => void | Promise<void>;
   maxEntries?: number;
 };
 
@@ -8,28 +8,42 @@ export class SceneHistory<TSnapshot> {
   private readonly undoStack: TSnapshot[] = [];
   private readonly redoStack: TSnapshot[] = [];
   private readonly maxEntries: number;
+  private applying = false;
 
   constructor(private readonly options: SceneHistoryOptions<TSnapshot>) {
     this.maxEntries = options.maxEntries ?? 20;
   }
 
   push() {
+    if (this.applying) return;
     this.undoStack.push(this.options.capture());
     if (this.undoStack.length > this.maxEntries) this.undoStack.shift();
     this.redoStack.length = 0;
   }
 
-  undo() {
+  async undo() {
+    if (this.applying) return;
     const snapshot = this.undoStack.pop();
     if (!snapshot) return;
     this.redoStack.push(this.options.capture());
-    this.options.apply(snapshot);
+    this.applying = true;
+    try {
+      await this.options.apply(snapshot);
+    } finally {
+      this.applying = false;
+    }
   }
 
-  redo() {
+  async redo() {
+    if (this.applying) return;
     const snapshot = this.redoStack.pop();
     if (!snapshot) return;
     this.undoStack.push(this.options.capture());
-    this.options.apply(snapshot);
+    this.applying = true;
+    try {
+      await this.options.apply(snapshot);
+    } finally {
+      this.applying = false;
+    }
   }
 }

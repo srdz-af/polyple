@@ -42,6 +42,7 @@ type KeyframeTimelineControllerOptions = {
   applyState: (state: AnimationKeyframeState) => void;
   interpolateState: (from: AnimationKeyframeState, to: AnimationKeyframeState, t: number) => AnimationKeyframeState;
   onSettingsChange?: (settings: AnimationSettings) => void;
+  onBeforeKeyframeChange?: () => void;
   onStateChange?: () => void;
 };
 
@@ -239,6 +240,7 @@ export class KeyframeTimelineController {
 
   addKeyframeAtCurrentFrame() {
     const frame = this.roundedCurrentFrame();
+    this.options.onBeforeKeyframeChange?.();
     this.keyframes.set(frame, this.options.captureState());
     this.render();
     this.options.onStateChange?.();
@@ -247,6 +249,7 @@ export class KeyframeTimelineController {
   removeLastKeyframe() {
     const frame = this.lastKeyframeAtOrBeforeCurrentFrame();
     if (frame == null) return;
+    this.options.onBeforeKeyframeChange?.();
     this.keyframes.delete(frame);
     this.render();
     this.options.onStateChange?.();
