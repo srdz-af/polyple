@@ -1,5 +1,7 @@
 import type { PrimitiveKind, PrimitiveSurfaceTopology } from './primitives';
 
+export type GeneratedCellTopologyKind = PrimitiveKind | 'fallback' | 'segment' | 'polygon';
+
 export type CellTopologyDim = {
   offsets: Uint32Array;
   vertices: Uint32Array;
@@ -7,9 +9,23 @@ export type CellTopologyDim = {
 
 export type CellTopology = {
   cells: Array<CellTopologyDim | undefined>;
-  generatedKind?: PrimitiveKind | 'fallback';
+  generatedKind?: GeneratedCellTopologyKind;
   sourceDimension?: number;
 };
+
+export type ProductCellTopologyFactor = {
+  vertexCount: number;
+  cellTopology?: CellTopology;
+};
+
+export type ProductCellTopologyLimits = {
+  maxCells?: number;
+  maxVertexRefs?: number;
+  generatedKind?: GeneratedCellTopologyKind;
+};
+
+const DEFAULT_PRODUCT_TOPOLOGY_MAX_CELLS = 250000;
+const DEFAULT_PRODUCT_TOPOLOGY_MAX_VERTEX_REFS = 2000000;
 
 function makeCellDim(cells: number[][]): CellTopologyDim {
   const offsets = new Uint32Array(cells.length + 1);
@@ -194,6 +210,144 @@ export function buildSimplexCellTopology(dimension: number): CellTopology {
   return { cells, generatedKind: 'simplex', sourceDimension: dimension };
 }
 
+export function buildSegmentCellTopology(): CellTopology {
+  return {
+    cells: [
+      vertexCells(2),
+      makeCellDim([[0, 1]]),
+    ],
+    generatedKind: 'segment',
+    sourceDimension: 1,
+  };
+}
+
+export function buildPolygonCellTopology(vertexCount: number): CellTopology {
+  const edges: number[][] = [];
+  for (let vertex = 0; vertex < vertexCount; vertex++) edges.push([vertex, (vertex + 1) % vertexCount]);
+  return {
+    cells: [
+      vertexCells(vertexCount),
+      makeCellDim(edges),
+      vertexCount >= 3 ? makeCellDim([Array.from({ length: vertexCount }, (_v, idx) => idx)]) : undefined,
+    ],
+    generatedKind: 'polygon',
+    sourceDimension: 2,
+  };
+}
+
+export function buildCrossPolytopeCellTopology(dimension: number): CellTopology {
+  const vertexCount = 2 * dimension;
+  const cells: Array<CellTopologyDim | undefined> = [vertexCells(vertexCount)];
+  const axes = Array.from({ length: dimension }, (_v, idx) => idx);
+
+  for (let cellDim = 1; cellDim < dimension; cellDim++) {
+    const dimCells: number[][] = [];
+    for (const selectedAxes of combinations(dimension, cellDim + 1)) {
+      const signCount = 1 << selectedAxes.length;
+      for (let signMask = 0; signMask < signCount; signMask++) {
+        dimCells.push(selectedAxes.map((axis, idx) => (axis * 2) + (((signMask >> idx) & 1) ? 1 : 0)));
+      }
+    }
+    cells[cellDim] = makeCellDim(dimCells);
+  }
+
+  if (dimension >= 1) {
+    cells[dimension] = makeCellDim([axes.flatMap(axis => [axis * 2, (axis * 2) + 1])]);
+  }
+
+  return { cells, generatedKind: 'cross', sourceDimension: dimension };
+}
+
+export function buildSimplexPrismCellTopology(dimension: number): CellTopology | undefined {
+  const baseDimension = Math.max(2, dimension - 1);
+  const baseVertexCount = baseDimension + 1;
+  return buildProductCellTopology(
+    [
+      { vertexCount: baseVertexCount, cellTopology: buildSimplexCellTopology(baseDimension) },
+      { vertexCount: 2, cellTopology: buildSegmentCellTopology() },
+    ],
+    new Uint32Array([1, baseVertexCount]),
+    { generatedKind: 'simplexPrism' },
+  );
+}
+
+export function buildDuoprismCellTopology(segmentsA: number, segmentsB: number): CellTopology | undefined {
+  return buildProductCellTopology(
+    [
+      { vertexCount: segmentsA, cellTopology: buildPolygonCellTopology(segmentsA) },
+      { vertexCount: segmentsB, cellTopology: buildPolygonCellTopology(segmentsB) },
+    ],
+    new Uint32Array([segmentsB, 1]),
+    { generatedKind: 'duoprism' },
+  );
+}
+
+export function buildProductCellTopology(
+  factors: ProductCellTopologyFactor[],
+  strides: Uint32Array,
+  limits: ProductCellTopologyLimits = {},
+): CellTopology | undefined {
+  if (!factors.length || factors.some(factor => !factor.cellTopology)) return undefined;
+
+  const maxCells = limits.maxCells ?? DEFAULT_PRODUCT_TOPOLOGY_MAX_CELLS;
+  const maxVertexRefs = limits.maxVertexRefs ?? DEFAULT_PRODUCT_TOPOLOGY_MAX_VERTEX_REFS;
+  const factorMaxDims = factors.map(factor => maxCellDimension(factor.cellTopology));
+  const totalDimension = factorMaxDims.reduce((sum, dim) => sum + dim, 0);
+  const cells: Array<CellTopologyDim | undefined> = [];
+  let totalCells = 0;
+  let totalVertexRefs = 0;
+
+  const productVerticesFor = (selected: number[][]) => {
+    const vertices: number[] = [];
+    const walk = (factorIdx: number, index: number) => {
+      if (factorIdx >= selected.length) {
+        vertices.push(index);
+        return;
+      }
+      const stride = strides[factorIdx] ?? 1;
+      for (const vertex of selected[factorIdx]) walk(factorIdx + 1, index + (vertex * stride));
+    };
+    walk(0, 0);
+    return vertices;
+  };
+
+  for (let targetDim = 0; targetDim <= totalDimension; targetDim++) {
+    const dimCells: number[][] = [];
+    const selectedVertices: number[][] = [];
+
+    const walkFactors = (factorIdx: number, remainingDim: number) => {
+      if (totalCells > maxCells || totalVertexRefs > maxVertexRefs) return;
+      if (factorIdx >= factors.length) {
+        if (remainingDim !== 0) return;
+        const vertices = productVerticesFor(selectedVertices);
+        totalCells++;
+        totalVertexRefs += vertices.length;
+        if (totalCells <= maxCells && totalVertexRefs <= maxVertexRefs) dimCells.push(vertices);
+        return;
+      }
+
+      const topology = factors[factorIdx].cellTopology;
+      if (!topology) return;
+      const maxDim = Math.min(factorMaxDims[factorIdx], remainingDim);
+      for (let dim = 0; dim <= maxDim; dim++) {
+        const count = cellCount(topology, dim);
+        for (let cellId = 0; cellId < count; cellId++) {
+          selectedVertices.push(getCellVertices(topology, dim, cellId));
+          walkFactors(factorIdx + 1, remainingDim - dim);
+          selectedVertices.pop();
+          if (totalCells > maxCells || totalVertexRefs > maxVertexRefs) return;
+        }
+      }
+    };
+
+    walkFactors(0, targetDim);
+    if (totalCells > maxCells || totalVertexRefs > maxVertexRefs) return undefined;
+    cells[targetDim] = dimCells.length ? makeCellDim(dimCells) : undefined;
+  }
+
+  return { cells, generatedKind: limits.generatedKind ?? 'productMesh', sourceDimension: totalDimension };
+}
+
 export function buildGeneratedCellTopology(
   kind: PrimitiveKind,
   dimension: number,
@@ -206,6 +360,21 @@ export function buildGeneratedCellTopology(
   }
   if (kind === 'simplex' && isSimplexGraph(vertexCount, dimension, edges)) {
     return buildSimplexCellTopology(dimension);
+  }
+  if (kind === 'cross' && vertexCount === 2 * dimension) {
+    return buildCrossPolytopeCellTopology(dimension);
+  }
+  if (kind === 'simplexPrism' && vertexCount === (Math.max(2, dimension - 1) + 1) * 2) {
+    return buildSimplexPrismCellTopology(dimension)
+      ?? buildCellTopologyFromEdgesAndSurface(vertexCount, edges, surfaceTopology);
+  }
+  if (kind === 'duoprism') {
+    if (dimension < 4 && vertexCount >= 3) return buildPolygonCellTopology(vertexCount);
+    const side = Math.sqrt(vertexCount);
+    if (Number.isInteger(side) && side >= 3) {
+      return buildDuoprismCellTopology(side, side)
+        ?? buildCellTopologyFromEdgesAndSurface(vertexCount, edges, surfaceTopology);
+    }
   }
   return buildCellTopologyFromEdgesAndSurface(vertexCount, edges, surfaceTopology);
 }

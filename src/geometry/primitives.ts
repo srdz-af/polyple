@@ -1,6 +1,10 @@
 import {
+  buildCrossPolytopeCellTopology,
+  buildDuoprismCellTopology,
   buildHypercubeCellTopology,
+  buildPolygonCellTopology,
   buildSimplexCellTopology,
+  buildSimplexPrismCellTopology,
   surfaceTopologyFromCellTopology,
   type CellTopology,
 } from './cellTopology';
@@ -350,10 +354,12 @@ export function crossPolytopeEdges(N: number): PrimitiveGeometry {
   }
 
   const edgeArray = new Uint32Array(edges);
+  const cellTopology = buildCrossPolytopeCellTopology(N);
   return {
     verts,
     edges: edgeArray,
-    surfaceTopology: completeGraphTriangleTopology(V, edgeArray),
+    cellTopology,
+    surfaceTopology: surfaceTopologyFromCellTopology(cellTopology) ?? completeGraphTriangleTopology(V, edgeArray),
     V,
   };
 }
@@ -455,9 +461,11 @@ export function simplexPrismEdges(N: number): PrimitiveGeometry {
     facetIds.push(sideFacetId, sideFacetId);
   }
 
+  const cellTopology = buildSimplexPrismCellTopology(N);
   return {
     verts,
     edges: dedupeEdges(edges),
+    cellTopology,
     surfaceTopology: makeSurfaceTopology(triangles, facetIds),
     V,
   };
@@ -595,9 +603,11 @@ export function duoprismEdges(N: number): PrimitiveGeometry {
     }
   }
 
+  const cellTopology = buildDuoprismCellTopology(segmentsA, segmentsB);
   return {
     verts,
     edges: new Uint32Array(edges),
+    cellTopology,
     surfaceTopology: makeSurfaceTopology(triangles, facetIds),
     V,
   };
@@ -626,9 +636,11 @@ function polygonRingEdges(N: number, segments: number): PrimitiveGeometry {
     facetIds.push(v - 1);
   }
 
+  const cellTopology = buildPolygonCellTopology(V);
   return {
     verts,
     edges: new Uint32Array(edges),
+    cellTopology,
     surfaceTopology: makeSurfaceTopology(triangles, facetIds),
     V,
   };
