@@ -1,10 +1,11 @@
 import { VIEW_MODES, type ViewMode } from '../constants';
 import { viewModeShortcutIndex, type KeyboardCameraController } from '../controls/KeyboardCameraController';
-import type { TransformMode } from '../scene/types';
+import type { EditSelectionMode, TransformMode } from '../scene/types';
 import { isPlainTextEditTarget, isTextEntryTarget } from '../ui/domTargets';
 
 type KeyboardShortcutControllerOptions = {
   isModalOpen: () => boolean;
+  isEditMode: () => boolean;
   getTransformMode: () => TransformMode;
   handleTransformConstraintKey: (key: string) => boolean;
   keyboardCamera: KeyboardCameraController;
@@ -24,6 +25,7 @@ type KeyboardShortcutControllerOptions = {
   undo: () => void;
   redo: () => void;
   togglePerfOverlay: () => void;
+  setEditSelectionMode: (mode: EditSelectionMode) => void;
 };
 
 export class KeyboardShortcutController {
@@ -66,6 +68,16 @@ export class KeyboardShortcutController {
     const key = ev.key.toLowerCase();
     const hasSystemMod = ev.ctrlKey || ev.metaKey || ev.altKey;
     const transformMode = this.options.getTransformMode();
+
+    if (!hasSystemMod && !ev.shiftKey && transformMode === 'none' && this.options.isEditMode()) {
+      const editSelectionModes: readonly EditSelectionMode[] = ['vertex', 'edge', 'face'];
+      const mode = editSelectionModes[viewModeShortcutIndex(ev)];
+      if (mode) {
+        ev.preventDefault();
+        this.options.setEditSelectionMode(mode);
+        return;
+      }
+    }
 
     if (!hasSystemMod && !ev.shiftKey && transformMode === 'none') {
       const mode = VIEW_MODES[viewModeShortcutIndex(ev)];

@@ -192,6 +192,11 @@ export class HypercubeRenderer {
     this.updateHullGeometry();
   }
 
+  getSurfaceTopologyForSelection(): SurfaceTopology | undefined {
+    if (!this.surfaceTopology) this.surfaceTopology = this.buildSurfaceTopologyFromCurrentPoints();
+    return this.surfaceTopology;
+  }
+
   dispose(): void {
     if (this.line) {
       this.group.remove(this.line);

@@ -7,6 +7,7 @@ import type { SurfaceState } from './surface';
 
 export type DataSource = 'primitive' | 'custom';
 export type TransformMode = 'none' | 'move' | 'rotate' | 'scale';
+export type EditSelectionMode = 'vertex' | 'edge' | 'face';
 export type ProjectionAxes = { x: number; y: number; z: number };
 export type TransformState = { pos: THREE.Vector3; rot: THREE.Vector3; scale: THREE.Vector3 };
 

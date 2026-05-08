@@ -227,6 +227,15 @@ export class BackgroundController {
   }
 
   applySceneBackground(useEditMode: boolean) {
+    if (useEditMode) {
+      this.sceneBackgroundColor.copy(this.editBackground);
+      this.scene.background = this.sceneBackgroundColor;
+      this.scene.backgroundBlurriness = 0;
+      this.scene.backgroundIntensity = 1;
+      this.renderer.setClearColor(this.sceneBackgroundColor);
+      return;
+    }
+
     if (this.hdrBackgroundTexture) {
       this.scene.background = this.hdrBackgroundTexture;
       this.scene.backgroundBlurriness = this.hdrBackgroundBlur;
@@ -234,10 +243,9 @@ export class BackgroundController {
       return;
     }
 
-    const source = useEditMode ? this.editBackground : this.baseBackground;
-    source.getHSL(this.sceneBackgroundHsl);
-    const saturationFloor = useEditMode ? 0.02 : 0.03;
-    const saturationScale = useEditMode ? 0.22 : 0.26;
+    this.baseBackground.getHSL(this.sceneBackgroundHsl);
+    const saturationFloor = 0.03;
+    const saturationScale = 0.26;
     const saturation = Math.max(this.sceneBackgroundHsl.s * saturationScale, saturationFloor);
     this.sceneBackgroundColor.setHSL(this.backgroundBlueHue, saturation, this.sceneBackgroundHsl.l);
     this.scene.background = this.sceneBackgroundColor;

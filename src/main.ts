@@ -1323,12 +1323,14 @@ function selectObject(idx: number, additive = false) {
   }
 
   reconcileSelection();
-  transformController.setSelectedVertex(-1);
+  transformController.clearEditSelection();
   updateObjectList();
   updateSelectionOutline();
   backgroundController.applySceneBackground(PARAMS.editMode);
   transformController.clearVertexMarker();
   transformController.clearVertexCloud();
+  transformController.clearFaceCenterCloud();
+  transformController.clearEditWireOverlay();
   if (PARAMS.editMode && getObjectVisible(selectedInstance)) updateVertexCloud(selectedInstance);
   textureEditor.updatePanel();
   updateTransformActionButtons();
@@ -1983,10 +1985,11 @@ function setEditMode(active: boolean) {
   backgroundController.applySceneBackground(PARAMS.editMode);
   updateEditModeToggle();
 
-  transformController.setSelectedVertex(-1);
-  transformController.clearVertexMarker();
+  transformController.clearEditSelection();
   if (!PARAMS.editMode) {
     transformController.clearVertexCloud();
+    transformController.clearFaceCenterCloud();
+    transformController.clearEditWireOverlay();
   } else {
     updateVertexCloud(selectedInstance);
   }
@@ -2043,6 +2046,12 @@ function handleTransformConstraintKey(key: string) {
   return transformController.handleConstraintKey(key);
 }
 
+function setEditSelectionMode(mode: 'vertex' | 'edge' | 'face') {
+  transformController.setEditSelectionMode(mode);
+  if (PARAMS.editMode && getObjectVisible(selectedInstance)) updateVertexCloud(selectedInstance);
+  updateTransformActionButtons();
+}
+
 const primitiveMenuOptions: { label: string; kind: PrimitiveKind }[] = [
   { label: 'Hypercube', kind: 'hypercube' },
   { label: 'Spiked hypercube', kind: 'spikedHypercube' },
@@ -2082,7 +2091,6 @@ viewportInteraction = new ViewportInteractionController({
   getRendererND: () => rendererND,
   getExtraInstances: () => extraInstances,
   selectObject,
-  placeVertexMarker,
   pushUndoSnapshot,
   addPrimitiveInstanceAt,
   insertKeyframe: () => animationTimeline?.addKeyframeAtCurrentFrame(),
@@ -2324,6 +2332,7 @@ focusResetButton?.addEventListener('click', () => keyboardCamera.resetFocus());
 new KeyboardShortcutController({
   isModalOpen: () => modalOverlayController.isOpen(),
   getTransformMode: () => transformController.mode,
+  isEditMode: () => PARAMS.editMode,
   handleTransformConstraintKey,
   keyboardCamera,
   setViewMode: mode => setViewMode(mode),
@@ -2342,6 +2351,7 @@ new KeyboardShortcutController({
   undo: undoSceneSnapshot,
   redo: redoSceneSnapshot,
   togglePerfOverlay,
+  setEditSelectionMode,
 }).bind();
 
 updateTransformActionButtons();

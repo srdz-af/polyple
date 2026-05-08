@@ -17,6 +17,18 @@ type PrimitiveMenuOption = {
 
 const OBJECT_FOCUS_DOUBLE_CLICK_MS = 220;
 const OBJECT_FOCUS_DOUBLE_CLICK_MAX_DIST = 8;
+const FACE_CENTER_PICK_RADIUS = 16;
+const FACE_CENTER_FALLBACK_RADIUS = 48;
+const FACE_CYCLE_MAX_DIST = 10;
+
+type FacePickCandidate = {
+  facetId: number;
+  vertices: number[];
+  center: THREE.Vector2;
+  depth: number;
+  centerDist2: number;
+  contains: boolean;
+};
 
 type ViewportInteractionControllerOptions = {
   renderer: THREE.WebGLRenderer;
@@ -40,7 +52,6 @@ type ViewportInteractionControllerOptions = {
   getRendererND: () => HypercubeRenderer;
   getExtraInstances: () => Instance[];
   selectObject: (idx: number, additive?: boolean) => void;
-  placeVertexMarker: (instIdx: number, vertexIdx: number) => void;
   pushUndoSnapshot: () => void;
   addPrimitiveInstanceAt: (kind: PrimitiveKind, label: string, offset: THREE.Vector3, syncMode?: boolean) => void;
   insertKeyframe: () => void;
@@ -65,6 +76,13 @@ export class ViewportInteractionController {
     x: 0,
     y: 0,
     instIdx: Number.NaN,
+  };
+  private readonly faceSelectionCycle = {
+    instIdx: Number.NaN,
+    x: 0,
+    y: 0,
+    signature: '',
+    index: -1,
   };
   private readonly axisDrag = {
     active: false,
@@ -246,8 +264,11 @@ export class ViewportInteractionController {
     const spawnPoint = this.pickPointOnTargetPlane(ev);
 
     if (this.options.getParams().editMode) {
-      if (this.options.transformController.getSelectedVertex() < 0) return;
-      this.appendTransformAction(menu, 'Move vertex', 'move', ev);
+      if (!this.options.transformController.hasEditSelection()) return;
+      const label = this.options.transformController.editSelectionLabel();
+      this.appendTransformAction(menu, `Move ${label}`, 'move', ev);
+      this.appendTransformAction(menu, `Rotate ${label}`, 'rotate', ev);
+      this.appendTransformAction(menu, `Scale ${label}`, 'scale', ev);
     } else if (!this.options.hasActiveSelection()) {
       menu.classList.add('primitive-menu');
       this.appendKeyframeActions(menu);
@@ -367,6 +388,11 @@ export class ViewportInteractionController {
 
     if (ev.button !== 0) return;
     const selected = this.selectObjectFromPointer(ev);
+    if (this.options.getParams().editMode) {
+      ev.preventDefault();
+      this.resetLastObjectClick();
+      return;
+    }
     if (!ev.shiftKey && selected !== this.options.noSelection && this.isObjectFocusDoubleClick(ev, selected)) {
       ev.preventDefault();
       this.options.focusObjectOrigin(selected);
@@ -481,7 +507,7 @@ export class ViewportInteractionController {
 
     const additive = ev.shiftKey && !this.options.getParams().editMode;
     this.options.selectObject(bestInst, additive);
-    if (this.options.getParams().editMode) this.selectNearestVertex(bestInst, mx, my, w, h);
+    if (this.options.getParams().editMode) this.selectNearestEditElement(bestInst, mx, my, w, h, ev.altKey);
     return bestInst;
   }
 
@@ -543,6 +569,19 @@ export class ViewportInteractionController {
     return bestDist2 < 35 * 35 ? bestInst : this.options.noSelection;
   }
 
+  private selectNearestEditElement(instIdx: number, mx: number, my: number, width: number, height: number, forceCycle = false) {
+    const mode = this.options.transformController.getEditSelectionMode();
+    if (mode === 'edge') {
+      this.selectNearestEdge(instIdx, mx, my, width, height);
+      return;
+    }
+    if (mode === 'face') {
+      this.selectNearestFace(instIdx, mx, my, width, height, forceCycle);
+      return;
+    }
+    this.selectNearestVertex(instIdx, mx, my, width, height);
+  }
+
   private selectNearestVertex(instIdx: number, mx: number, my: number, width: number, height: number) {
     const targetRenderer = instIdx === this.options.baseSelection
       ? this.options.getRendererND()
@@ -565,7 +604,217 @@ export class ViewportInteractionController {
       }
     }
     this.options.transformController.setSelectedVertex(nearest);
-    this.options.placeVertexMarker(instIdx, nearest);
+    this.options.transformController.updateVertexCloud(instIdx);
+  }
+
+  private selectNearestEdge(instIdx: number, mx: number, my: number, width: number, height: number) {
+    const targetRenderer = instIdx === this.options.baseSelection
+      ? this.options.getRendererND()
+      : this.options.getExtraInstances()[instIdx]?.renderer;
+    if (!targetRenderer) return;
+
+    const edges = targetRenderer.allEdges;
+    const posArr = targetRenderer.positions;
+    let best: [number, number] | null = null;
+    let bestD2 = Number.POSITIVE_INFINITY;
+    const a = new THREE.Vector2();
+    const b = new THREE.Vector2();
+    const point = new THREE.Vector2(mx, my);
+
+    for (let i = 0; i < edges.length; i += 2) {
+      const va = edges[i];
+      const vb = edges[i + 1];
+      this.projectVertexToScreen(posArr, va, width, height, a);
+      this.projectVertexToScreen(posArr, vb, width, height, b);
+      const d2 = this.distancePointToSegmentSquared(point, a, b);
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = [va, vb];
+      }
+    }
+
+    if (best && bestD2 < 32 * 32) {
+      this.options.transformController.setSelectedEditElement('edge', best);
+    } else {
+      this.options.transformController.clearEditSelection();
+    }
+    this.options.transformController.updateVertexCloud(instIdx);
+  }
+
+  private selectNearestFace(instIdx: number, mx: number, my: number, width: number, height: number, forceCycle = false) {
+    const targetRenderer = instIdx === this.options.baseSelection
+      ? this.options.getRendererND()
+      : this.options.getExtraInstances()[instIdx]?.renderer;
+    if (!targetRenderer) return;
+    const topology = targetRenderer.getSurfaceTopologyForSelection();
+    if (!topology) {
+      this.options.transformController.clearEditSelection();
+      this.options.transformController.updateVertexCloud(instIdx);
+      return;
+    }
+
+    const point = new THREE.Vector2(mx, my);
+    const posArr = targetRenderer.positions;
+    const triangles = topology.triangles;
+    const facetIds = topology.facetIds;
+    const accumulators = new Map<number, {
+      vertices: Set<number>;
+      screenSum: THREE.Vector2;
+      worldSum: THREE.Vector3;
+      count: number;
+      contains: boolean;
+    }>();
+    const addFacetVertex = (facetId: number, vertex: number, screen: THREE.Vector2) => {
+      const pIdx = vertex * 3;
+      if (pIdx < 0 || pIdx + 2 >= posArr.length) return;
+      let accum = accumulators.get(facetId);
+      if (!accum) {
+        accum = {
+          vertices: new Set<number>(),
+          screenSum: new THREE.Vector2(),
+          worldSum: new THREE.Vector3(),
+          count: 0,
+          contains: false,
+        };
+        accumulators.set(facetId, accum);
+      }
+      accum.vertices.add(vertex);
+      accum.screenSum.add(screen);
+      accum.worldSum.x += posArr[pIdx];
+      accum.worldSum.y += posArr[pIdx + 1];
+      accum.worldSum.z += posArr[pIdx + 2];
+      accum.count += 1;
+    };
+
+    const a = new THREE.Vector2();
+    const b = new THREE.Vector2();
+    const c = new THREE.Vector2();
+    for (let t = 0; t < facetIds.length; t++) {
+      const facetId = facetIds[t];
+      const offset = t * 3;
+      const va = triangles[offset];
+      const vb = triangles[offset + 1];
+      const vc = triangles[offset + 2];
+
+      this.projectVertexToScreen(posArr, va, width, height, a);
+      this.projectVertexToScreen(posArr, vb, width, height, b);
+      this.projectVertexToScreen(posArr, vc, width, height, c);
+      addFacetVertex(facetId, va, a);
+      addFacetVertex(facetId, vb, b);
+      addFacetVertex(facetId, vc, c);
+      if (this.pointInTriangle(point, a, b, c)) {
+        const accum = accumulators.get(facetId);
+        if (accum) accum.contains = true;
+      }
+    }
+
+    const candidates = this.facePickCandidates(accumulators, point);
+    if (candidates.length) {
+      const selected = this.selectFaceCandidateFromCycle(instIdx, mx, my, candidates, forceCycle);
+      this.options.transformController.setSelectedEditElement('face', selected.vertices, selected.facetId);
+    } else {
+      this.options.transformController.clearEditSelection();
+    }
+    this.options.transformController.updateVertexCloud(instIdx);
+  }
+
+  private facePickCandidates(
+    accumulators: Map<number, {
+      vertices: Set<number>;
+      screenSum: THREE.Vector2;
+      worldSum: THREE.Vector3;
+      count: number;
+      contains: boolean;
+    }>,
+    point: THREE.Vector2,
+  ) {
+    const all: FacePickCandidate[] = [];
+    accumulators.forEach((accum, facetId) => {
+      if (accum.count <= 0 || accum.vertices.size === 0) return;
+      const center = accum.screenSum.clone().multiplyScalar(1 / accum.count);
+      const worldCenter = accum.worldSum.clone().multiplyScalar(1 / accum.count);
+      const depth = worldCenter.applyMatrix4(this.options.camera.matrixWorldInverse).z;
+      all.push({
+        facetId,
+        vertices: Array.from(accum.vertices),
+        center,
+        depth,
+        centerDist2: center.distanceToSquared(point),
+        contains: accum.contains,
+      });
+    });
+
+    const centerHits = all
+      .filter(candidate => candidate.centerDist2 <= FACE_CENTER_PICK_RADIUS * FACE_CENTER_PICK_RADIUS)
+      .sort((a, b) => (a.centerDist2 - b.centerDist2) || (b.depth - a.depth));
+    if (centerHits.length) return centerHits;
+
+    const areaHits = all
+      .filter(candidate => candidate.contains)
+      .sort((a, b) => b.depth - a.depth);
+    if (areaHits.length) return areaHits;
+
+    const nearest = all.sort((a, b) => a.centerDist2 - b.centerDist2)[0];
+    return nearest?.centerDist2 <= FACE_CENTER_FALLBACK_RADIUS * FACE_CENTER_FALLBACK_RADIUS ? [nearest] : [];
+  }
+
+  private selectFaceCandidateFromCycle(
+    instIdx: number,
+    mx: number,
+    my: number,
+    candidates: FacePickCandidate[],
+    forceCycle: boolean,
+  ) {
+    const signature = candidates.map(candidate => candidate.facetId).join(':');
+    const dx = mx - this.faceSelectionCycle.x;
+    const dy = my - this.faceSelectionCycle.y;
+    const sameStack = this.faceSelectionCycle.instIdx === instIdx
+      && this.faceSelectionCycle.signature === signature
+      && ((dx * dx) + (dy * dy)) <= FACE_CYCLE_MAX_DIST * FACE_CYCLE_MAX_DIST;
+
+    let index = 0;
+    if (candidates.length > 1 && (forceCycle || sameStack)) {
+      index = sameStack
+        ? (this.faceSelectionCycle.index + 1) % candidates.length
+        : 1 % candidates.length;
+    }
+
+    this.faceSelectionCycle.instIdx = instIdx;
+    this.faceSelectionCycle.x = mx;
+    this.faceSelectionCycle.y = my;
+    this.faceSelectionCycle.signature = signature;
+    this.faceSelectionCycle.index = index;
+    return candidates[index];
+  }
+
+  private projectVertexToScreen(
+    positions: Float32Array,
+    vertex: number,
+    width: number,
+    height: number,
+    target: THREE.Vector2,
+  ) {
+    const pIdx = vertex * 3;
+    this.tmpVec.set(positions[pIdx], positions[pIdx + 1], positions[pIdx + 2]).project(this.options.camera);
+    return target.set((this.tmpVec.x * 0.5 + 0.5) * width, (-this.tmpVec.y * 0.5 + 0.5) * height);
+  }
+
+  private distancePointToSegmentSquared(point: THREE.Vector2, a: THREE.Vector2, b: THREE.Vector2) {
+    const ab = b.clone().sub(a);
+    const denom = ab.lengthSq();
+    if (denom <= 1e-8) return point.distanceToSquared(a);
+    const t = Math.max(0, Math.min(1, point.clone().sub(a).dot(ab) / denom));
+    return point.distanceToSquared(a.clone().add(ab.multiplyScalar(t)));
+  }
+
+  private pointInTriangle(point: THREE.Vector2, a: THREE.Vector2, b: THREE.Vector2, c: THREE.Vector2) {
+    const area = (p1: THREE.Vector2, p2: THREE.Vector2, p3: THREE.Vector2) => (
+      ((p1.x * (p2.y - p3.y)) + (p2.x * (p3.y - p1.y)) + (p3.x * (p1.y - p2.y))) * 0.5
+    );
+    const total = Math.abs(area(a, b, c));
+    if (total < 1e-6) return false;
+    const sum = Math.abs(area(point, b, c)) + Math.abs(area(a, point, c)) + Math.abs(area(a, b, point));
+    return Math.abs(sum - total) <= Math.max(0.5, total * 0.02);
   }
 
   private pickPointOnTargetPlane(point: { clientX: number; clientY: number }) {
