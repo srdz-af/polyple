@@ -177,6 +177,54 @@ export function buildCellTopologyFromEdgesAndSurface(
   };
 }
 
+function cellVerticesByDimension(topology: CellTopology, dimension: number) {
+  const count = cellCount(topology, dimension);
+  const cells: number[][] = [];
+  for (let cellId = 0; cellId < count; cellId++) cells.push(getCellVertices(topology, dimension, cellId));
+  return cells;
+}
+
+function verticesAreSubset(vertices: number[], parent: Set<number>) {
+  return vertices.every(vertex => parent.has(vertex));
+}
+
+export function buildSpikedCellTopology(
+  baseTopology: CellTopology,
+  baseVertexCount: number,
+  generatedKind: GeneratedCellTopologyKind,
+): CellTopology | undefined {
+  const baseDimension = maxCellDimension(baseTopology);
+  if (baseDimension < 2) return undefined;
+
+  const boundaryDimension = baseDimension - 1;
+  const boundaryCells = cellVerticesByDimension(baseTopology, boundaryDimension);
+  if (!boundaryCells.length) return undefined;
+
+  const cells: Array<number[][]> = [];
+  for (let dim = 0; dim <= baseDimension; dim++) {
+    cells[dim] = cellVerticesByDimension(baseTopology, dim);
+  }
+
+  boundaryCells.forEach((boundaryVertices, boundaryId) => {
+    const apex = baseVertexCount + boundaryId;
+    const boundarySet = new Set(boundaryVertices);
+    for (let sourceDim = 0; sourceDim <= boundaryDimension; sourceDim++) {
+      for (const sourceVertices of cellVerticesByDimension(baseTopology, sourceDim)) {
+        if (!verticesAreSubset(sourceVertices, boundarySet)) continue;
+        const targetDim = sourceDim + 1;
+        if (!cells[targetDim]) cells[targetDim] = [];
+        cells[targetDim].push([apex, ...sourceVertices]);
+      }
+    }
+  });
+
+  return {
+    cells: cells.map(dimCells => dimCells?.length ? makeCellDim(dimCells) : undefined),
+    generatedKind,
+    sourceDimension: baseTopology.sourceDimension ?? baseDimension,
+  };
+}
+
 export function buildHypercubeCellTopology(dimension: number): CellTopology {
   const cells: Array<CellTopologyDim | undefined> = [vertexCells(1 << dimension)];
   const axes = Array.from({ length: dimension }, (_v, idx) => idx);
@@ -375,6 +423,32 @@ export function buildGeneratedCellTopology(
       return buildDuoprismCellTopology(side, side)
         ?? buildCellTopologyFromEdgesAndSurface(vertexCount, edges, surfaceTopology);
     }
+  }
+  if (kind === 'spikedHypercube') {
+    return buildSpikedCellTopology(buildHypercubeCellTopology(dimension), 1 << dimension, kind)
+      ?? buildCellTopologyFromEdgesAndSurface(vertexCount, edges, surfaceTopology);
+  }
+  if (kind === 'spikedCross') {
+    return buildSpikedCellTopology(buildCrossPolytopeCellTopology(dimension), 2 * dimension, kind)
+      ?? buildCellTopologyFromEdgesAndSurface(vertexCount, edges, surfaceTopology);
+  }
+  if (kind === 'spikedSimplex') {
+    return buildSpikedCellTopology(buildSimplexCellTopology(dimension), dimension + 1, kind)
+      ?? buildCellTopologyFromEdgesAndSurface(vertexCount, edges, surfaceTopology);
+  }
+  if (kind === 'spikedSimplexPrism') {
+    const base = buildSimplexPrismCellTopology(dimension);
+    const baseVertexCount = (Math.max(2, dimension - 1) + 1) * 2;
+    return (base ? buildSpikedCellTopology(base, baseVertexCount, kind) : undefined)
+      ?? buildCellTopologyFromEdgesAndSurface(vertexCount, edges, surfaceTopology);
+  }
+  if (kind === 'spikedDuoprism') {
+    const baseVertexCount = dimension < 4 && vertexCount % 2 === 0 ? vertexCount / 2 : 64;
+    const base = dimension < 4
+      ? buildPolygonCellTopology(Math.max(3, baseVertexCount))
+      : buildDuoprismCellTopology(8, 8);
+    return (base ? buildSpikedCellTopology(base, baseVertexCount, kind) : undefined)
+      ?? buildCellTopologyFromEdgesAndSurface(vertexCount, edges, surfaceTopology);
   }
   return buildCellTopologyFromEdgesAndSurface(vertexCount, edges, surfaceTopology);
 }
