@@ -93,6 +93,7 @@ type PackedCamera = [
 ];
 type PackedSurface = [number, number, number, number];
 type PackedTopology = [string, string];
+type PackedCellTopology = Array<PackedTopology | null>;
 type PackedBackgroundState = [string, string, number, number];
 type PackedAnimationSettings = [number, number, 0 | 1, number, number];
 type PackedAnimationKeyframeState = {
@@ -115,6 +116,7 @@ type PackedAnimationTimelineState = {
 type PackedInstanceState = {
   x: string;
   e: string;
+  ct?: PackedCellTopology;
   st?: PackedTopology;
   m: number;
   o: PackedVec3;
@@ -132,6 +134,7 @@ type PackedSceneUrlState = {
   n: number;
   x: string;
   e: string;
+  ct?: PackedCellTopology;
   st?: PackedTopology;
   m: number;
   ds: DataSource;
@@ -715,6 +718,44 @@ function unpackSurfaceTopology(topology?: PackedTopology): PrimitiveSurfaceTopol
   };
 }
 
+function shouldPackCellTopology(
+  kind: PrimitiveKind,
+  source: DataSource | undefined,
+  topology?: CellTopology,
+) {
+  if (!topology) return false;
+  if (source === 'custom' || kind === 'productMesh') return true;
+
+  const generated = topology.generatedKind;
+  if (!generated || generated === 'fallback') return false;
+  if (generated === kind) return false;
+  if (kind === 'duoprism' && generated === 'polygon') return false;
+  return true;
+}
+
+function packCellTopologyForUrl(
+  kind: PrimitiveKind,
+  source: DataSource | undefined,
+  topology?: CellTopology,
+): PackedCellTopology | undefined {
+  if (!shouldPackCellTopology(kind, source, topology)) return undefined;
+  if (!topology) return undefined;
+  const packed = topology.cells.map(dim => dim ? [packU32(dim.offsets), packU32(dim.vertices)] as PackedTopology : null);
+  while (packed.length > 0 && packed[packed.length - 1] === null) packed.pop();
+  return packed.length ? packed : undefined;
+}
+
+function unpackCellTopology(topology?: PackedCellTopology): CellTopology | undefined {
+  if (!Array.isArray(topology)) return undefined;
+  return {
+    cells: topology.map(dim => (
+      Array.isArray(dim)
+        ? { offsets: unpackU32(dim[0]), vertices: unpackU32(dim[1]) }
+        : undefined
+    )),
+  };
+}
+
 function deriveCellTopologyForGeometry(
   kind: PrimitiveKind,
   originalN: number,
@@ -836,6 +877,7 @@ function packInstanceState(instance: InstanceSnapshot): PackedInstanceState {
   return {
     x: packF32(instance.X),
     e: packU32(instance.E),
+    ct: packCellTopologyForUrl(instance.kind, undefined, instance.cellTopology),
     st: packSurfaceTopology(instance.surfaceTopology),
     m: instance.M,
     o: packVec3(instance.offset),
@@ -854,6 +896,7 @@ function unpackInstanceState(instance: PackedInstanceState): InstanceSnapshot {
   return {
     X: unpackF32(instance.x),
     E: unpackU32(instance.e),
+    cellTopology: unpackCellTopology(instance.ct),
     surfaceTopology: unpackSurfaceTopology(instance.st),
     M: finiteInteger(instance.m, 0),
     offset: unpackVec3(instance.o),
@@ -875,6 +918,7 @@ function captureSceneUrlState(): PackedSceneUrlState {
     n: snap.N,
     x: packF32(snap.X),
     e: packU32(snap.E),
+    ct: packCellTopologyForUrl(snap.primitive, snap.source, snap.cellTopology),
     st: packSurfaceTopology(snap.surfaceTopology),
     m: snap.M,
     ds: snap.source,
@@ -911,6 +955,7 @@ function unpackSceneUrlSnapshot(state: PackedSceneUrlState): SceneSnapshot<Primi
     N: Math.max(1, Math.min(MAX_N, finiteInteger(state.n, MAX_N))),
     X: unpackF32(state.x),
     E: unpackU32(state.e),
+    cellTopology: unpackCellTopology(state.ct),
     surfaceTopology: unpackSurfaceTopology(state.st),
     M: finiteInteger(state.m, 0),
     source: state.ds === 'custom' ? 'custom' : 'primitive',
