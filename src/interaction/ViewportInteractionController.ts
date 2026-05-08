@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { cellCount, getCellVertices, type CellTopology } from '../geometry/cellTopology';
+import { cellCount, getCellBoundaryFaceIds, getCellVertices, type CellTopology } from '../geometry/cellTopology';
 import type { PrimitiveKind } from '../geometry/primitives';
 import type { HypercubeRenderer } from '../rendering/HypercubeRenderer';
 import type { Instance, TransformMode } from '../scene/types';
@@ -717,7 +717,9 @@ export class ViewportInteractionController {
         center,
         depth,
         centerDist2: center.distanceToSquared(point),
-        contains: this.cellContainsPoint(topology, dimension, vertices, positions, point, width, height),
+        contains: dimension === 2
+          ? this.cellContainsPoint(topology, dimension, cellId, vertices, positions, point, width, height)
+          : false,
       });
     }
 
@@ -770,6 +772,7 @@ export class ViewportInteractionController {
   private cellContainsPoint(
     topology: CellTopology,
     dimension: number,
+    cellId: number,
     vertices: number[],
     positions: Float32Array,
     point: THREE.Vector2,
@@ -780,11 +783,10 @@ export class ViewportInteractionController {
       return this.faceVerticesContainPoint(vertices, positions, point, width, height);
     }
 
-    const selected = new Set(vertices);
-    const faceCount = cellCount(topology, 2);
-    for (let faceId = 0; faceId < faceCount; faceId++) {
+    const boundaryFaceIds = getCellBoundaryFaceIds(topology, dimension, cellId);
+    for (const faceId of boundaryFaceIds) {
       const faceVertices = getCellVertices(topology, 2, faceId);
-      if (faceVertices.length < 3 || !faceVertices.every(vertex => selected.has(vertex))) continue;
+      if (faceVertices.length < 3) continue;
       if (this.faceVerticesContainPoint(faceVertices, positions, point, width, height)) return true;
     }
     return false;

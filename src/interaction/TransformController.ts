@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { RotND } from '../RotND';
-import { cellCount, getCellVertices } from '../geometry/cellTopology';
+import { cellCount, getCellBoundaryFaceIds, getCellVertices } from '../geometry/cellTopology';
 import type { NDProjector } from '../geometry/NDProjector';
 import { perspectiveScaleFrom, type AxisMap } from '../geometry/projectionUtils';
 import type { HypercubeRenderer } from '../rendering/HypercubeRenderer';
@@ -495,11 +495,18 @@ export class TransformController {
           : this.selectedEditVertices;
         addFace(faceVertices);
       } else {
-        const selected = new Set(this.selectedEditVertices);
-        const faceCount = cellCount(topology, 2);
-        for (let faceId = 0; faceId < faceCount; faceId++) {
-          const faceVertices = getCellVertices(topology, 2, faceId);
-          if (faceVertices.length >= 3 && faceVertices.every(vertex => selected.has(vertex))) addFace(faceVertices);
+        const faceIds = this.selectedCellId >= 0
+          ? getCellBoundaryFaceIds(topology, this.editCellDimension, this.selectedCellId)
+          : [];
+        if (faceIds.length) {
+          faceIds.forEach(faceId => addFace(getCellVertices(topology, 2, faceId)));
+        } else {
+          const selected = new Set(this.selectedEditVertices);
+          const faceCount = cellCount(topology, 2);
+          for (let faceId = 0; faceId < faceCount; faceId++) {
+            const faceVertices = getCellVertices(topology, 2, faceId);
+            if (faceVertices.length >= 3 && faceVertices.every(vertex => selected.has(vertex))) addFace(faceVertices);
+          }
         }
       }
 

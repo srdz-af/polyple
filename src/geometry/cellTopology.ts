@@ -26,6 +26,7 @@ export type ProductCellTopologyLimits = {
 
 const DEFAULT_PRODUCT_TOPOLOGY_MAX_CELLS = 250000;
 const DEFAULT_PRODUCT_TOPOLOGY_MAX_VERTEX_REFS = 2000000;
+const boundaryFaceCache = new WeakMap<CellTopology, Map<number, Map<number, number[]>>>();
 
 function makeCellDim(cells: number[][]): CellTopologyDim {
   const offsets = new Uint32Array(cells.length + 1);
@@ -160,6 +161,39 @@ export function getCellVertices(topology: CellTopology | undefined, dimension: n
   const start = dim.offsets[cellId];
   const end = dim.offsets[cellId + 1];
   return Array.from(dim.vertices.subarray(start, end));
+}
+
+export function getCellBoundaryFaceIds(topology: CellTopology | undefined, dimension: number, cellId: number) {
+  if (!topology || dimension < 2 || cellId < 0) return [];
+  const faceCount = cellCount(topology, 2);
+  if (dimension === 2) return cellId < faceCount ? [cellId] : [];
+  if (faceCount <= 0 || cellId >= cellCount(topology, dimension)) return [];
+
+  let topologyCache = boundaryFaceCache.get(topology);
+  if (!topologyCache) {
+    topologyCache = new Map();
+    boundaryFaceCache.set(topology, topologyCache);
+  }
+
+  let dimensionCache = topologyCache.get(dimension);
+  if (!dimensionCache) {
+    dimensionCache = new Map();
+    topologyCache.set(dimension, dimensionCache);
+  }
+
+  const cached = dimensionCache.get(cellId);
+  if (cached) return cached;
+
+  const selected = new Set(getCellVertices(topology, dimension, cellId));
+  const faceIds: number[] = [];
+  for (let faceId = 0; faceId < faceCount; faceId++) {
+    const face = getCellVertices(topology, 2, faceId);
+    if (face.length >= 3 && face.every(vertex => selected.has(vertex))) {
+      faceIds.push(faceId);
+    }
+  }
+  dimensionCache.set(cellId, faceIds);
+  return faceIds;
 }
 
 export function buildCellTopologyFromEdgesAndSurface(

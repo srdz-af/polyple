@@ -1944,7 +1944,6 @@ function renderViewportFrame() {
   const frameStart = performance.now();
   const projectionMs = projectIfDirty();
   controls.update();
-  updateTransformActionButtons();
   updateAxisGizmo();
   const renderStart = performance.now();
   if (hasRenderEffects() || downsampleSceneOnly) renderEffectsFrame();
