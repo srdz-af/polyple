@@ -1,6 +1,6 @@
 import type { PrimitiveKind, PrimitiveSurfaceTopology } from './primitives';
 
-export type GeneratedCellTopologyKind = PrimitiveKind | 'fallback' | 'segment' | 'polygon';
+export type GeneratedCellTopologyKind = PrimitiveKind | 'fallback' | 'segment' | 'polygon' | 'edited';
 
 export type CellTopologyDim = {
   offsets: Uint32Array;
@@ -22,6 +22,14 @@ export type ProductCellTopologyLimits = {
   maxCells?: number;
   maxVertexRefs?: number;
   generatedKind?: GeneratedCellTopologyKind;
+};
+
+export type DeleteCellAndPruneResult = {
+  topology: CellTopology;
+  vertexMap: Int32Array;
+  vertexCount: number;
+  removedVertexCount: number;
+  edges: Uint32Array;
 };
 
 const DEFAULT_PRODUCT_TOPOLOGY_MAX_CELLS = 250000;
@@ -194,6 +202,164 @@ export function getCellBoundaryFaceIds(topology: CellTopology | undefined, dimen
   }
   dimensionCache.set(cellId, faceIds);
   return faceIds;
+}
+
+function cellVerticesForMutation(topology: CellTopology, dimension: number) {
+  const count = cellCount(topology, dimension);
+  const cells: number[][] = [];
+  for (let cellId = 0; cellId < count; cellId++) cells.push(getCellVertices(topology, dimension, cellId));
+  return cells;
+}
+
+function containsAllVertices(cell: number[], selected: Set<number>) {
+  for (const vertex of selected) {
+    if (!cell.includes(vertex)) return false;
+  }
+  return true;
+}
+
+function isSubsetCell(cell: number[], parent: Set<number>) {
+  return cell.every(vertex => parent.has(vertex));
+}
+
+function referencedByHigherCell(
+  cell: number[],
+  cellsByDim: number[][][],
+  finalKeep: boolean[][],
+  dimension: number,
+  highestDimension: number,
+) {
+  if (!cell.length) return false;
+  for (let higherDim = dimension + 1; higherDim <= highestDimension; higherDim++) {
+    const higherCells = cellsByDim[higherDim] ?? [];
+    for (let cellId = 0; cellId < higherCells.length; cellId++) {
+      if (!finalKeep[higherDim]?.[cellId]) continue;
+      if (containsAllVertices(higherCells[cellId], new Set(cell))) return true;
+    }
+  }
+  return false;
+}
+
+function edgeListFromCells(edges: number[][] | undefined) {
+  if (!edges?.length) return new Uint32Array();
+  const packed: number[] = [];
+  for (const edge of edges) {
+    if (edge.length < 2) continue;
+    packed.push(edge[0], edge[1]);
+  }
+  return new Uint32Array(packed);
+}
+
+export function deleteCellAndPrune(
+  topology: CellTopology | undefined,
+  dimension: number,
+  cellId: number,
+  vertexCount: number,
+): DeleteCellAndPruneResult | undefined {
+  if (!topology || vertexCount < 0 || dimension < 0 || cellId < 0) return undefined;
+  const targetCount = cellCount(topology, dimension);
+  if (cellId >= targetCount) return undefined;
+
+  const highestSourceDimension = Math.max(maxCellDimension(topology), dimension);
+  const cellsByDim = Array.from({ length: highestSourceDimension + 1 }, (_entry, dim) => {
+    if (dim === 0 && cellCount(topology, 0) <= 0) {
+      return Array.from({ length: vertexCount }, (_vertex, vertex) => [vertex]);
+    }
+    return cellVerticesForMutation(topology, dim);
+  });
+
+  const selectedCell = cellsByDim[dimension]?.[cellId];
+  if (!selectedCell?.length) return undefined;
+  const selectedSet = new Set(selectedCell);
+  const keep = cellsByDim.map(cells => cells.map(() => true));
+  keep[dimension][cellId] = false;
+
+  for (let dim = dimension + 1; dim < cellsByDim.length; dim++) {
+    const cells = cellsByDim[dim];
+    for (let idx = 0; idx < cells.length; idx++) {
+      if (containsAllVertices(cells[idx], selectedSet)) keep[dim][idx] = false;
+    }
+  }
+
+  let highestRemainingDimension = -1;
+  for (let dim = keep.length - 1; dim >= dimension; dim--) {
+    if (keep[dim].some(Boolean)) {
+      highestRemainingDimension = dim;
+      break;
+    }
+  }
+
+  const vertexMap = new Int32Array(vertexCount);
+  vertexMap.fill(-1);
+  if (highestRemainingDimension < 0) {
+    return {
+      topology: { cells: [vertexCells(0)], generatedKind: 'edited', sourceDimension: topology.sourceDimension },
+      vertexMap,
+      vertexCount: 0,
+      removedVertexCount: vertexCount,
+      edges: new Uint32Array(),
+    };
+  }
+
+  const finalKeep = keep.map(cells => cells.map(() => false));
+  finalKeep[highestRemainingDimension] = keep[highestRemainingDimension].slice();
+  for (let dim = highestRemainingDimension - 1; dim >= 0; dim--) {
+    const cells = cellsByDim[dim];
+    for (let idx = 0; idx < cells.length; idx++) {
+      if (!keep[dim][idx]) continue;
+      finalKeep[dim][idx] = referencedByHigherCell(cells[idx], cellsByDim, finalKeep, dim, highestRemainingDimension);
+    }
+  }
+
+  const usedVertices = new Set<number>();
+  if (highestRemainingDimension === 0) {
+    finalKeep[0].forEach((enabled, vertex) => {
+      if (enabled && vertex < vertexCount) usedVertices.add(vertex);
+    });
+  } else {
+    for (let dim = 1; dim <= highestRemainingDimension; dim++) {
+      const cells = cellsByDim[dim] ?? [];
+      for (let idx = 0; idx < cells.length; idx++) {
+        if (!finalKeep[dim]?.[idx]) continue;
+        cells[idx].forEach(vertex => {
+          if (vertex >= 0 && vertex < vertexCount) usedVertices.add(vertex);
+        });
+      }
+    }
+  }
+
+  const sortedVertices = Array.from(usedVertices).sort((a, b) => a - b);
+  sortedVertices.forEach((oldVertex, newVertex) => {
+    vertexMap[oldVertex] = newVertex;
+  });
+
+  const newCells: Array<CellTopologyDim | undefined> = [vertexCells(sortedVertices.length)];
+  const remappedCellsByDim: number[][][] = [sortedVertices.map((_oldVertex, vertex) => [vertex])];
+  for (let dim = 1; dim <= highestRemainingDimension; dim++) {
+    const cells = cellsByDim[dim] ?? [];
+    const remapped: number[][] = [];
+    for (let idx = 0; idx < cells.length; idx++) {
+      if (!finalKeep[dim]?.[idx]) continue;
+      const cell = cells[idx];
+      const next = cell.map(vertex => vertexMap[vertex]).filter(vertex => vertex >= 0);
+      if (next.length !== cell.length) continue;
+      remapped.push(next);
+    }
+    remappedCellsByDim[dim] = remapped;
+    newCells[dim] = remapped.length ? makeCellDim(remapped) : undefined;
+  }
+
+  return {
+    topology: {
+      cells: newCells,
+      generatedKind: 'edited',
+      sourceDimension: topology.sourceDimension,
+    },
+    vertexMap,
+    vertexCount: sortedVertices.length,
+    removedVertexCount: vertexCount - sortedVertices.length,
+    edges: edgeListFromCells(remappedCellsByDim[1]),
+  };
 }
 
 export function buildCellTopologyFromEdgesAndSurface(

@@ -58,6 +58,7 @@ type ViewportInteractionControllerOptions = {
   insertKeyframe: () => void;
   removeLastKeyframe: () => void;
   deleteSelected: () => void;
+  deleteSelectedEditCell: () => void;
   hasActiveSelection: () => boolean;
   canAddProductMesh: () => boolean;
   addProductMesh: () => void;
@@ -136,14 +137,27 @@ export class ViewportInteractionController {
   }
 
   deleteOrConfirmSelection() {
-    if (!this.options.hasActiveSelection()) return;
+    if (!this.hasDeleteTarget()) return;
     if (this.deletePending) {
       this.deletePending = false;
       if (this.options.contextMenuEl) this.options.contextMenuEl.style.display = 'none';
-      this.options.deleteSelected();
+      this.deleteCurrentTarget();
     } else {
       this.showDeleteConfirm();
     }
+  }
+
+  private hasDeleteTarget() {
+    return this.hasEditCellDeleteTarget() || this.options.hasActiveSelection();
+  }
+
+  private hasEditCellDeleteTarget() {
+    return this.options.getParams().editMode && this.options.transformController.hasEditSelection();
+  }
+
+  private deleteCurrentTarget() {
+    if (this.hasEditCellDeleteTarget()) this.options.deleteSelectedEditCell();
+    else this.options.deleteSelected();
   }
 
   private showDeleteConfirm(ev?: MouseEvent) {
@@ -151,9 +165,12 @@ export class ViewportInteractionController {
     if (!menu) return;
     this.deletePending = true;
     menu.replaceChildren();
+    const editSelection = this.hasEditCellDeleteTarget()
+      ? this.options.transformController.getEditSelection()
+      : null;
 
     const title = document.createElement('div');
-    title.textContent = 'Delete?';
+    title.textContent = editSelection ? `Delete ${editSelection.label}?` : 'Delete?';
     title.style.padding = '8px 12px';
     title.style.fontWeight = '700';
 
@@ -162,7 +179,7 @@ export class ViewportInteractionController {
     confirm.onclick = () => {
       menu.style.display = 'none';
       this.deletePending = false;
-      this.options.deleteSelected();
+      this.deleteCurrentTarget();
     };
 
     const cancel = document.createElement('button');

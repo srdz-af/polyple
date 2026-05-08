@@ -86,6 +86,11 @@ type ObjectTransformStart = {
   originDataStart: Float32Array | null;
 };
 
+const MARKER_GEOMETRY_RADIUS = 0.012;
+const VERTEX_MARKER_PIXEL_DIAMETER = 8;
+const CELL_CENTER_MARKER_PIXEL_DIAMETER = 6.5;
+const SELECTED_MARKER_PIXEL_DIAMETER = 11;
+
 function computeCenterFromPositions(positions: Float32Array, count: number) {
   if (!count) return new THREE.Vector3();
   let sumX = 0;
@@ -129,6 +134,9 @@ export class TransformController {
   private axisGuide: THREE.Line | null = null;
   private extraPlaneGuide: THREE.Line | null = null;
   private readonly tmpVec = new THREE.Vector3();
+  private readonly markerMatrix = new THREE.Matrix4();
+  private readonly markerPosition = new THREE.Vector3();
+  private readonly markerQuaternion = new THREE.Quaternion();
   private readonly dragRotated = new Float32Array(32);
   private readonly dragRotatedNext = new Float32Array(32);
   private readonly dragZero = new THREE.Vector3();
@@ -232,6 +240,16 @@ export class TransformController {
 
   hasEditSelection() {
     return this.selectedEditVertices.length > 0;
+  }
+
+  getEditSelection() {
+    if (!this.hasEditSelection()) return null;
+    return {
+      dimension: this.editCellDimension,
+      cellId: this.selectedCellId,
+      vertices: [...this.selectedEditVertices],
+      label: this.editSelectionLabel(),
+    };
   }
 
   editSelectionLabel() {
@@ -346,7 +364,11 @@ export class TransformController {
     if (!rendererRef || count <= 0) return;
 
     this.clearVertexCloud();
-    const mat = new THREE.MeshBasicMaterial({ color: 0xbfc7d5 });
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xbfc7d5,
+      depthTest: false,
+      depthWrite: false,
+    });
     this.vertexCloud = new THREE.InstancedMesh(this.options.vertexGeo, mat, count);
     const dummy = new THREE.Object3D();
     const posArr = rendererRef.positions;
@@ -412,6 +434,41 @@ export class TransformController {
     this.faceCenterCloud.instanceMatrix.needsUpdate = true;
     this.faceCenterCloud.renderOrder = 23;
     this.options.scene.add(this.faceCenterCloud);
+  }
+
+  updateScreenSpaceMarkerScales() {
+    this.updateInstancedMarkerScale(this.vertexCloud, VERTEX_MARKER_PIXEL_DIAMETER);
+    this.updateInstancedMarkerScale(this.faceCenterCloud, CELL_CENTER_MARKER_PIXEL_DIAMETER);
+    if (this.selectionVertexMarker) {
+      const scale = this.screenSpaceMarkerScale(this.selectionVertexMarker.position, SELECTED_MARKER_PIXEL_DIAMETER);
+      this.selectionVertexMarker.scale.setScalar(scale);
+    }
+  }
+
+  private updateInstancedMarkerScale(mesh: THREE.InstancedMesh | null, pixelDiameter: number) {
+    if (!mesh || mesh.count <= 0) return;
+    const scale = new THREE.Vector3();
+    for (let i = 0; i < mesh.count; i++) {
+      mesh.getMatrixAt(i, this.markerMatrix);
+      this.markerMatrix.decompose(this.markerPosition, this.markerQuaternion, scale);
+      const nextScale = this.screenSpaceMarkerScale(this.markerPosition, pixelDiameter);
+      this.markerMatrix.compose(
+        this.markerPosition,
+        this.markerQuaternion,
+        scale.setScalar(nextScale),
+      );
+      mesh.setMatrixAt(i, this.markerMatrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  private screenSpaceMarkerScale(position: THREE.Vector3, pixelDiameter: number) {
+    const viewportHeight = Math.max(1, this.options.renderer.domElement.clientHeight || this.options.renderer.domElement.height);
+    const cameraSpace = this.tmpVec.copy(position).applyMatrix4(this.options.camera.matrixWorldInverse);
+    const distance = Math.max(0.01, Math.abs(cameraSpace.z));
+    const visibleHeight = (2 * distance * Math.tan(THREE.MathUtils.degToRad(this.options.camera.fov) * 0.5)) / this.options.camera.zoom;
+    const worldDiameter = (pixelDiameter / viewportHeight) * visibleHeight;
+    return Math.max(0.01, worldDiameter / (MARKER_GEOMETRY_RADIUS * 2));
   }
 
   private updateEditWireOverlay(instIdx: number) {
@@ -552,17 +609,23 @@ export class TransformController {
   placeVertexMarker(instIdx: number, vertexIdx: number) {
     if (!this.options.getObjectVisible(instIdx)) return;
     if (!this.selectionVertexMarker) {
-      const mat = new THREE.MeshBasicMaterial({ color: 0xffa64d, depthTest: false });
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0xffa64d,
+        depthTest: false,
+        depthWrite: false,
+      });
       this.selectionVertexMarker = new THREE.Mesh(this.options.vertexGeo, mat);
       this.selectionVertexMarker.renderOrder = 20;
     }
-    this.selectionVertexMarker.scale.setScalar(1.35);
     const rendererRef = instIdx === -1
       ? this.options.getRendererND()
       : this.options.getExtraInstances()[instIdx].renderer;
     const posArr = rendererRef.positions;
     const pIdx = vertexIdx * 3;
     this.selectionVertexMarker.position.set(posArr[pIdx], posArr[pIdx + 1], posArr[pIdx + 2]);
+    this.selectionVertexMarker.scale.setScalar(
+      this.screenSpaceMarkerScale(this.selectionVertexMarker.position, SELECTED_MARKER_PIXEL_DIAMETER),
+    );
     this.options.scene.add(this.selectionVertexMarker);
   }
 

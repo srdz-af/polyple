@@ -26,6 +26,7 @@ import {
   buildGeneratedCellTopology,
   cellCount,
   cloneCellTopology,
+  deleteCellAndPrune,
   maxCellDimension,
   surfaceTopologyFromCellTopology,
   type CellTopology,
@@ -720,6 +721,17 @@ function unpackSurfaceTopology(topology?: PackedTopology): PrimitiveSurfaceTopol
   };
 }
 
+function emptySurfaceTopology(): PrimitiveSurfaceTopology {
+  return {
+    triangles: new Uint32Array(),
+    facetIds: new Uint16Array(),
+  };
+}
+
+function surfaceTopologyForEditedCellTopology(topology?: CellTopology): PrimitiveSurfaceTopology {
+  return surfaceTopologyFromCellTopology(topology) ?? emptySurfaceTopology();
+}
+
 function shouldPackCellTopology(
   kind: PrimitiveKind,
   source: DataSource | undefined,
@@ -755,6 +767,7 @@ function unpackCellTopology(topology?: PackedCellTopology): CellTopology | undef
         ? { offsets: unpackU32(dim[0]), vertices: unpackU32(dim[1]) }
         : undefined
     )),
+    generatedKind: 'edited',
   };
 }
 
@@ -1588,6 +1601,25 @@ function addProductMeshFromSelection() {
   requestSceneUrlUpdate();
 }
 
+function compactDimensionMajorVertices(
+  data: Float32Array,
+  oldVertexCount: number,
+  newVertexCount: number,
+  vertexMap: Int32Array,
+) {
+  if (oldVertexCount <= 0 || newVertexCount <= 0) return new Float32Array();
+  const dimension = Math.floor(data.length / oldVertexCount);
+  const compacted = new Float32Array(dimension * newVertexCount);
+  for (let oldVertex = 0; oldVertex < oldVertexCount; oldVertex++) {
+    const newVertex = vertexMap[oldVertex];
+    if (newVertex < 0) continue;
+    for (let dim = 0; dim < dimension; dim++) {
+      compacted[(dim * newVertexCount) + newVertex] = data[(dim * oldVertexCount) + oldVertex];
+    }
+  }
+  return compacted;
+}
+
 function deleteSelected() {
   const deleteIndices = selectedInstances.filter(idx => idx >= 0).sort((a, b) => b - a);
   if (!deleteIndices.length) return;
@@ -1605,6 +1637,69 @@ function deleteSelected() {
   projectAndRenderAll();
   updateObjectList();
   selectObject(selectedInstance);
+  requestSceneUrlUpdate();
+}
+
+function deleteSelectedEditCell() {
+  if (!PARAMS.editMode || !getObjectVisible(selectedInstance)) return;
+  const selection = transformController.getEditSelection();
+  if (!selection || selection.cellId < 0) return;
+
+  const targetIsBase = selectedInstance === BASE_SELECTION;
+  const target = targetIsBase ? null : extraInstances[selectedInstance];
+  const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
+  const vertexCount = targetIsBase ? M : (target?.M ?? 0);
+  const deletion = deleteCellAndPrune(topology, selection.dimension, selection.cellId, vertexCount);
+  if (!deletion) return;
+
+  pushUndoSnapshot();
+  transformController.clearSelectionVisuals();
+  removeSelectionOutlines();
+
+  if (targetIsBase) {
+    X = compactDimensionMajorVertices(X, M, deletion.vertexCount, deletion.vertexMap);
+    M = deletion.vertexCount;
+    Y = new Float32Array(3 * M);
+    E = new Uint32Array(deletion.edges);
+    baseCellTopology = deletion.topology;
+    baseSurfaceTopology = surfaceTopologyForEditedCellTopology(baseCellTopology);
+    if (M > 0) {
+      rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
+      rendererND.setSurface(baseSurface);
+      rendererND.setMode(PARAMS.renderMode);
+    } else {
+      baseVisible = false;
+      baseOrigin = new Float32Array(MAX_N);
+      rendererND.dispose?.();
+      selectedInstance = NO_SELECTION;
+      selectedInstances = [];
+    }
+  } else if (target) {
+    target.X = compactDimensionMajorVertices(target.X, target.M, deletion.vertexCount, deletion.vertexMap);
+    target.M = deletion.vertexCount;
+    target.Y = new Float32Array(3 * target.M);
+    target.E = new Uint32Array(deletion.edges);
+    target.cellTopology = deletion.topology;
+    target.surfaceTopology = surfaceTopologyForEditedCellTopology(target.cellTopology);
+    if (target.M > 0) {
+      target.renderer.build(target.M, target.E, target.surfaceTopology, target.cellTopology);
+      target.renderer.setSurface(target.surface);
+      target.renderer.setMode(PARAMS.renderMode);
+    } else {
+      target.renderer.dispose();
+      extraInstances.splice(selectedInstance, 1);
+      selectedInstance = NO_SELECTION;
+      selectedInstances = [];
+    }
+  }
+
+  reconcileSelection();
+  projectAndRenderAll();
+  applyObjectVisibility();
+  updateObjectList();
+  updateSelectionOutline();
+  updateTransformActionButtons();
+  if (PARAMS.editMode && getObjectVisible(selectedInstance)) updateVertexCloud(selectedInstance);
   requestSceneUrlUpdate();
 }
 
@@ -1944,6 +2039,7 @@ function renderViewportFrame() {
   const frameStart = performance.now();
   const projectionMs = projectIfDirty();
   controls.update();
+  transformController.updateScreenSpaceMarkerScales();
   updateAxisGizmo();
   const renderStart = performance.now();
   if (hasRenderEffects() || downsampleSceneOnly) renderEffectsFrame();
@@ -2272,6 +2368,7 @@ viewportInteraction = new ViewportInteractionController({
   insertKeyframe: () => animationTimeline?.addKeyframeAtCurrentFrame(),
   removeLastKeyframe: () => animationTimeline?.removeLastKeyframe(),
   deleteSelected,
+  deleteSelectedEditCell,
   hasActiveSelection,
   canAddProductMesh,
   addProductMesh: addProductMeshFromSelection,
