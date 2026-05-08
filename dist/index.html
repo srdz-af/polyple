@@ -5,7 +5,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/x-icon" href="./favicon.ico" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=1k,2k,add,chevron_left,chevron_right,delete,download,edit,filter_b_and_w,fullscreen,fullscreen_exit,grid_on,help,high_quality,imagesmode,keyboard_arrow_down,keyboard_arrow_up,open_with,pause,play_arrow,recenter,redo,refresh,reset_focus,screen_record,screenshot_frame_2,settings,speed_1_5x,speed_2x,stop,sync_alt,undo,upload,visibility,visibility_off,vr180_create2d,vrpano,zoom_out_map&display=block" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=1k,2k,add,chevron_left,chevron_right,delete,deployed_code,diagonal_line,download,edit,filter_4,filter_5,filter_6,filter_7,filter_8,filter_b_and_w,fullscreen,fullscreen_exit,grid_on,help,high_quality,imagesmode,keyboard_arrow_down,keyboard_arrow_up,line_end_circle,open_with,pause,play_arrow,recenter,redo,refresh,reset_focus,screen_record,screenshot_frame_2,settings,speed_1_5x,speed_2x,square,stop,sync_alt,undo,upload,visibility,visibility_off,vr180_create2d,vrpano,zoom_out_map&display=block" />
     <title>BleND</title>
     <style>
       :root {
@@ -1726,11 +1726,23 @@
         bottom: calc(34px + var(--safe-bottom));
         z-index: 20;
         display: inline-flex;
+        flex-direction: column;
         flex-wrap: nowrap;
+        align-items: flex-start;
         gap: 8px;
         margin: 0;
         padding: 0;
         border-left: 0;
+      }
+      #transform-button-row,
+      #edit-cell-dimension-buttons {
+        display: inline-flex;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 8px;
+      }
+      #edit-cell-dimension-buttons[hidden] {
+        display: none;
       }
       #transform-actions button {
         width: 44px;
@@ -1739,6 +1751,12 @@
         border: 1px solid var(--ui-border);
         background: var(--ui-bg);
         box-shadow: var(--ui-shadow);
+      }
+      #edit-cell-dimension-buttons button {
+        width: 25px;
+        height: 25px;
+        border-radius: 50%;
+        opacity: 0.84;
       }
       #transform-actions button:hover {
         background: var(--ui-bg-hover);
@@ -1750,6 +1768,9 @@
       }
       #transform-actions .material-symbols-rounded {
         font-size: 18px;
+      }
+      #edit-cell-dimension-buttons .material-symbols-rounded {
+        font-size: 15px;
       }
       #help-overlay {
         position: fixed;
@@ -2235,13 +2256,21 @@
         }
         #transform-actions {
           flex: 0 0 auto;
-          align-items: center;
+          align-items: flex-start;
           gap: 3px;
           order: 1;
+        }
+        #transform-button-row,
+        #edit-cell-dimension-buttons {
+          gap: 3px;
         }
         #transform-actions button {
           width: 36px;
           height: 36px;
+        }
+        #edit-cell-dimension-buttons button {
+          width: 21px;
+          height: 21px;
         }
         #record-viewport-timer {
           height: 26px;
@@ -2291,7 +2320,7 @@
         border: 0 !important;
       }
     </style>
-    <script type="module" crossorigin src="/BleND/assets/index-DTRsHpQk.js"></script>
+    <script type="module" crossorigin src="/BleND/assets/index-C6C5Y0iY.js"></script>
   </head>
   <body>
     <div id="camera-view-overlay" aria-hidden="true"></div>
@@ -2374,18 +2403,21 @@
         <button id="remove-keyframe-button" type="button">Remove keyframe</button>
       </div>
       <div id="transform-actions" aria-label="Transformation controls">
-        <button id="edit-mode-toggle" type="button" aria-label="Toggle edit mode" aria-pressed="false" title="Edit mode">
-          <span class="material-symbols-rounded" aria-hidden="true">edit</span>
-        </button>
-        <button id="transform-move-button" type="button" aria-label="Move transform" title="Move (G)">
-          <span class="material-symbols-rounded" aria-hidden="true">open_with</span>
-        </button>
-        <button id="transform-rotate-button" type="button" aria-label="Rotate transform" title="Rotate (R)">
-          <span class="material-symbols-rounded" aria-hidden="true">refresh</span>
-        </button>
-        <button id="transform-scale-button" type="button" aria-label="Scale transform" title="Scale (S)">
-          <span class="material-symbols-rounded" aria-hidden="true">zoom_out_map</span>
-        </button>
+        <div id="edit-cell-dimension-buttons" aria-label="Edit selection dimension" hidden></div>
+        <div id="transform-button-row">
+          <button id="edit-mode-toggle" type="button" aria-label="Toggle edit mode" aria-pressed="false" title="Edit mode">
+            <span class="material-symbols-rounded" aria-hidden="true">edit</span>
+          </button>
+          <button id="transform-move-button" type="button" aria-label="Move transform" title="Move (G)">
+            <span class="material-symbols-rounded" aria-hidden="true">open_with</span>
+          </button>
+          <button id="transform-rotate-button" type="button" aria-label="Rotate transform" title="Rotate (R)">
+            <span class="material-symbols-rounded" aria-hidden="true">refresh</span>
+          </button>
+          <button id="transform-scale-button" type="button" aria-label="Scale transform" title="Scale (S)">
+            <span class="material-symbols-rounded" aria-hidden="true">zoom_out_map</span>
+          </button>
+        </div>
       </div>
     </div>
     <div id="pane">
@@ -2596,7 +2628,7 @@
           <li><strong>Transform selected object:</strong> <code>G</code> move, <code>R</code> rotate, <code>S</code> scale.</li>
           <li><strong>Mobile transforms:</strong> touch and drag the Move/Rotate/Scale Transformation Controls, then release to confirm.</li>
           <li><strong>Delete selected object:</strong> <code>X</code>.</li>
-          <li><strong>Edit mode:</strong> <code>Tab</code>. Use <code>1</code>/<code>2</code>/<code>3</code> for vertex/edge/face selection, then <code>G</code>/<code>R</code>/<code>S</code> to transform the selected component. In face mode, click face-center dots for precision or repeated-click/<code>Alt</code>+click to cycle overlapping faces.</li>
+          <li><strong>Edit mode:</strong> <code>Tab</code>. Use <code>1</code>..<code>8</code> or the small dimension buttons for vertex, edge, face, volume, and higher-cell selection, then <code>G</code>/<code>R</code>/<code>S</code> to transform the selected component. In face and higher-cell modes, click center dots for precision or repeated-click/<code>Alt</code>+click to cycle overlapping cells.</li>
           <li><strong>Undo/Redo:</strong> <code>Ctrl/Cmd + Z</code>, <code>Ctrl/Cmd + Y</code>.</li>
           <li><strong>Close this panel:</strong> close button, tap outside, or <code>Esc</code>.</li>
         </ul>
@@ -2641,7 +2673,7 @@
               <p>Select an object, then use Transformation Controls to move, rotate, or scale.</p>
               <ul>
                 <li><strong>Move / Rotate / Scale buttons:</strong> drag after pressing to apply, release to commit.</li>
-                <li><strong>Edit mode:</strong> toggle with the pencil button, then use <code>1</code>/<code>2</code>/<code>3</code> for vertex, edge, or face selection.</li>
+                <li><strong>Edit mode:</strong> toggle with the pencil button, then use the small dimension buttons above the transform buttons to choose vertex, edge, face, volume, or higher-cell selection.</li>
                 <li><strong>Dimension stepper:</strong> sets dimension for newly created primitives.</li>
               </ul>
             </article>

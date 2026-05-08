@@ -24,6 +24,7 @@ import {
 import { buildProductMesh, type ProductMeshFactor } from './geometry/productMesh';
 import {
   buildGeneratedCellTopology,
+  cellCount,
   cloneCellTopology,
   maxCellDimension,
   surfaceTopologyFromCellTopology,
@@ -337,6 +338,7 @@ const recordViewportTimer = document.getElementById('record-viewport-timer') as 
 const captureFrameButton = document.getElementById('capture-frame-button') as HTMLButtonElement | null;
 const cameraViewOverlay = document.getElementById('camera-view-overlay') as HTMLDivElement | null;
 const editModeToggle = document.getElementById('edit-mode-toggle') as HTMLButtonElement | null;
+const editCellDimensionButtons = document.getElementById('edit-cell-dimension-buttons') as HTMLDivElement | null;
 const mobileFullscreenToggle = document.getElementById('mobile-fullscreen-toggle') as HTMLButtonElement | null;
 const transformMoveButton = document.getElementById('transform-move-button') as HTMLButtonElement | null;
 const transformRotateButton = document.getElementById('transform-rotate-button') as HTMLButtonElement | null;
@@ -2126,7 +2128,8 @@ async function toggleMobileFullscreen() {
 }
 
 function updateTransformActionButtons() {
-  transformController.updateActionButtons();
+  if (transformController) transformController.updateActionButtons();
+  updateEditCellDimensionButtons();
 }
 
 function hasActiveSelection() {
@@ -2142,6 +2145,81 @@ function maxEditableCellDimensionForSelection() {
     ? rendererND
     : extraInstances[selectedInstance]?.renderer;
   return maxCellDimension(rendererRef?.getCellTopologyForSelection());
+}
+
+function editCellDimensionIcon(dimension: number) {
+  if (dimension === 0) return 'line_end_circle';
+  if (dimension === 1) return 'diagonal_line';
+  if (dimension === 2) return 'square';
+  if (dimension === 3) return 'deployed_code';
+  return `filter_${Math.max(4, Math.min(8, dimension))}`;
+}
+
+function editCellDimensionTitle(dimension: number) {
+  if (dimension === 0) return 'Vertex selection (1)';
+  if (dimension === 1) return 'Edge selection (2)';
+  if (dimension === 2) return 'Face selection (3)';
+  if (dimension === 3) return 'Volume selection (4)';
+  return `${dimension}-cell selection (${dimension + 1})`;
+}
+
+function selectedObjectDimension() {
+  if (selectedInstance === BASE_SELECTION) return M > 0 ? (baseOriginalN || visibleDims()) : 0;
+  return extraInstances[selectedInstance]?.originalN ?? 0;
+}
+
+function selectedObjectCellTopology() {
+  const rendererRef = selectedInstance === BASE_SELECTION
+    ? rendererND
+    : extraInstances[selectedInstance]?.renderer;
+  return rendererRef?.getCellTopologyForSelection();
+}
+
+function updateEditCellDimensionButtons() {
+  if (!editCellDimensionButtons || !transformController) return;
+
+  const topology = selectedObjectCellTopology();
+  const objectDimension = selectedObjectDimension();
+  const count = PARAMS.editMode && getObjectVisible(selectedInstance)
+    ? Math.max(0, Math.min(MAX_N, objectDimension))
+    : 0;
+
+  if (!topology || count <= 0) {
+    editCellDimensionButtons.hidden = true;
+    editCellDimensionButtons.dataset.signature = '';
+    editCellDimensionButtons.replaceChildren();
+    return;
+  }
+
+  const active = transformController.getEditCellDimension();
+  const availability = Array.from({ length: count }, (_entry, dimension) => cellCount(topology, dimension) > 0);
+  const signature = `${count}:${active}:${availability.map(enabled => enabled ? '1' : '0').join('')}`;
+  if (editCellDimensionButtons.dataset.signature === signature) {
+    editCellDimensionButtons.hidden = false;
+    return;
+  }
+
+  editCellDimensionButtons.dataset.signature = signature;
+  editCellDimensionButtons.hidden = false;
+  editCellDimensionButtons.replaceChildren();
+
+  for (let dimension = 0; dimension < count; dimension++) {
+    const button = document.createElement('button');
+    const icon = document.createElement('span');
+    const enabled = availability[dimension];
+    button.type = 'button';
+    button.className = dimension === active ? 'active' : '';
+    button.disabled = !enabled;
+    button.title = editCellDimensionTitle(dimension);
+    button.setAttribute('aria-label', button.title);
+    button.setAttribute('aria-pressed', String(dimension === active));
+    icon.className = 'material-symbols-rounded';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = editCellDimensionIcon(dimension);
+    button.appendChild(icon);
+    button.addEventListener('click', () => setEditCellDimension(dimension));
+    editCellDimensionButtons.appendChild(button);
+  }
 }
 
 function setEditCellDimension(dimension: number) {
