@@ -327,6 +327,7 @@ const recordViewportTimer = document.getElementById('record-viewport-timer') as 
 const captureFrameButton = document.getElementById('capture-frame-button') as HTMLButtonElement | null;
 const cameraViewOverlay = document.getElementById('camera-view-overlay') as HTMLDivElement | null;
 const editModeToggle = document.getElementById('edit-mode-toggle') as HTMLButtonElement | null;
+const mobileFullscreenToggle = document.getElementById('mobile-fullscreen-toggle') as HTMLButtonElement | null;
 const transformMoveButton = document.getElementById('transform-move-button') as HTMLButtonElement | null;
 const transformRotateButton = document.getElementById('transform-rotate-button') as HTMLButtonElement | null;
 const transformScaleButton = document.getElementById('transform-scale-button') as HTMLButtonElement | null;
@@ -1879,6 +1880,42 @@ function setEditMode(active: boolean) {
   requestSceneUrlUpdate();
 }
 
+function fullscreenAvailable() {
+  return typeof document.documentElement.requestFullscreen === 'function'
+    && typeof document.exitFullscreen === 'function';
+}
+
+function updateMobileFullscreenToggle() {
+  if (!mobileFullscreenToggle) return;
+  if (!fullscreenAvailable()) {
+    mobileFullscreenToggle.hidden = true;
+    return;
+  }
+  const active = document.fullscreenElement != null;
+  const label = active ? 'Exit fullscreen' : 'Enter fullscreen';
+  const icon = mobileFullscreenToggle.querySelector('.material-symbols-rounded');
+  mobileFullscreenToggle.hidden = false;
+  mobileFullscreenToggle.classList.toggle('active', active);
+  mobileFullscreenToggle.setAttribute('aria-label', label);
+  mobileFullscreenToggle.title = label;
+  if (icon) icon.textContent = active ? 'fullscreen_exit' : 'fullscreen';
+}
+
+async function toggleMobileFullscreen() {
+  if (!fullscreenAvailable()) return;
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+    } else {
+      await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+    }
+  } catch (err) {
+    console.warn('Fullscreen toggle failed', err);
+  } finally {
+    updateMobileFullscreenToggle();
+  }
+}
+
 function updateTransformActionButtons() {
   transformController.updateActionButtons();
 }
@@ -2150,6 +2187,9 @@ viewportCapture.bindControls();
 modalOverlayController.bindControls();
 bindRenderEffectControls();
 editModeToggle?.addEventListener('click', () => setEditMode(!PARAMS.editMode));
+mobileFullscreenToggle?.addEventListener('click', () => void toggleMobileFullscreen());
+document.addEventListener('fullscreenchange', updateMobileFullscreenToggle);
+updateMobileFullscreenToggle();
 sceneUndoButton?.addEventListener('click', () => undoSceneSnapshot());
 sceneRedoButton?.addEventListener('click', () => redoSceneSnapshot());
 sceneSaveButton?.addEventListener('click', () => void saveSceneStateFile());
