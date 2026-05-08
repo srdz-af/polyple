@@ -1,3 +1,10 @@
+import {
+  buildHypercubeCellTopology,
+  buildSimplexCellTopology,
+  surfaceTopologyFromCellTopology,
+  type CellTopology,
+} from './cellTopology';
+
 export type PrimitiveKind =
   | 'hypercube'
   | 'spikedHypercube'
@@ -23,6 +30,7 @@ export type PrimitiveSurfaceTopology = {
 export type PrimitiveGeometry = {
   verts: Float32Array;
   edges: Uint32Array;
+  cellTopology?: CellTopology;
   surfaceTopology?: PrimitiveSurfaceTopology;
   V: number;
 };
@@ -237,7 +245,14 @@ export function hypercubeEdges(N: number): PrimitiveGeometry {
     }
   }
 
-  return { verts, edges: new Uint32Array(edges), V };
+  const cellTopology = buildHypercubeCellTopology(N);
+  return {
+    verts,
+    edges: new Uint32Array(edges),
+    cellTopology,
+    surfaceTopology: surfaceTopologyFromCellTopology(cellTopology),
+    V,
+  };
 }
 
 export function spikedHypercubeEdges(N: number): PrimitiveGeometry {
@@ -374,10 +389,12 @@ export function simplexEdges(N: number): PrimitiveGeometry {
     for (let b = a + 1; b < V; b++) addEdge(edges, a, b);
   }
 
+  const cellTopology = buildSimplexCellTopology(N);
   return {
     verts,
     edges: new Uint32Array(edges),
-    surfaceTopology: simplexTriangleTopology(V),
+    cellTopology,
+    surfaceTopology: surfaceTopologyFromCellTopology(cellTopology) ?? simplexTriangleTopology(V),
     V,
   };
 }

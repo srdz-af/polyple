@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { PrimitiveKind, PrimitiveSurfaceTopology } from '../geometry/primitives';
+import type { CellTopology } from '../geometry/cellTopology';
 import type { HypercubeRenderer } from '../rendering/HypercubeRenderer';
 import type { AxisMap } from '../geometry/projectionUtils';
 import type { ObjectOrigin } from './objectOrigin';
@@ -7,6 +8,7 @@ import type { SurfaceState } from './surface';
 
 export type DataSource = 'primitive' | 'custom';
 export type TransformMode = 'none' | 'move' | 'rotate' | 'scale';
+export type EditCellDimension = number;
 export type EditSelectionMode = 'vertex' | 'edge' | 'face';
 export type ProjectionAxes = { x: number; y: number; z: number };
 export type TransformState = { pos: THREE.Vector3; rot: THREE.Vector3; scale: THREE.Vector3 };
@@ -14,6 +16,7 @@ export type TransformState = { pos: THREE.Vector3; rot: THREE.Vector3; scale: TH
 export type InstanceSnapshot = {
   X: Float32Array;
   E: Uint32Array;
+  cellTopology?: CellTopology;
   surfaceTopology?: PrimitiveSurfaceTopology;
   M: number;
   offset: THREE.Vector3;
@@ -31,6 +34,7 @@ export type SceneSnapshot<TPrimitiveMode> = {
   N: number;
   X: Float32Array;
   E: Uint32Array;
+  cellTopology?: CellTopology;
   surfaceTopology?: PrimitiveSurfaceTopology;
   M: number;
   source: DataSource;
@@ -57,6 +61,7 @@ export type Instance = {
   Y: Float32Array;
   X: Float32Array;
   E: Uint32Array;
+  cellTopology?: CellTopology;
   surfaceTopology?: PrimitiveSurfaceTopology;
   M: number;
   offset: THREE.Vector3;

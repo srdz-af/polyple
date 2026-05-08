@@ -22,6 +22,12 @@ import {
   type AxisMap,
 } from './geometry/projectionUtils';
 import { buildProductMesh, type ProductMeshFactor } from './geometry/productMesh';
+import {
+  buildGeneratedCellTopology,
+  cloneCellTopology,
+  surfaceTopologyFromCellTopology,
+  type CellTopology,
+} from './geometry/cellTopology';
 import { BackgroundController, type BackgroundUrlState } from './background/BackgroundController';
 import { KeyboardCameraController } from './controls/KeyboardCameraController';
 import { KeyboardShortcutController } from './interaction/KeyboardShortcutController';
@@ -617,6 +623,7 @@ let baseOriginalN = 0;
 let baseAxisMap: AxisMap = Array.from({ length: MAX_N }, (_, i) => i);
 let baseVisible = true;
 let baseSurface: SurfaceState = cloneSurface(DEFAULT_SURFACE);
+let baseCellTopology: CellTopology | undefined;
 let baseSurfaceTopology: PrimitiveSurfaceTopology | undefined;
 keyboardCamera = new KeyboardCameraController({
   camera,
@@ -705,6 +712,18 @@ function unpackSurfaceTopology(topology?: PackedTopology): PrimitiveSurfaceTopol
     triangles: unpackU32(topology[0]),
     facetIds: unpackU16(topology[1]),
   };
+}
+
+function deriveCellTopologyForGeometry(
+  kind: PrimitiveKind,
+  originalN: number,
+  vertexCount: number,
+  edges: Uint32Array,
+  surfaceTopology?: PrimitiveSurfaceTopology,
+  cellTopology?: CellTopology,
+) {
+  return cloneCellTopology(cellTopology)
+    ?? buildGeneratedCellTopology(kind, originalN, vertexCount, edges, surfaceTopology);
 }
 
 function packCameraState(): PackedCamera {
@@ -1064,6 +1083,7 @@ function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
     N,
     X: new Float32Array(X),
     E: new Uint32Array(E),
+    cellTopology: cloneCellTopology(baseCellTopology),
     surfaceTopology: clonePrimitiveSurfaceTopology(baseSurfaceTopology),
     M,
     source: dataSource,
@@ -1085,6 +1105,7 @@ function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
     instances: extraInstances.map(inst => ({
       X: new Float32Array(inst.X),
       E: new Uint32Array(inst.E),
+      cellTopology: cloneCellTopology(inst.cellTopology),
       surfaceTopology: clonePrimitiveSurfaceTopology(inst.surfaceTopology),
       M: inst.M,
       offset: inst.offset.clone(),
@@ -1116,7 +1137,7 @@ function redoSceneSnapshot() {
 function applySnapshot(snap: SceneSnapshot<PrimitiveMode>) {
   PARAMS.N = snap.paramsN;
   PARAMS.primitive = snap.primitive;
-  rebuildState(snap.N, snap.X, snap.E, snap.source, snap.baseOrigN, snap.baseAxisMap, snap.surfaceTopology);
+  rebuildState(snap.N, snap.X, snap.E, snap.source, snap.baseOrigN, snap.baseAxisMap, snap.surfaceTopology, snap.cellTopology);
   if (snap.rotMatrix.length === rot.matrix.length) rot.matrix.set(snap.rotMatrix);
   baseLabel = snap.label;
   PARAMS.axesX = snap.axes.x; PARAMS.axesY = snap.axes.y; PARAMS.axesZ = snap.axes.z;
@@ -1488,6 +1509,7 @@ function addProductMeshFromSelection() {
   const inst = insertInstance({
     verts,
     edges: product.edges,
+    cellTopology: deriveCellTopologyForGeometry('productMesh', product.dimension, product.vertexCount, product.edges, product.surfaceTopology),
     surfaceTopology: clonePrimitiveSurfaceTopology(product.surfaceTopology),
     V: product.vertexCount,
     kind: 'productMesh',
@@ -1545,7 +1567,15 @@ const objectListController = new ObjectListController({
 
 function restoreInstanceSnapshot(snap: InstanceSnapshot): Instance {
   const instanceRenderer = new HypercubeRenderer(scene);
-  instanceRenderer.build(snap.M, snap.E, snap.surfaceTopology);
+  const cellTopology = deriveCellTopologyForGeometry(
+    snap.kind,
+    snap.originalN,
+    snap.M,
+    snap.E,
+    snap.surfaceTopology,
+    snap.cellTopology,
+  );
+  instanceRenderer.build(snap.M, snap.E, snap.surfaceTopology, cellTopology);
   const surface = normalizeSurface(snap.surface);
   instanceRenderer.setSurface(surface);
   instanceRenderer.setMode(PARAMS.renderMode);
@@ -1555,6 +1585,7 @@ function restoreInstanceSnapshot(snap: InstanceSnapshot): Instance {
     Y: new Float32Array(3 * snap.M),
     X: new Float32Array(snap.X),
     E: new Uint32Array(snap.E),
+    cellTopology: cloneCellTopology(cellTopology),
     surfaceTopology: clonePrimitiveSurfaceTopology(snap.surfaceTopology),
     M: snap.M,
     offset: snap.offset.clone(),
@@ -1571,7 +1602,7 @@ function restoreInstanceSnapshot(snap: InstanceSnapshot): Instance {
 
 const rendererND = new HypercubeRenderer(scene);
 if (M > 0) {
-  rendererND.build(M, E, baseSurfaceTopology);
+  rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
   rendererND.setMode('solid');
 }
 
@@ -2111,6 +2142,7 @@ function createPrimitiveData(kind: PrimitiveKind, dimension: number): InstanceGe
   return {
     verts,
     edges: data.edges,
+    cellTopology: cloneCellTopology(data.cellTopology),
     surfaceTopology: clonePrimitiveSurfaceTopology(data.surfaceTopology),
     V: data.V,
     kind,
@@ -2158,6 +2190,7 @@ function addInstanceAt(offset: THREE.Vector3, recordUndo = true) {
     data = {
       verts: new Float32Array(X),
       edges: new Uint32Array(E),
+      cellTopology: cloneCellTopology(baseCellTopology),
       surfaceTopology: clonePrimitiveSurfaceTopology(baseSurfaceTopology),
       V: M,
       kind: PARAMS.primitive,
@@ -2181,6 +2214,7 @@ function rebuildState(
   localN?: number,
   axisMap?: AxisMap,
   surfaceTopology?: PrimitiveSurfaceTopology,
+  cellTopology?: CellTopology,
 ) {
   axisController.clearDynamicState();
   viewportInteraction?.cancelAxisShiftDrag();
@@ -2211,13 +2245,15 @@ function rebuildState(
   baseOriginalN = localN ?? visibleDims();
   baseAxisMap = normalizeAxisMap(axisMap, baseOriginalN);
   baseSurface = cloneSurface(DEFAULT_SURFACE);
-  baseSurfaceTopology = clonePrimitiveSurfaceTopology(surfaceTopology);
+  baseCellTopology = deriveCellTopologyForGeometry(PARAMS.primitive, baseOriginalN, M, E, surfaceTopology, cellTopology);
+  baseSurfaceTopology = clonePrimitiveSurfaceTopology(surfaceTopology)
+    ?? surfaceTopologyFromCellTopology(baseCellTopology);
   axisController.resetAxisOrder(N);
   PARAMS.axesX = axisController.axesOrder[0] ?? 0;
   PARAMS.axesY = axisController.axesOrder[1] ?? 1;
   PARAMS.axesZ = axisController.axesOrder[2] ?? 2;
   if (M > 0) {
-    rendererND.build(M, E, baseSurfaceTopology);
+    rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
     rendererND.setSurface(baseSurface);
     rendererND.setMode(PARAMS.renderMode);
     if (setViewMode) setViewMode(currentMode);
@@ -2244,7 +2280,7 @@ function resetToIsometric() {
   const rebuilt = buildPrimitive(PARAMS.primitive, targetN);
   const axisMap = canonicalAxisMap(targetN);
   const embedded = embedToMax(rebuilt.verts, targetN, axisMap);
-  rebuildState(MAX_N, embedded, rebuilt.edges, 'primitive', targetN, axisMap, rebuilt.surfaceTopology);
+  rebuildState(MAX_N, embedded, rebuilt.edges, 'primitive', targetN, axisMap, rebuilt.surfaceTopology, rebuilt.cellTopology);
 
   controls.reset();
   camera.position.copy(DEFAULT_CAMERA_POSITION);

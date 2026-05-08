@@ -1,6 +1,12 @@
 import * as THREE from 'three';
 import { ConvexHull, type Face } from 'three/examples/jsm/math/ConvexHull.js';
 import type { ViewMode } from '../constants';
+import {
+  buildCellTopologyFromEdgesAndSurface,
+  cloneCellTopology,
+  surfaceTopologyFromCellTopology,
+  type CellTopology,
+} from '../geometry/cellTopology';
 import { HullGeometryBuilder, type VertexPoint } from './hullGeometry';
 
 export type SurfaceMaterial = {
@@ -55,6 +61,7 @@ export class HypercubeRenderer {
   private tmp = new THREE.Vector3();
   private surface: SurfaceMaterial = { ...DEFAULT_SURFACE };
   private surfaceTopology?: SurfaceTopology;
+  private cellTopology?: CellTopology;
   private surfaceGeometrySignature = '';
   private facetColorCache = new Map<number, THREE.Color>();
   private hullBuilder = new HullGeometryBuilder();
@@ -88,7 +95,7 @@ export class HypercubeRenderer {
     });
   }
 
-  build(M: number, edges: Uint32Array, surfaceTopology?: SurfaceTopology): void {
+  build(M: number, edges: Uint32Array, surfaceTopology?: SurfaceTopology, cellTopology?: CellTopology): void {
     this.dispose();
     this.M = M;
     this.allEdges = edges;
@@ -112,9 +119,11 @@ export class HypercubeRenderer {
     this.group.add(this.mesh);
 
     this.surfaceNeedsUpdate = true;
-    this.surfaceTopology = surfaceTopology ? {
-      triangles: new Uint32Array(surfaceTopology.triangles),
-      facetIds: new Uint16Array(surfaceTopology.facetIds),
+    this.cellTopology = cloneCellTopology(cellTopology);
+    const renderSurfaceTopology = surfaceTopology ?? surfaceTopologyFromCellTopology(this.cellTopology);
+    this.surfaceTopology = renderSurfaceTopology ? {
+      triangles: new Uint32Array(renderSurfaceTopology.triangles),
+      facetIds: new Uint16Array(renderSurfaceTopology.facetIds),
     } : undefined;
     this.surfaceGeometrySignature = '';
     this.facetColorCache.clear();
@@ -195,6 +204,13 @@ export class HypercubeRenderer {
   getSurfaceTopologyForSelection(): SurfaceTopology | undefined {
     if (!this.surfaceTopology) this.surfaceTopology = this.buildSurfaceTopologyFromCurrentPoints();
     return this.surfaceTopology;
+  }
+
+  getCellTopologyForSelection(): CellTopology | undefined {
+    if (!this.cellTopology) {
+      this.cellTopology = buildCellTopologyFromEdgesAndSurface(this.M, this.allEdges, this.getSurfaceTopologyForSelection());
+    }
+    return this.cellTopology;
   }
 
   dispose(): void {
