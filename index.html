@@ -340,9 +340,6 @@
       #transform-actions button {
         touch-action: none;
       }
-      .mobile-edit-stack {
-        display: contents;
-      }
       #mobile-fullscreen-toggle {
         display: none;
       }
@@ -2043,7 +2040,7 @@
         }
         #animation-timeline {
           box-sizing: border-box;
-          left: calc(8px + var(--safe-left));
+          left: calc(30px + var(--safe-left));
           right: calc(8px + var(--safe-right));
           bottom: calc(6px + var(--safe-bottom));
           width: auto;
@@ -2051,6 +2048,35 @@
           height: 20px;
           padding-left: 46px;
           transform: none;
+        }
+        #bottom-controls > #mobile-fullscreen-toggle {
+          display: grid;
+          place-items: center;
+          position: fixed;
+          left: calc(8px + var(--safe-left));
+          bottom: calc(8px + var(--safe-bottom));
+          z-index: 21;
+          width: 16px;
+          height: 16px;
+          padding: 0;
+          border: 0;
+          border-radius: 50%;
+          background: rgba(14, 18, 27, 0.28);
+          box-shadow: none;
+          color: rgba(235, 241, 255, 0.68);
+          opacity: 0.72;
+          transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+        }
+        #bottom-controls > #mobile-fullscreen-toggle:hover,
+        #bottom-controls > #mobile-fullscreen-toggle.active {
+          background: rgba(35, 45, 66, 0.42);
+          color: rgba(255, 255, 255, 0.86);
+          opacity: 0.88;
+        }
+        #bottom-controls > #mobile-fullscreen-toggle .material-symbols-rounded {
+          display: block;
+          font-size: 11px;
+          line-height: 1;
         }
         #animation-current-frame {
           width: 34px;
@@ -2209,40 +2235,13 @@
         }
         #transform-actions {
           flex: 0 0 auto;
-          align-items: flex-start;
+          align-items: center;
           gap: 3px;
           order: 1;
-        }
-        .mobile-edit-stack {
-          display: inline-flex;
-          flex: 0 0 auto;
-          flex-direction: column;
-          align-items: center;
-          gap: 4px;
         }
         #transform-actions button {
           width: 36px;
           height: 36px;
-        }
-        #mobile-fullscreen-toggle {
-          display: grid;
-          width: 20px;
-          height: 20px;
-          border-radius: 50%;
-          background: rgba(14, 18, 27, 0.28);
-          box-shadow: none;
-          color: rgba(235, 241, 255, 0.68);
-          opacity: 0.72;
-          transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
-        }
-        #mobile-fullscreen-toggle:hover,
-        #mobile-fullscreen-toggle.active {
-          background: rgba(35, 45, 66, 0.42);
-          color: rgba(255, 255, 255, 0.86);
-          opacity: 0.88;
-        }
-        #mobile-fullscreen-toggle .material-symbols-rounded {
-          font-size: 13px;
         }
         #record-viewport-timer {
           height: 26px;
@@ -2356,6 +2355,9 @@
           </div>
         </div>
       </div>
+      <button id="mobile-fullscreen-toggle" type="button" aria-label="Enter fullscreen" title="Enter fullscreen">
+        <span class="material-symbols-rounded" aria-hidden="true">fullscreen</span>
+      </button>
       <div id="animation-timeline" aria-label="Animation timeline">
         <output id="animation-current-frame" aria-live="polite">0/179</output>
         <div id="animation-timeline-content">
@@ -2371,14 +2373,9 @@
         <button id="remove-keyframe-button" type="button">Remove keyframe</button>
       </div>
       <div id="transform-actions" aria-label="Transformation controls">
-        <div class="mobile-edit-stack">
-          <button id="mobile-fullscreen-toggle" type="button" aria-label="Enter fullscreen" title="Enter fullscreen">
-            <span class="material-symbols-rounded" aria-hidden="true">fullscreen</span>
-          </button>
-          <button id="edit-mode-toggle" type="button" aria-label="Toggle edit mode" aria-pressed="false" title="Edit mode">
-            <span class="material-symbols-rounded" aria-hidden="true">edit</span>
-          </button>
-        </div>
+        <button id="edit-mode-toggle" type="button" aria-label="Toggle edit mode" aria-pressed="false" title="Edit mode">
+          <span class="material-symbols-rounded" aria-hidden="true">edit</span>
+        </button>
         <button id="transform-move-button" type="button" aria-label="Move transform" title="Move (G)">
           <span class="material-symbols-rounded" aria-hidden="true">open_with</span>
         </button>
