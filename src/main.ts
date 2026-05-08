@@ -22,6 +22,14 @@ import {
   type AxisMap,
 } from './geometry/projectionUtils';
 import { buildProductMesh, type ProductMeshFactor } from './geometry/productMesh';
+import {
+  buildGeneratedCellTopology,
+  cellCount,
+  cloneCellTopology,
+  maxCellDimension,
+  surfaceTopologyFromCellTopology,
+  type CellTopology,
+} from './geometry/cellTopology';
 import { BackgroundController, type BackgroundUrlState } from './background/BackgroundController';
 import { KeyboardCameraController } from './controls/KeyboardCameraController';
 import { KeyboardShortcutController } from './interaction/KeyboardShortcutController';
@@ -86,6 +94,7 @@ type PackedCamera = [
 ];
 type PackedSurface = [number, number, number, number];
 type PackedTopology = [string, string];
+type PackedCellTopology = Array<PackedTopology | null>;
 type PackedBackgroundState = [string, string, number, number];
 type PackedAnimationSettings = [number, number, 0 | 1, number, number];
 type PackedAnimationKeyframeState = {
@@ -108,6 +117,7 @@ type PackedAnimationTimelineState = {
 type PackedInstanceState = {
   x: string;
   e: string;
+  ct?: PackedCellTopology;
   st?: PackedTopology;
   m: number;
   o: PackedVec3;
@@ -125,6 +135,7 @@ type PackedSceneUrlState = {
   n: number;
   x: string;
   e: string;
+  ct?: PackedCellTopology;
   st?: PackedTopology;
   m: number;
   ds: DataSource;
@@ -327,6 +338,7 @@ const recordViewportTimer = document.getElementById('record-viewport-timer') as 
 const captureFrameButton = document.getElementById('capture-frame-button') as HTMLButtonElement | null;
 const cameraViewOverlay = document.getElementById('camera-view-overlay') as HTMLDivElement | null;
 const editModeToggle = document.getElementById('edit-mode-toggle') as HTMLButtonElement | null;
+const editCellDimensionButtons = document.getElementById('edit-cell-dimension-buttons') as HTMLDivElement | null;
 const mobileFullscreenToggle = document.getElementById('mobile-fullscreen-toggle') as HTMLButtonElement | null;
 const transformMoveButton = document.getElementById('transform-move-button') as HTMLButtonElement | null;
 const transformRotateButton = document.getElementById('transform-rotate-button') as HTMLButtonElement | null;
@@ -617,6 +629,7 @@ let baseOriginalN = 0;
 let baseAxisMap: AxisMap = Array.from({ length: MAX_N }, (_, i) => i);
 let baseVisible = true;
 let baseSurface: SurfaceState = cloneSurface(DEFAULT_SURFACE);
+let baseCellTopology: CellTopology | undefined;
 let baseSurfaceTopology: PrimitiveSurfaceTopology | undefined;
 keyboardCamera = new KeyboardCameraController({
   camera,
@@ -705,6 +718,56 @@ function unpackSurfaceTopology(topology?: PackedTopology): PrimitiveSurfaceTopol
     triangles: unpackU32(topology[0]),
     facetIds: unpackU16(topology[1]),
   };
+}
+
+function shouldPackCellTopology(
+  kind: PrimitiveKind,
+  source: DataSource | undefined,
+  topology?: CellTopology,
+) {
+  if (!topology) return false;
+  if (source === 'custom' || kind === 'productMesh') return true;
+
+  const generated = topology.generatedKind;
+  if (!generated || generated === 'fallback') return false;
+  if (generated === kind) return false;
+  if (kind === 'duoprism' && generated === 'polygon') return false;
+  return true;
+}
+
+function packCellTopologyForUrl(
+  kind: PrimitiveKind,
+  source: DataSource | undefined,
+  topology?: CellTopology,
+): PackedCellTopology | undefined {
+  if (!shouldPackCellTopology(kind, source, topology)) return undefined;
+  if (!topology) return undefined;
+  const packed = topology.cells.map(dim => dim ? [packU32(dim.offsets), packU32(dim.vertices)] as PackedTopology : null);
+  while (packed.length > 0 && packed[packed.length - 1] === null) packed.pop();
+  return packed.length ? packed : undefined;
+}
+
+function unpackCellTopology(topology?: PackedCellTopology): CellTopology | undefined {
+  if (!Array.isArray(topology)) return undefined;
+  return {
+    cells: topology.map(dim => (
+      Array.isArray(dim)
+        ? { offsets: unpackU32(dim[0]), vertices: unpackU32(dim[1]) }
+        : undefined
+    )),
+  };
+}
+
+function deriveCellTopologyForGeometry(
+  kind: PrimitiveKind,
+  originalN: number,
+  vertexCount: number,
+  edges: Uint32Array,
+  surfaceTopology?: PrimitiveSurfaceTopology,
+  cellTopology?: CellTopology,
+) {
+  return cloneCellTopology(cellTopology)
+    ?? buildGeneratedCellTopology(kind, originalN, vertexCount, edges, surfaceTopology);
 }
 
 function packCameraState(): PackedCamera {
@@ -816,6 +879,7 @@ function packInstanceState(instance: InstanceSnapshot): PackedInstanceState {
   return {
     x: packF32(instance.X),
     e: packU32(instance.E),
+    ct: packCellTopologyForUrl(instance.kind, undefined, instance.cellTopology),
     st: packSurfaceTopology(instance.surfaceTopology),
     m: instance.M,
     o: packVec3(instance.offset),
@@ -834,6 +898,7 @@ function unpackInstanceState(instance: PackedInstanceState): InstanceSnapshot {
   return {
     X: unpackF32(instance.x),
     E: unpackU32(instance.e),
+    cellTopology: unpackCellTopology(instance.ct),
     surfaceTopology: unpackSurfaceTopology(instance.st),
     M: finiteInteger(instance.m, 0),
     offset: unpackVec3(instance.o),
@@ -855,6 +920,7 @@ function captureSceneUrlState(): PackedSceneUrlState {
     n: snap.N,
     x: packF32(snap.X),
     e: packU32(snap.E),
+    ct: packCellTopologyForUrl(snap.primitive, snap.source, snap.cellTopology),
     st: packSurfaceTopology(snap.surfaceTopology),
     m: snap.M,
     ds: snap.source,
@@ -891,6 +957,7 @@ function unpackSceneUrlSnapshot(state: PackedSceneUrlState): SceneSnapshot<Primi
     N: Math.max(1, Math.min(MAX_N, finiteInteger(state.n, MAX_N))),
     X: unpackF32(state.x),
     E: unpackU32(state.e),
+    cellTopology: unpackCellTopology(state.ct),
     surfaceTopology: unpackSurfaceTopology(state.st),
     M: finiteInteger(state.m, 0),
     source: state.ds === 'custom' ? 'custom' : 'primitive',
@@ -1064,6 +1131,7 @@ function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
     N,
     X: new Float32Array(X),
     E: new Uint32Array(E),
+    cellTopology: cloneCellTopology(baseCellTopology),
     surfaceTopology: clonePrimitiveSurfaceTopology(baseSurfaceTopology),
     M,
     source: dataSource,
@@ -1085,6 +1153,7 @@ function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
     instances: extraInstances.map(inst => ({
       X: new Float32Array(inst.X),
       E: new Uint32Array(inst.E),
+      cellTopology: cloneCellTopology(inst.cellTopology),
       surfaceTopology: clonePrimitiveSurfaceTopology(inst.surfaceTopology),
       M: inst.M,
       offset: inst.offset.clone(),
@@ -1116,7 +1185,7 @@ function redoSceneSnapshot() {
 function applySnapshot(snap: SceneSnapshot<PrimitiveMode>) {
   PARAMS.N = snap.paramsN;
   PARAMS.primitive = snap.primitive;
-  rebuildState(snap.N, snap.X, snap.E, snap.source, snap.baseOrigN, snap.baseAxisMap, snap.surfaceTopology);
+  rebuildState(snap.N, snap.X, snap.E, snap.source, snap.baseOrigN, snap.baseAxisMap, snap.surfaceTopology, snap.cellTopology);
   if (snap.rotMatrix.length === rot.matrix.length) rot.matrix.set(snap.rotMatrix);
   baseLabel = snap.label;
   PARAMS.axesX = snap.axes.x; PARAMS.axesY = snap.axes.y; PARAMS.axesZ = snap.axes.z;
@@ -1374,6 +1443,9 @@ function updateAxisGuide() {
 }
 
 function updateVertexCloud(instIdx: number) {
+  const rendererRef = instIdx === BASE_SELECTION ? rendererND : extraInstances[instIdx]?.renderer;
+  const maxDim = maxCellDimension(rendererRef?.getCellTopologyForSelection());
+  if (transformController.getEditCellDimension() > maxDim) transformController.setEditCellDimension(maxDim);
   transformController.updateVertexCloud(instIdx);
 }
 
@@ -1426,7 +1498,16 @@ function canAddProductMesh() {
 
 function getObjectProductFactor(idx: number): ProductMeshFactor | null {
   const source = idx === BASE_SELECTION
-    ? { X, M, E, surfaceTopology: baseSurfaceTopology, origin: baseOrigin, originalN: baseOriginalN || visibleDims(), axisMap: baseAxisMap }
+    ? {
+      X,
+      M,
+      E,
+      cellTopology: baseCellTopology,
+      surfaceTopology: baseSurfaceTopology,
+      origin: baseOrigin,
+      originalN: baseOriginalN || visibleDims(),
+      axisMap: baseAxisMap,
+    }
     : extraInstances[idx];
   if (!source || source.M <= 0) return null;
 
@@ -1446,6 +1527,7 @@ function getObjectProductFactor(idx: number): ProductMeshFactor | null {
     vertexCount: source.M,
     dimension,
     edges: new Uint32Array(source.E),
+    cellTopology: cloneCellTopology(source.cellTopology),
     surfaceTopology: clonePrimitiveSurfaceTopology(source.surfaceTopology),
   };
 }
@@ -1488,6 +1570,8 @@ function addProductMeshFromSelection() {
   const inst = insertInstance({
     verts,
     edges: product.edges,
+    cellTopology: cloneCellTopology(product.cellTopology)
+      ?? deriveCellTopologyForGeometry('productMesh', product.dimension, product.vertexCount, product.edges, product.surfaceTopology),
     surfaceTopology: clonePrimitiveSurfaceTopology(product.surfaceTopology),
     V: product.vertexCount,
     kind: 'productMesh',
@@ -1545,7 +1629,15 @@ const objectListController = new ObjectListController({
 
 function restoreInstanceSnapshot(snap: InstanceSnapshot): Instance {
   const instanceRenderer = new HypercubeRenderer(scene);
-  instanceRenderer.build(snap.M, snap.E, snap.surfaceTopology);
+  const cellTopology = deriveCellTopologyForGeometry(
+    snap.kind,
+    snap.originalN,
+    snap.M,
+    snap.E,
+    snap.surfaceTopology,
+    snap.cellTopology,
+  );
+  instanceRenderer.build(snap.M, snap.E, snap.surfaceTopology, cellTopology);
   const surface = normalizeSurface(snap.surface);
   instanceRenderer.setSurface(surface);
   instanceRenderer.setMode(PARAMS.renderMode);
@@ -1555,6 +1647,7 @@ function restoreInstanceSnapshot(snap: InstanceSnapshot): Instance {
     Y: new Float32Array(3 * snap.M),
     X: new Float32Array(snap.X),
     E: new Uint32Array(snap.E),
+    cellTopology: cloneCellTopology(cellTopology),
     surfaceTopology: clonePrimitiveSurfaceTopology(snap.surfaceTopology),
     M: snap.M,
     offset: snap.offset.clone(),
@@ -1571,7 +1664,7 @@ function restoreInstanceSnapshot(snap: InstanceSnapshot): Instance {
 
 const rendererND = new HypercubeRenderer(scene);
 if (M > 0) {
-  rendererND.build(M, E, baseSurfaceTopology);
+  rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
   rendererND.setMode('solid');
 }
 
@@ -1851,7 +1944,6 @@ function renderViewportFrame() {
   const frameStart = performance.now();
   const projectionMs = projectIfDirty();
   controls.update();
-  updateTransformActionButtons();
   updateAxisGizmo();
   const renderStart = performance.now();
   if (hasRenderEffects() || downsampleSceneOnly) renderEffectsFrame();
@@ -2035,7 +2127,8 @@ async function toggleMobileFullscreen() {
 }
 
 function updateTransformActionButtons() {
-  transformController.updateActionButtons();
+  if (transformController) transformController.updateActionButtons();
+  updateEditCellDimensionButtons();
 }
 
 function hasActiveSelection() {
@@ -2046,8 +2139,91 @@ function handleTransformConstraintKey(key: string) {
   return transformController.handleConstraintKey(key);
 }
 
-function setEditSelectionMode(mode: 'vertex' | 'edge' | 'face') {
-  transformController.setEditSelectionMode(mode);
+function maxEditableCellDimensionForSelection() {
+  const rendererRef = selectedInstance === BASE_SELECTION
+    ? rendererND
+    : extraInstances[selectedInstance]?.renderer;
+  return maxCellDimension(rendererRef?.getCellTopologyForSelection());
+}
+
+function editCellDimensionIcon(dimension: number) {
+  if (dimension === 0) return 'line_end_circle';
+  if (dimension === 1) return 'diagonal_line';
+  if (dimension === 2) return 'square';
+  if (dimension === 3) return 'deployed_code';
+  return `filter_${Math.max(4, Math.min(8, dimension))}`;
+}
+
+function editCellDimensionTitle(dimension: number) {
+  if (dimension === 0) return 'Vertex selection (1)';
+  if (dimension === 1) return 'Edge selection (2)';
+  if (dimension === 2) return 'Face selection (3)';
+  if (dimension === 3) return 'Volume selection (4)';
+  return `${dimension}-cell selection (${dimension + 1})`;
+}
+
+function selectedObjectDimension() {
+  if (selectedInstance === BASE_SELECTION) return M > 0 ? (baseOriginalN || visibleDims()) : 0;
+  return extraInstances[selectedInstance]?.originalN ?? 0;
+}
+
+function selectedObjectCellTopology() {
+  const rendererRef = selectedInstance === BASE_SELECTION
+    ? rendererND
+    : extraInstances[selectedInstance]?.renderer;
+  return rendererRef?.getCellTopologyForSelection();
+}
+
+function updateEditCellDimensionButtons() {
+  if (!editCellDimensionButtons || !transformController) return;
+
+  const topology = selectedObjectCellTopology();
+  const objectDimension = selectedObjectDimension();
+  const count = PARAMS.editMode && getObjectVisible(selectedInstance)
+    ? Math.max(0, Math.min(MAX_N, objectDimension))
+    : 0;
+
+  if (!topology || count <= 0) {
+    editCellDimensionButtons.hidden = true;
+    editCellDimensionButtons.dataset.signature = '';
+    editCellDimensionButtons.replaceChildren();
+    return;
+  }
+
+  const active = transformController.getEditCellDimension();
+  const availability = Array.from({ length: count }, (_entry, dimension) => cellCount(topology, dimension) > 0);
+  const signature = `${count}:${active}:${availability.map(enabled => enabled ? '1' : '0').join('')}`;
+  if (editCellDimensionButtons.dataset.signature === signature) {
+    editCellDimensionButtons.hidden = false;
+    return;
+  }
+
+  editCellDimensionButtons.dataset.signature = signature;
+  editCellDimensionButtons.hidden = false;
+  editCellDimensionButtons.replaceChildren();
+
+  for (let dimension = 0; dimension < count; dimension++) {
+    const button = document.createElement('button');
+    const icon = document.createElement('span');
+    const enabled = availability[dimension];
+    button.type = 'button';
+    button.className = dimension === active ? 'active' : '';
+    button.disabled = !enabled;
+    button.title = editCellDimensionTitle(dimension);
+    button.setAttribute('aria-label', button.title);
+    button.setAttribute('aria-pressed', String(dimension === active));
+    icon.className = 'material-symbols-rounded';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = editCellDimensionIcon(dimension);
+    button.appendChild(icon);
+    button.addEventListener('click', () => setEditCellDimension(dimension));
+    editCellDimensionButtons.appendChild(button);
+  }
+}
+
+function setEditCellDimension(dimension: number) {
+  const maxDim = maxEditableCellDimensionForSelection();
+  transformController.setEditCellDimension(Math.max(0, Math.min(maxDim, Math.floor(dimension))));
   if (PARAMS.editMode && getObjectVisible(selectedInstance)) updateVertexCloud(selectedInstance);
   updateTransformActionButtons();
 }
@@ -2111,6 +2287,7 @@ function createPrimitiveData(kind: PrimitiveKind, dimension: number): InstanceGe
   return {
     verts,
     edges: data.edges,
+    cellTopology: cloneCellTopology(data.cellTopology),
     surfaceTopology: clonePrimitiveSurfaceTopology(data.surfaceTopology),
     V: data.V,
     kind,
@@ -2158,6 +2335,7 @@ function addInstanceAt(offset: THREE.Vector3, recordUndo = true) {
     data = {
       verts: new Float32Array(X),
       edges: new Uint32Array(E),
+      cellTopology: cloneCellTopology(baseCellTopology),
       surfaceTopology: clonePrimitiveSurfaceTopology(baseSurfaceTopology),
       V: M,
       kind: PARAMS.primitive,
@@ -2181,6 +2359,7 @@ function rebuildState(
   localN?: number,
   axisMap?: AxisMap,
   surfaceTopology?: PrimitiveSurfaceTopology,
+  cellTopology?: CellTopology,
 ) {
   axisController.clearDynamicState();
   viewportInteraction?.cancelAxisShiftDrag();
@@ -2211,13 +2390,15 @@ function rebuildState(
   baseOriginalN = localN ?? visibleDims();
   baseAxisMap = normalizeAxisMap(axisMap, baseOriginalN);
   baseSurface = cloneSurface(DEFAULT_SURFACE);
-  baseSurfaceTopology = clonePrimitiveSurfaceTopology(surfaceTopology);
+  baseCellTopology = deriveCellTopologyForGeometry(PARAMS.primitive, baseOriginalN, M, E, surfaceTopology, cellTopology);
+  baseSurfaceTopology = clonePrimitiveSurfaceTopology(surfaceTopology)
+    ?? surfaceTopologyFromCellTopology(baseCellTopology);
   axisController.resetAxisOrder(N);
   PARAMS.axesX = axisController.axesOrder[0] ?? 0;
   PARAMS.axesY = axisController.axesOrder[1] ?? 1;
   PARAMS.axesZ = axisController.axesOrder[2] ?? 2;
   if (M > 0) {
-    rendererND.build(M, E, baseSurfaceTopology);
+    rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
     rendererND.setSurface(baseSurface);
     rendererND.setMode(PARAMS.renderMode);
     if (setViewMode) setViewMode(currentMode);
@@ -2244,7 +2425,7 @@ function resetToIsometric() {
   const rebuilt = buildPrimitive(PARAMS.primitive, targetN);
   const axisMap = canonicalAxisMap(targetN);
   const embedded = embedToMax(rebuilt.verts, targetN, axisMap);
-  rebuildState(MAX_N, embedded, rebuilt.edges, 'primitive', targetN, axisMap, rebuilt.surfaceTopology);
+  rebuildState(MAX_N, embedded, rebuilt.edges, 'primitive', targetN, axisMap, rebuilt.surfaceTopology, rebuilt.cellTopology);
 
   controls.reset();
   camera.position.copy(DEFAULT_CAMERA_POSITION);
@@ -2351,7 +2532,7 @@ new KeyboardShortcutController({
   undo: undoSceneSnapshot,
   redo: redoSceneSnapshot,
   togglePerfOverlay,
-  setEditSelectionMode,
+  setEditCellDimension,
 }).bind();
 
 updateTransformActionButtons();

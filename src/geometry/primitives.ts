@@ -1,3 +1,18 @@
+import {
+  buildCrossPolytopeCellTopology,
+  buildDuoprismCellTopology,
+  buildHypercubeCellTopology,
+  buildPolygonCellTopology,
+  buildSimplexCellTopology,
+  buildSimplexPrismCellTopology,
+  buildSpikedCellTopology,
+  cellCount,
+  getCellVertices,
+  maxCellDimension,
+  surfaceTopologyFromCellTopology,
+  type CellTopology,
+} from './cellTopology';
+
 export type PrimitiveKind =
   | 'hypercube'
   | 'spikedHypercube'
@@ -23,6 +38,7 @@ export type PrimitiveSurfaceTopology = {
 export type PrimitiveGeometry = {
   verts: Float32Array;
   edges: Uint32Array;
+  cellTopology?: CellTopology;
   surfaceTopology?: PrimitiveSurfaceTopology;
   V: number;
 };
@@ -137,7 +153,136 @@ function parity(mask: number) {
   return p;
 }
 
-function spikedPrimitive(base: PrimitiveGeometry, N: number, spikeLength = 0.22): PrimitiveGeometry {
+function cellCenter(verts: Float32Array, N: number, vertexCount: number, vertices: number[], target: Float32Array) {
+  target.fill(0);
+  if (!vertices.length) return;
+  for (const vertex of vertices) {
+    for (let d = 0; d < N; d++) target[d] += verts[d * vertexCount + vertex];
+  }
+  for (let d = 0; d < N; d++) target[d] /= vertices.length;
+}
+
+function copyBaseVerts(base: PrimitiveGeometry, N: number, targetVertexCount: number) {
+  const verts = new Float32Array(N * targetVertexCount);
+  for (let d = 0; d < N; d++) {
+    for (let v = 0; v < base.V; v++) verts[d * targetVertexCount + v] = base.verts[d * base.V + v];
+  }
+  return verts;
+}
+
+function buildSpikedSurfaceTopology(
+  baseTopology: CellTopology,
+  baseEdges: Uint32Array,
+  baseVertexCount: number,
+) {
+  const baseDimension = maxCellDimension(baseTopology);
+  if (baseDimension < 2) return undefined;
+
+  const boundaryDim = baseDimension - 1;
+  const boundaryCount = cellCount(baseTopology, boundaryDim);
+  const triangles: number[] = [];
+  const facetIds: number[] = [];
+
+  for (let boundaryId = 0; boundaryId < boundaryCount; boundaryId++) {
+    const apex = baseVertexCount + boundaryId;
+    const boundaryVertices = new Set(getCellVertices(baseTopology, boundaryDim, boundaryId));
+
+    if (boundaryDim === 1) {
+      const [a, b] = Array.from(boundaryVertices);
+      if (a != null && b != null) {
+        triangles.push(apex, a, b);
+        facetIds.push(boundaryId);
+      }
+      continue;
+    }
+
+    for (let edgeIdx = 0; edgeIdx < baseEdges.length; edgeIdx += 2) {
+      const a = baseEdges[edgeIdx];
+      const b = baseEdges[edgeIdx + 1];
+      if (!boundaryVertices.has(a) || !boundaryVertices.has(b)) continue;
+      triangles.push(apex, a, b);
+      facetIds.push(boundaryId);
+    }
+  }
+
+  return makeSurfaceTopology(triangles, facetIds);
+}
+
+function spikedPrimitiveFromCellTopology(
+  base: PrimitiveGeometry,
+  N: number,
+  spikeLength: number,
+  kind: PrimitiveKind,
+) {
+  const baseTopology = base.cellTopology;
+  if (!baseTopology || baseTopology.generatedKind === 'fallback') return undefined;
+  const baseDimension = maxCellDimension(baseTopology);
+  if (baseDimension < 2) return undefined;
+
+  const boundaryDim = baseDimension - 1;
+  const boundaryCount = cellCount(baseTopology, boundaryDim);
+  if (boundaryCount <= 0) return undefined;
+
+  const V = base.V + boundaryCount;
+  const verts = copyBaseVerts(base, N, V);
+  const center = new Float32Array(N);
+  const centroid = new Float32Array(N);
+  const direction = new Float32Array(N);
+  const edgeKeys = new Set<string>();
+  const edges: number[] = [];
+
+  for (let d = 0; d < N; d++) {
+    let sum = 0;
+    for (let vertex = 0; vertex < base.V; vertex++) sum += base.verts[d * base.V + vertex];
+    center[d] = sum / base.V;
+  }
+
+  for (let edgeIdx = 0; edgeIdx < base.edges.length; edgeIdx += 2) {
+    addUniqueEdge(edges, edgeKeys, base.edges[edgeIdx], base.edges[edgeIdx + 1]);
+  }
+
+  for (let boundaryId = 0; boundaryId < boundaryCount; boundaryId++) {
+    const boundaryVertices = getCellVertices(baseTopology, boundaryDim, boundaryId);
+    const apex = base.V + boundaryId;
+    cellCenter(base.verts, N, base.V, boundaryVertices, centroid);
+
+    let directionLengthSq = 0;
+    for (let d = 0; d < N; d++) {
+      direction[d] = centroid[d] - center[d];
+      directionLengthSq += direction[d] * direction[d];
+    }
+    if (directionLengthSq < 1e-10 && boundaryVertices.length) {
+      directionLengthSq = 0;
+      const fallbackVertex = boundaryVertices[0];
+      for (let d = 0; d < N; d++) {
+        direction[d] = base.verts[d * base.V + fallbackVertex] - center[d];
+        directionLengthSq += direction[d] * direction[d];
+      }
+    }
+    if (directionLengthSq < 1e-10) {
+      direction[0] = 1;
+      directionLengthSq = 1;
+    }
+
+    const scale = spikeLength / Math.sqrt(directionLengthSq);
+    for (let d = 0; d < N; d++) verts[d * V + apex] = centroid[d] + (direction[d] * scale);
+    boundaryVertices.forEach(vertex => addUniqueEdge(edges, edgeKeys, apex, vertex));
+  }
+
+  const cellTopology = buildSpikedCellTopology(baseTopology, base.V, kind);
+  return {
+    verts,
+    edges: new Uint32Array(edges),
+    cellTopology,
+    surfaceTopology: buildSpikedSurfaceTopology(baseTopology, base.edges, base.V),
+    V,
+  };
+}
+
+function spikedPrimitive(base: PrimitiveGeometry, N: number, spikeLength = 0.22, kind: PrimitiveKind): PrimitiveGeometry {
+  const topologicalSpike = spikedPrimitiveFromCellTopology(base, N, spikeLength, kind);
+  if (topologicalSpike) return topologicalSpike;
+
   const topology = base.surfaceTopology ?? completeGraphTriangleTopology(base.V, base.edges);
   if (!topology) return base;
 
@@ -237,79 +382,21 @@ export function hypercubeEdges(N: number): PrimitiveGeometry {
     }
   }
 
-  return { verts, edges: new Uint32Array(edges), V };
-}
-
-export function spikedHypercubeEdges(N: number): PrimitiveGeometry {
-  const cornerCount = 1 << N;
-  const apexCount = 2 * N;
-  const V = cornerCount + apexCount;
-  const verts = new Float32Array(N * V);
-  const baseExtent = 0.28;
-  const spikeExtent = 0.5;
-
-  for (let v = 0; v < cornerCount; v++) {
-    for (let d = 0; d < N; d++) {
-      verts[d * V + v] = ((v >> d) & 1) ? baseExtent : -baseExtent;
-    }
-  }
-
-  const apexIndex = (axis: number, positive: boolean) => cornerCount + axis * 2 + (positive ? 1 : 0);
-  for (let axis = 0; axis < N; axis++) {
-    const negativeApex = apexIndex(axis, false);
-    const positiveApex = apexIndex(axis, true);
-    verts[axis * V + negativeApex] = -spikeExtent;
-    verts[axis * V + positiveApex] = spikeExtent;
-  }
-
-  const edges: number[] = [];
-  for (let v = 0; v < cornerCount; v++) {
-    for (let d = 0; d < N; d++) {
-      const u = v ^ (1 << d);
-      if (u > v) addEdge(edges, v, u);
-    }
-  }
-
-  for (let axis = 0; axis < N; axis++) {
-    for (const positive of [false, true]) {
-      const apex = apexIndex(axis, positive);
-      const bitValue = positive ? 1 : 0;
-      for (let v = 0; v < cornerCount; v++) {
-        if (((v >> axis) & 1) === bitValue) addEdge(edges, apex, v);
-      }
-    }
-  }
-
-  const triangles: number[] = [];
-  const facetIds: number[] = [];
-  let facetId = 0;
-  for (let axis = 0; axis < N; axis++) {
-    for (const positive of [false, true]) {
-      const apex = apexIndex(axis, positive);
-      const bitValue = positive ? 1 : 0;
-      for (let edgeAxis = 0; edgeAxis < N; edgeAxis++) {
-        if (edgeAxis === axis) continue;
-        const edgeBit = 1 << edgeAxis;
-        for (let base = 0; base < cornerCount; base++) {
-          if (((base >> axis) & 1) !== bitValue) continue;
-          if ((base & edgeBit) !== 0) continue;
-          triangles.push(apex, base, base | edgeBit);
-          facetIds.push(facetId);
-        }
-      }
-      facetId++;
-    }
-  }
-
+  const cellTopology = buildHypercubeCellTopology(N);
   return {
     verts,
     edges: new Uint32Array(edges),
-    surfaceTopology: {
-      triangles: new Uint32Array(triangles),
-      facetIds: new Uint16Array(facetIds),
-    },
+    cellTopology,
+    surfaceTopology: surfaceTopologyFromCellTopology(cellTopology),
     V,
   };
+}
+
+export function spikedHypercubeEdges(N: number): PrimitiveGeometry {
+  const base = hypercubeEdges(N);
+  const verts = new Float32Array(base.verts);
+  for (let i = 0; i < verts.length; i++) verts[i] *= 0.56;
+  return spikedPrimitive({ ...base, verts }, N, 0.22, 'spikedHypercube');
 }
 
 export function crossPolytopeEdges(N: number): PrimitiveGeometry {
@@ -335,16 +422,18 @@ export function crossPolytopeEdges(N: number): PrimitiveGeometry {
   }
 
   const edgeArray = new Uint32Array(edges);
+  const cellTopology = buildCrossPolytopeCellTopology(N);
   return {
     verts,
     edges: edgeArray,
-    surfaceTopology: completeGraphTriangleTopology(V, edgeArray),
+    cellTopology,
+    surfaceTopology: surfaceTopologyFromCellTopology(cellTopology) ?? completeGraphTriangleTopology(V, edgeArray),
     V,
   };
 }
 
 export function spikedCrossPolytopeEdges(N: number): PrimitiveGeometry {
-  return spikedPrimitive(crossPolytopeEdges(N), N);
+  return spikedPrimitive(crossPolytopeEdges(N), N, 0.22, 'spikedCross');
 }
 
 export function simplexEdges(N: number): PrimitiveGeometry {
@@ -374,16 +463,18 @@ export function simplexEdges(N: number): PrimitiveGeometry {
     for (let b = a + 1; b < V; b++) addEdge(edges, a, b);
   }
 
+  const cellTopology = buildSimplexCellTopology(N);
   return {
     verts,
     edges: new Uint32Array(edges),
-    surfaceTopology: simplexTriangleTopology(V),
+    cellTopology,
+    surfaceTopology: surfaceTopologyFromCellTopology(cellTopology) ?? simplexTriangleTopology(V),
     V,
   };
 }
 
 export function spikedSimplexEdges(N: number): PrimitiveGeometry {
-  return spikedPrimitive(simplexEdges(N), N);
+  return spikedPrimitive(simplexEdges(N), N, 0.22, 'spikedSimplex');
 }
 
 export function simplexPrismEdges(N: number): PrimitiveGeometry {
@@ -438,16 +529,18 @@ export function simplexPrismEdges(N: number): PrimitiveGeometry {
     facetIds.push(sideFacetId, sideFacetId);
   }
 
+  const cellTopology = buildSimplexPrismCellTopology(N);
   return {
     verts,
     edges: dedupeEdges(edges),
+    cellTopology,
     surfaceTopology: makeSurfaceTopology(triangles, facetIds),
     V,
   };
 }
 
 export function spikedSimplexPrismEdges(N: number): PrimitiveGeometry {
-  return spikedPrimitive(simplexPrismEdges(N), N);
+  return spikedPrimitive(simplexPrismEdges(N), N, 0.22, 'spikedSimplexPrism');
 }
 
 export function demicubeEdges(N: number): PrimitiveGeometry {
@@ -493,7 +586,7 @@ export function demicubeEdges(N: number): PrimitiveGeometry {
 }
 
 export function spikedDemicubeEdges(N: number): PrimitiveGeometry {
-  return spikedPrimitive(demicubeEdges(N), N);
+  return spikedPrimitive(demicubeEdges(N), N, 0.22, 'spikedDemicube');
 }
 
 export function cell24Edges(N: number): PrimitiveGeometry {
@@ -534,7 +627,7 @@ export function cell24Edges(N: number): PrimitiveGeometry {
 }
 
 export function spikedCell24Edges(N: number): PrimitiveGeometry {
-  return spikedPrimitive(cell24Edges(N), N);
+  return spikedPrimitive(cell24Edges(N), N, 0.22, 'spikedCell24');
 }
 
 export function duoprismEdges(N: number): PrimitiveGeometry {
@@ -578,16 +671,18 @@ export function duoprismEdges(N: number): PrimitiveGeometry {
     }
   }
 
+  const cellTopology = buildDuoprismCellTopology(segmentsA, segmentsB);
   return {
     verts,
     edges: new Uint32Array(edges),
+    cellTopology,
     surfaceTopology: makeSurfaceTopology(triangles, facetIds),
     V,
   };
 }
 
 export function spikedDuoprismEdges(N: number): PrimitiveGeometry {
-  return spikedPrimitive(duoprismEdges(N), N);
+  return spikedPrimitive(duoprismEdges(N), N, 0.22, 'spikedDuoprism');
 }
 
 function polygonRingEdges(N: number, segments: number): PrimitiveGeometry {
@@ -609,9 +704,11 @@ function polygonRingEdges(N: number, segments: number): PrimitiveGeometry {
     facetIds.push(v - 1);
   }
 
+  const cellTopology = buildPolygonCellTopology(V);
   return {
     verts,
     edges: new Uint32Array(edges),
+    cellTopology,
     surfaceTopology: makeSurfaceTopology(triangles, facetIds),
     V,
   };

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { cellCount, getCellBoundaryFaceIds, getCellVertices, type CellTopology } from '../geometry/cellTopology';
 import type { PrimitiveKind } from '../geometry/primitives';
 import type { HypercubeRenderer } from '../rendering/HypercubeRenderer';
 import type { Instance, TransformMode } from '../scene/types';
@@ -17,12 +18,12 @@ type PrimitiveMenuOption = {
 
 const OBJECT_FOCUS_DOUBLE_CLICK_MS = 220;
 const OBJECT_FOCUS_DOUBLE_CLICK_MAX_DIST = 8;
-const FACE_CENTER_PICK_RADIUS = 16;
-const FACE_CENTER_FALLBACK_RADIUS = 48;
-const FACE_CYCLE_MAX_DIST = 10;
+const CELL_CENTER_PICK_RADIUS = 16;
+const CELL_CENTER_FALLBACK_RADIUS = 48;
+const CELL_CYCLE_MAX_DIST = 10;
 
-type FacePickCandidate = {
-  facetId: number;
+type CellPickCandidate = {
+  cellId: number;
   vertices: number[];
   center: THREE.Vector2;
   depth: number;
@@ -69,6 +70,7 @@ export class ViewportInteractionController {
   private readonly clickPlane = new THREE.Plane();
   private readonly clickPoint = new THREE.Vector3();
   private readonly tmpVec = new THREE.Vector3();
+  private readonly tmpVec2 = new THREE.Vector2();
   private lastPointer = { x: window.innerWidth - 180, y: window.innerHeight - 80 };
   private deletePending = false;
   private readonly lastObjectClick = {
@@ -77,8 +79,9 @@ export class ViewportInteractionController {
     y: 0,
     instIdx: Number.NaN,
   };
-  private readonly faceSelectionCycle = {
+  private readonly cellSelectionCycle = {
     instIdx: Number.NaN,
+    dimension: -1,
     x: 0,
     y: 0,
     signature: '',
@@ -570,13 +573,13 @@ export class ViewportInteractionController {
   }
 
   private selectNearestEditElement(instIdx: number, mx: number, my: number, width: number, height: number, forceCycle = false) {
-    const mode = this.options.transformController.getEditSelectionMode();
-    if (mode === 'edge') {
+    const dimension = this.options.transformController.getEditCellDimension();
+    if (dimension === 1) {
       this.selectNearestEdge(instIdx, mx, my, width, height);
       return;
     }
-    if (mode === 'face') {
-      this.selectNearestFace(instIdx, mx, my, width, height, forceCycle);
+    if (dimension >= 2) {
+      this.selectNearestCell(instIdx, dimension, mx, my, width, height, forceCycle);
       return;
     }
     this.selectNearestVertex(instIdx, mx, my, width, height);
@@ -603,7 +606,7 @@ export class ViewportInteractionController {
         nearest = i;
       }
     }
-    this.options.transformController.setSelectedVertex(nearest);
+    this.options.transformController.setSelectedEditElement(0, nearest >= 0 ? [nearest] : [], nearest);
     this.options.transformController.updateVertexCloud(instIdx);
   }
 
@@ -613,41 +616,54 @@ export class ViewportInteractionController {
       : this.options.getExtraInstances()[instIdx]?.renderer;
     if (!targetRenderer) return;
 
-    const edges = targetRenderer.allEdges;
+    const topology = targetRenderer.getCellTopologyForSelection();
     const posArr = targetRenderer.positions;
     let best: [number, number] | null = null;
+    let bestCellId = -1;
     let bestD2 = Number.POSITIVE_INFINITY;
     const a = new THREE.Vector2();
     const b = new THREE.Vector2();
     const point = new THREE.Vector2(mx, my);
 
-    for (let i = 0; i < edges.length; i += 2) {
-      const va = edges[i];
-      const vb = edges[i + 1];
+    const edgeCount = cellCount(topology, 1);
+    for (let cellId = 0; cellId < edgeCount; cellId++) {
+      const edge = getCellVertices(topology, 1, cellId);
+      if (edge.length < 2) continue;
+      const va = edge[0];
+      const vb = edge[1];
       this.projectVertexToScreen(posArr, va, width, height, a);
       this.projectVertexToScreen(posArr, vb, width, height, b);
       const d2 = this.distancePointToSegmentSquared(point, a, b);
       if (d2 < bestD2) {
         bestD2 = d2;
         best = [va, vb];
+        bestCellId = cellId;
       }
     }
 
     if (best && bestD2 < 32 * 32) {
-      this.options.transformController.setSelectedEditElement('edge', best);
+      this.options.transformController.setSelectedEditElement(1, best, bestCellId);
     } else {
       this.options.transformController.clearEditSelection();
     }
     this.options.transformController.updateVertexCloud(instIdx);
   }
 
-  private selectNearestFace(instIdx: number, mx: number, my: number, width: number, height: number, forceCycle = false) {
+  private selectNearestCell(
+    instIdx: number,
+    dimension: number,
+    mx: number,
+    my: number,
+    width: number,
+    height: number,
+    forceCycle = false,
+  ) {
     const targetRenderer = instIdx === this.options.baseSelection
       ? this.options.getRendererND()
       : this.options.getExtraInstances()[instIdx]?.renderer;
     if (!targetRenderer) return;
-    const topology = targetRenderer.getSurfaceTopologyForSelection();
-    if (!topology) {
+    const topology = targetRenderer.getCellTopologyForSelection();
+    if (!topology || cellCount(topology, dimension) <= 0) {
       this.options.transformController.clearEditSelection();
       this.options.transformController.updateVertexCloud(instIdx);
       return;
@@ -655,97 +671,60 @@ export class ViewportInteractionController {
 
     const point = new THREE.Vector2(mx, my);
     const posArr = targetRenderer.positions;
-    const triangles = topology.triangles;
-    const facetIds = topology.facetIds;
-    const accumulators = new Map<number, {
-      vertices: Set<number>;
-      screenSum: THREE.Vector2;
-      worldSum: THREE.Vector3;
-      count: number;
-      contains: boolean;
-    }>();
-    const addFacetVertex = (facetId: number, vertex: number, screen: THREE.Vector2) => {
-      const pIdx = vertex * 3;
-      if (pIdx < 0 || pIdx + 2 >= posArr.length) return;
-      let accum = accumulators.get(facetId);
-      if (!accum) {
-        accum = {
-          vertices: new Set<number>(),
-          screenSum: new THREE.Vector2(),
-          worldSum: new THREE.Vector3(),
-          count: 0,
-          contains: false,
-        };
-        accumulators.set(facetId, accum);
-      }
-      accum.vertices.add(vertex);
-      accum.screenSum.add(screen);
-      accum.worldSum.x += posArr[pIdx];
-      accum.worldSum.y += posArr[pIdx + 1];
-      accum.worldSum.z += posArr[pIdx + 2];
-      accum.count += 1;
-    };
-
-    const a = new THREE.Vector2();
-    const b = new THREE.Vector2();
-    const c = new THREE.Vector2();
-    for (let t = 0; t < facetIds.length; t++) {
-      const facetId = facetIds[t];
-      const offset = t * 3;
-      const va = triangles[offset];
-      const vb = triangles[offset + 1];
-      const vc = triangles[offset + 2];
-
-      this.projectVertexToScreen(posArr, va, width, height, a);
-      this.projectVertexToScreen(posArr, vb, width, height, b);
-      this.projectVertexToScreen(posArr, vc, width, height, c);
-      addFacetVertex(facetId, va, a);
-      addFacetVertex(facetId, vb, b);
-      addFacetVertex(facetId, vc, c);
-      if (this.pointInTriangle(point, a, b, c)) {
-        const accum = accumulators.get(facetId);
-        if (accum) accum.contains = true;
-      }
-    }
-
-    const candidates = this.facePickCandidates(accumulators, point);
+    const candidates = this.cellPickCandidates(topology, dimension, posArr, point, width, height);
     if (candidates.length) {
-      const selected = this.selectFaceCandidateFromCycle(instIdx, mx, my, candidates, forceCycle);
-      this.options.transformController.setSelectedEditElement('face', selected.vertices, selected.facetId);
+      const selected = this.selectCellCandidateFromCycle(instIdx, dimension, mx, my, candidates, forceCycle);
+      this.options.transformController.setSelectedEditElement(dimension, selected.vertices, selected.cellId);
     } else {
       this.options.transformController.clearEditSelection();
     }
     this.options.transformController.updateVertexCloud(instIdx);
   }
 
-  private facePickCandidates(
-    accumulators: Map<number, {
-      vertices: Set<number>;
-      screenSum: THREE.Vector2;
-      worldSum: THREE.Vector3;
-      count: number;
-      contains: boolean;
-    }>,
+  private cellPickCandidates(
+    topology: CellTopology,
+    dimension: number,
+    positions: Float32Array,
     point: THREE.Vector2,
+    width: number,
+    height: number,
   ) {
-    const all: FacePickCandidate[] = [];
-    accumulators.forEach((accum, facetId) => {
-      if (accum.count <= 0 || accum.vertices.size === 0) return;
-      const center = accum.screenSum.clone().multiplyScalar(1 / accum.count);
-      const worldCenter = accum.worldSum.clone().multiplyScalar(1 / accum.count);
+    const all: CellPickCandidate[] = [];
+    const count = cellCount(topology, dimension);
+    for (let cellId = 0; cellId < count; cellId++) {
+      const vertices = getCellVertices(topology, dimension, cellId);
+      if (!vertices.length) continue;
+      const screenSum = new THREE.Vector2();
+      const worldSum = new THREE.Vector3();
+      let validCount = 0;
+      for (const vertex of vertices) {
+        const pIdx = vertex * 3;
+        if (pIdx < 0 || pIdx + 2 >= positions.length) continue;
+        this.projectVertexToScreen(positions, vertex, width, height, this.tmpVec2);
+        screenSum.add(this.tmpVec2);
+        worldSum.x += positions[pIdx];
+        worldSum.y += positions[pIdx + 1];
+        worldSum.z += positions[pIdx + 2];
+        validCount++;
+      }
+      if (validCount <= 0) continue;
+      const center = screenSum.multiplyScalar(1 / validCount);
+      const worldCenter = worldSum.multiplyScalar(1 / validCount);
       const depth = worldCenter.applyMatrix4(this.options.camera.matrixWorldInverse).z;
       all.push({
-        facetId,
-        vertices: Array.from(accum.vertices),
+        cellId,
+        vertices,
         center,
         depth,
         centerDist2: center.distanceToSquared(point),
-        contains: accum.contains,
+        contains: dimension === 2
+          ? this.cellContainsPoint(topology, dimension, cellId, vertices, positions, point, width, height)
+          : false,
       });
-    });
+    }
 
     const centerHits = all
-      .filter(candidate => candidate.centerDist2 <= FACE_CENTER_PICK_RADIUS * FACE_CENTER_PICK_RADIUS)
+      .filter(candidate => candidate.centerDist2 <= CELL_CENTER_PICK_RADIUS * CELL_CENTER_PICK_RADIUS)
       .sort((a, b) => (a.centerDist2 - b.centerDist2) || (b.depth - a.depth));
     if (centerHits.length) return centerHits;
 
@@ -755,36 +734,82 @@ export class ViewportInteractionController {
     if (areaHits.length) return areaHits;
 
     const nearest = all.sort((a, b) => a.centerDist2 - b.centerDist2)[0];
-    return nearest?.centerDist2 <= FACE_CENTER_FALLBACK_RADIUS * FACE_CENTER_FALLBACK_RADIUS ? [nearest] : [];
+    return nearest?.centerDist2 <= CELL_CENTER_FALLBACK_RADIUS * CELL_CENTER_FALLBACK_RADIUS ? [nearest] : [];
   }
 
-  private selectFaceCandidateFromCycle(
+  private selectCellCandidateFromCycle(
     instIdx: number,
+    dimension: number,
     mx: number,
     my: number,
-    candidates: FacePickCandidate[],
+    candidates: CellPickCandidate[],
     forceCycle: boolean,
   ) {
-    const signature = candidates.map(candidate => candidate.facetId).join(':');
-    const dx = mx - this.faceSelectionCycle.x;
-    const dy = my - this.faceSelectionCycle.y;
-    const sameStack = this.faceSelectionCycle.instIdx === instIdx
-      && this.faceSelectionCycle.signature === signature
-      && ((dx * dx) + (dy * dy)) <= FACE_CYCLE_MAX_DIST * FACE_CYCLE_MAX_DIST;
+    const signature = candidates.map(candidate => candidate.cellId).join(':');
+    const dx = mx - this.cellSelectionCycle.x;
+    const dy = my - this.cellSelectionCycle.y;
+    const sameStack = this.cellSelectionCycle.instIdx === instIdx
+      && this.cellSelectionCycle.dimension === dimension
+      && this.cellSelectionCycle.signature === signature
+      && ((dx * dx) + (dy * dy)) <= CELL_CYCLE_MAX_DIST * CELL_CYCLE_MAX_DIST;
 
     let index = 0;
     if (candidates.length > 1 && (forceCycle || sameStack)) {
       index = sameStack
-        ? (this.faceSelectionCycle.index + 1) % candidates.length
+        ? (this.cellSelectionCycle.index + 1) % candidates.length
         : 1 % candidates.length;
     }
 
-    this.faceSelectionCycle.instIdx = instIdx;
-    this.faceSelectionCycle.x = mx;
-    this.faceSelectionCycle.y = my;
-    this.faceSelectionCycle.signature = signature;
-    this.faceSelectionCycle.index = index;
+    this.cellSelectionCycle.instIdx = instIdx;
+    this.cellSelectionCycle.dimension = dimension;
+    this.cellSelectionCycle.x = mx;
+    this.cellSelectionCycle.y = my;
+    this.cellSelectionCycle.signature = signature;
+    this.cellSelectionCycle.index = index;
     return candidates[index];
+  }
+
+  private cellContainsPoint(
+    topology: CellTopology,
+    dimension: number,
+    cellId: number,
+    vertices: number[],
+    positions: Float32Array,
+    point: THREE.Vector2,
+    width: number,
+    height: number,
+  ) {
+    if (dimension === 2) {
+      return this.faceVerticesContainPoint(vertices, positions, point, width, height);
+    }
+
+    const boundaryFaceIds = getCellBoundaryFaceIds(topology, dimension, cellId);
+    for (const faceId of boundaryFaceIds) {
+      const faceVertices = getCellVertices(topology, 2, faceId);
+      if (faceVertices.length < 3) continue;
+      if (this.faceVerticesContainPoint(faceVertices, positions, point, width, height)) return true;
+    }
+    return false;
+  }
+
+  private faceVerticesContainPoint(
+    vertices: number[],
+    positions: Float32Array,
+    point: THREE.Vector2,
+    width: number,
+    height: number,
+  ) {
+    if (vertices.length < 3) return false;
+    const a = new THREE.Vector2();
+    const b = new THREE.Vector2();
+    const c = new THREE.Vector2();
+    this.projectVertexToScreen(positions, vertices[0], width, height, a);
+    for (let i = 1; i < vertices.length - 1; i++) {
+      this.projectVertexToScreen(positions, vertices[i], width, height, b);
+      this.projectVertexToScreen(positions, vertices[i + 1], width, height, c);
+      if (this.pointInTriangle(point, a, b, c)) return true;
+    }
+    return false;
   }
 
   private projectVertexToScreen(

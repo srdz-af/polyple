@@ -1,6 +1,6 @@
 import { VIEW_MODES, type ViewMode } from '../constants';
 import { viewModeShortcutIndex, type KeyboardCameraController } from '../controls/KeyboardCameraController';
-import type { EditSelectionMode, TransformMode } from '../scene/types';
+import type { EditCellDimension, TransformMode } from '../scene/types';
 import { isPlainTextEditTarget, isTextEntryTarget } from '../ui/domTargets';
 
 type KeyboardShortcutControllerOptions = {
@@ -25,7 +25,7 @@ type KeyboardShortcutControllerOptions = {
   undo: () => void;
   redo: () => void;
   togglePerfOverlay: () => void;
-  setEditSelectionMode: (mode: EditSelectionMode) => void;
+  setEditCellDimension: (dimension: EditCellDimension) => void;
 };
 
 export class KeyboardShortcutController {
@@ -70,11 +70,10 @@ export class KeyboardShortcutController {
     const transformMode = this.options.getTransformMode();
 
     if (!hasSystemMod && !ev.shiftKey && transformMode === 'none' && this.options.isEditMode()) {
-      const editSelectionModes: readonly EditSelectionMode[] = ['vertex', 'edge', 'face'];
-      const mode = editSelectionModes[viewModeShortcutIndex(ev)];
-      if (mode) {
+      const dimension = viewModeShortcutIndex(ev);
+      if (dimension >= 0 && dimension <= 7) {
         ev.preventDefault();
-        this.options.setEditSelectionMode(mode);
+        this.options.setEditCellDimension(dimension);
         return;
       }
     }

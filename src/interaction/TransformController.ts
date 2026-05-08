@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import type { RotND } from '../RotND';
+import { cellCount, getCellBoundaryFaceIds, getCellVertices } from '../geometry/cellTopology';
 import type { NDProjector } from '../geometry/NDProjector';
 import { perspectiveScaleFrom, type AxisMap } from '../geometry/projectionUtils';
 import type { HypercubeRenderer } from '../rendering/HypercubeRenderer';
 import type { ObjectOrigin } from '../scene/objectOrigin';
-import type { EditSelectionMode, Instance, TransformMode, TransformState } from '../scene/types';
+import type { EditCellDimension, Instance, TransformMode, TransformState } from '../scene/types';
 
 type TransformParams = {
   editMode: boolean;
@@ -106,11 +107,19 @@ function computeCenterFromVectors(points: THREE.Vector3[]) {
   return center.multiplyScalar(1 / points.length);
 }
 
+function editCellLabel(dimension: number) {
+  if (dimension === 0) return 'vertex';
+  if (dimension === 1) return 'edge';
+  if (dimension === 2) return 'face';
+  if (dimension === 3) return 'volume';
+  return `${dimension}-cell`;
+}
+
 export class TransformController {
-  private editSelectionMode: EditSelectionMode = 'vertex';
+  private editCellDimension: EditCellDimension = 0;
   private selectedVertex = -1;
   private selectedEditVertices: number[] = [];
-  private selectedFaceId = -1;
+  private selectedCellId = -1;
   private selectionVertexMarker: THREE.Mesh | null = null;
   private vertexCloud: THREE.InstancedMesh | null = null;
   private faceCenterCloud: THREE.InstancedMesh | null = null;
@@ -186,35 +195,37 @@ export class TransformController {
   }
 
   setSelectedVertex(vertex: number) {
+    this.editCellDimension = 0;
     this.selectedVertex = vertex;
     this.selectedEditVertices = vertex >= 0 ? [vertex] : [];
-    this.selectedFaceId = -1;
+    this.selectedCellId = vertex;
   }
 
-  getEditSelectionMode() {
-    return this.editSelectionMode;
+  getEditCellDimension() {
+    return this.editCellDimension;
   }
 
-  setEditSelectionMode(mode: EditSelectionMode) {
-    if (this.editSelectionMode === mode) return;
-    this.editSelectionMode = mode;
+  setEditCellDimension(dimension: EditCellDimension) {
+    const next = Math.max(0, Math.floor(dimension));
+    if (this.editCellDimension === next) return;
+    this.editCellDimension = next;
     this.clearEditSelection();
   }
 
-  setSelectedEditElement(mode: EditSelectionMode, vertices: number[], faceId = -1) {
-    this.editSelectionMode = mode;
+  setSelectedEditElement(dimension: EditCellDimension, vertices: number[], cellId = -1) {
+    this.editCellDimension = Math.max(0, Math.floor(dimension));
     const uniqueVertices = vertices
       .filter(vertex => Number.isInteger(vertex) && vertex >= 0)
       .filter((vertex, index, arr) => arr.indexOf(vertex) === index);
     this.selectedEditVertices = uniqueVertices;
-    this.selectedVertex = mode === 'vertex' && uniqueVertices.length ? uniqueVertices[0] : -1;
-    this.selectedFaceId = mode === 'face' ? faceId : -1;
+    this.selectedVertex = this.editCellDimension === 0 && uniqueVertices.length ? uniqueVertices[0] : -1;
+    this.selectedCellId = cellId;
   }
 
   clearEditSelection() {
     this.selectedVertex = -1;
     this.selectedEditVertices = [];
-    this.selectedFaceId = -1;
+    this.selectedCellId = -1;
     this.clearVertexMarker();
     this.clearEditComponentOverlay();
   }
@@ -224,7 +235,7 @@ export class TransformController {
   }
 
   editSelectionLabel() {
-    return this.editSelectionMode;
+    return editCellLabel(this.editCellDimension);
   }
 
   clearSelectionVisuals() {
@@ -314,10 +325,10 @@ export class TransformController {
       return;
     }
 
-    if (this.editSelectionMode !== 'vertex') {
+    if (this.editCellDimension !== 0) {
       this.clearVertexCloud();
       this.clearVertexMarker();
-      if (this.editSelectionMode === 'face') this.updateFaceCenterCloud(instIdx);
+      if (this.editCellDimension >= 2) this.updateFaceCenterCloud(instIdx);
       else this.clearFaceCenterCloud();
       this.updateEditWireOverlay(instIdx);
       this.updateEditComponentOverlay(instIdx);
@@ -355,38 +366,32 @@ export class TransformController {
     const rendererRef = instIdx === -1
       ? this.options.getRendererND()
       : this.options.getExtraInstances()[instIdx]?.renderer;
-    const topology = rendererRef?.getSurfaceTopologyForSelection();
-    if (!rendererRef || !topology) {
+    const topology = rendererRef?.getCellTopologyForSelection();
+    const dim = this.editCellDimension;
+    const count = cellCount(topology, dim);
+    if (!rendererRef || !topology || count <= 0) {
       this.clearFaceCenterCloud();
       return;
     }
 
-    const centers = new Map<number, { sum: THREE.Vector3; count: number }>();
+    const centers: Array<{ sum: THREE.Vector3; count: number }> = [];
     const posArr = rendererRef.positions;
-    const addVertex = (facetId: number, vertex: number) => {
-      const pIdx = vertex * 3;
-      if (pIdx < 0 || pIdx + 2 >= posArr.length) return;
-      let center = centers.get(facetId);
-      if (!center) {
-        center = { sum: new THREE.Vector3(), count: 0 };
-        centers.set(facetId, center);
+    for (let cellId = 0; cellId < count; cellId++) {
+      const vertices = getCellVertices(topology, dim, cellId);
+      const center = { sum: new THREE.Vector3(), count: 0 };
+      for (const vertex of vertices) {
+        const pIdx = vertex * 3;
+        if (pIdx < 0 || pIdx + 2 >= posArr.length) continue;
+        center.sum.x += posArr[pIdx];
+        center.sum.y += posArr[pIdx + 1];
+        center.sum.z += posArr[pIdx + 2];
+        center.count += 1;
       }
-      center.sum.x += posArr[pIdx];
-      center.sum.y += posArr[pIdx + 1];
-      center.sum.z += posArr[pIdx + 2];
-      center.count += 1;
-    };
-
-    for (let t = 0; t < topology.facetIds.length; t++) {
-      const facetId = topology.facetIds[t];
-      const offset = t * 3;
-      addVertex(facetId, topology.triangles[offset]);
-      addVertex(facetId, topology.triangles[offset + 1]);
-      addVertex(facetId, topology.triangles[offset + 2]);
+      if (center.count > 0) centers.push(center);
     }
 
     this.clearFaceCenterCloud();
-    const entries = Array.from(centers.values()).filter(center => center.count > 0);
+    const entries = centers.filter(center => center.count > 0);
     if (!entries.length) return;
 
     const mat = new THREE.MeshBasicMaterial({
@@ -455,15 +460,13 @@ export class TransformController {
     };
     const pushVertex = (vertex: number) => { pushVertexTo(points, vertex); };
 
-    if (this.editSelectionMode === 'edge') {
+    if (this.editCellDimension === 1) {
       if (this.selectedEditVertices.length < 2) return;
       pushVertex(this.selectedEditVertices[0]);
       pushVertex(this.selectedEditVertices[1]);
-    } else if (this.editSelectionMode === 'face') {
-      const topology = rendererRef.getSurfaceTopologyForSelection();
-      if (!topology || this.selectedFaceId < 0) return;
-      const triangles = topology.triangles;
-      const facetIds = topology.facetIds;
+    } else if (this.editCellDimension >= 2) {
+      const topology = rendererRef.getCellTopologyForSelection();
+      if (!topology) return;
       const tintPoints: THREE.Vector3[] = [];
       const edgeCounts = new Map<string, [number, number, number]>();
       const addFaceEdge = (a: number, b: number) => {
@@ -472,21 +475,41 @@ export class TransformController {
         if (current) current[2] += 1;
         else edgeCounts.set(key, [a, b, 1]);
       };
-      for (let t = 0; t < facetIds.length; t++) {
-        if (facetIds[t] !== this.selectedFaceId) continue;
-        const offset = t * 3;
-        const a = triangles[offset];
-        const b = triangles[offset + 1];
-        const c = triangles[offset + 2];
+      const addFace = (faceVertices: number[]) => {
+        if (faceVertices.length < 3) return;
         const tintStart = tintPoints.length;
-        pushVertexTo(tintPoints, a);
-        pushVertexTo(tintPoints, b);
-        pushVertexTo(tintPoints, c);
-        if (tintPoints.length === tintStart) continue;
-        addFaceEdge(a, b);
-        addFaceEdge(b, c);
-        addFaceEdge(c, a);
+        for (let i = 1; i < faceVertices.length - 1; i++) {
+          pushVertexTo(tintPoints, faceVertices[0]);
+          pushVertexTo(tintPoints, faceVertices[i]);
+          pushVertexTo(tintPoints, faceVertices[i + 1]);
+        }
+        if (tintPoints.length === tintStart) return;
+        for (let i = 0; i < faceVertices.length; i++) {
+          addFaceEdge(faceVertices[i], faceVertices[(i + 1) % faceVertices.length]);
+        }
+      };
+
+      if (this.editCellDimension === 2) {
+        const faceVertices = this.selectedCellId >= 0
+          ? getCellVertices(topology, 2, this.selectedCellId)
+          : this.selectedEditVertices;
+        addFace(faceVertices);
+      } else {
+        const faceIds = this.selectedCellId >= 0
+          ? getCellBoundaryFaceIds(topology, this.editCellDimension, this.selectedCellId)
+          : [];
+        if (faceIds.length) {
+          faceIds.forEach(faceId => addFace(getCellVertices(topology, 2, faceId)));
+        } else {
+          const selected = new Set(this.selectedEditVertices);
+          const faceCount = cellCount(topology, 2);
+          for (let faceId = 0; faceId < faceCount; faceId++) {
+            const faceVertices = getCellVertices(topology, 2, faceId);
+            if (faceVertices.length >= 3 && faceVertices.every(vertex => selected.has(vertex))) addFace(faceVertices);
+          }
+        }
       }
+
       this.createFaceTintOverlay(tintPoints);
       let edgeEntries = Array.from(edgeCounts.values()).filter(([, , count]) => count === 1);
       if (!edgeEntries.length) edgeEntries = Array.from(edgeCounts.values());

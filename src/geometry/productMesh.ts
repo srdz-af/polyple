@@ -1,3 +1,8 @@
+import {
+  buildProductCellTopology,
+  surfaceTopologyFromCellTopology,
+  type CellTopology,
+} from './cellTopology';
 import type { PrimitiveSurfaceTopology } from './primitives';
 
 export type ProductMeshFactor = {
@@ -5,12 +10,14 @@ export type ProductMeshFactor = {
   vertexCount: number;
   dimension: number;
   edges: Uint32Array;
+  cellTopology?: CellTopology;
   surfaceTopology?: PrimitiveSurfaceTopology;
 };
 
 export type ProductMeshGeometry = {
   verts: Float32Array;
   edges: Uint32Array;
+  cellTopology?: CellTopology;
   surfaceTopology?: PrimitiveSurfaceTopology;
   vertexCount: number;
   dimension: number;
@@ -305,10 +312,12 @@ export function buildProductMesh(factors: ProductMeshFactor[], maxDimension: num
   }
 
   const strides = buildStrides(factors);
+  const cellTopology = buildProductCellTopology(factors, strides, { generatedKind: 'productMesh' });
   return {
     verts: buildProductVertices(factors, strides, vertexCount, dimension),
     edges: buildProductEdges(factors, strides),
-    surfaceTopology: buildProductSurfaceTopology(factors, strides),
+    cellTopology,
+    surfaceTopology: surfaceTopologyFromCellTopology(cellTopology) ?? buildProductSurfaceTopology(factors, strides),
     vertexCount,
     dimension,
   };
