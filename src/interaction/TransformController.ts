@@ -3,6 +3,7 @@ import type { RotND } from '../RotND';
 import type { NDProjector } from '../geometry/NDProjector';
 import { perspectiveScaleFrom, type AxisMap } from '../geometry/projectionUtils';
 import type { HypercubeRenderer } from '../rendering/HypercubeRenderer';
+import type { ObjectOrigin } from '../scene/objectOrigin';
 import type { Instance, TransformMode, TransformState } from '../scene/types';
 
 type TransformParams = {
@@ -35,6 +36,7 @@ type TransformControllerOptions = {
   getRendererND: () => HypercubeRenderer;
   getExtraInstances: () => Instance[];
   getBaseTransform: () => TransformState;
+  getObjectOrigin: (idx: number) => ObjectOrigin | null;
   getBaseOriginalN: () => number;
   getBaseAxisMap: () => AxisMap;
   getSelectedInstance: () => number;
@@ -65,6 +67,7 @@ type TransformOperation = {
   vertexDataStart: Float32Array | null;
   lockAxis: -1 | 0 | 1 | 2;
   objectDataStart: Float32Array | null;
+  originDataStart: Float32Array | null;
   extraPlane: boolean;
   moveOffset: THREE.Vector3;
 };
@@ -103,6 +106,7 @@ export class TransformController {
   private readonly dragTargetY = new THREE.Vector3();
   private readonly dragTmpVec = new THREE.Vector3();
   private readonly dragWorldTarget = new THREE.Vector3();
+  private readonly dragOriginProjected = new THREE.Vector3();
 
   private readonly transformOp: TransformOperation = {
     mode: 'none',
@@ -120,6 +124,7 @@ export class TransformController {
     vertexDataStart: null,
     lockAxis: -1,
     objectDataStart: null,
+    originDataStart: null,
     extraPlane: false,
     moveOffset: new THREE.Vector3(),
   };
@@ -318,10 +323,7 @@ export class TransformController {
       this.transformOp.objectDataStart.set(src);
       this.transformOp.lastHit.set(0, 0, 0);
       if (mode === 'move') {
-        const positions = selectedInstance === -1
-          ? this.options.getRendererND().positions
-          : this.options.getExtraInstances()[selectedInstance].renderer.positions;
-        const center = computeCenterFromPositions(positions, count);
+        const center = this.getObjectOriginWorldPosition(selectedInstance);
         this.transformOp.planeHitStart.copy(center);
         this.transformOp.plane.setFromNormalAndCoplanarPoint(this.options.camera.getWorldDirection(this.tmpVec).normalize(), center);
         const rect = this.options.renderer.domElement.getBoundingClientRect();
@@ -336,8 +338,11 @@ export class TransformController {
           this.transformOp.moveOffset.set(0, 0, 0);
         }
       }
+      const origin = this.options.getObjectOrigin(selectedInstance);
+      this.transformOp.originDataStart = origin ? new Float32Array(origin) : null;
     } else {
       this.transformOp.objectDataStart = null;
+      this.transformOp.originDataStart = null;
     }
   }
 
@@ -461,6 +466,8 @@ export class TransformController {
       if (this.transformOp.mode === 'move') {
         const src = this.transformOp.instIdx === -1 ? this.options.getX() : extraInstances[this.transformOp.instIdx].X;
         const baseData = this.transformOp.objectDataStart;
+        const origin = this.options.getObjectOrigin(this.transformOp.instIdx);
+        const originStart = this.transformOp.originDataStart;
         const count = this.transformOp.instIdx === -1 ? M : extraInstances[this.transformOp.instIdx].M;
         if (baseData && count > 0) {
           const rect = this.options.renderer.domElement.getBoundingClientRect();
@@ -487,6 +494,12 @@ export class TransformController {
               src[idxD] = baseData[idxD] + delta.getComponent(c);
             }
           }
+          if (origin && originStart) {
+            for (let c = 0; c < 3; c++) {
+              const dim = axes[c] % N;
+              origin[dim] = (originStart[dim] ?? 0) + delta.getComponent(c);
+            }
+          }
           this.transformOp.lastHit.copy(hit);
         }
       } else if (this.transformOp.mode === 'rotate') {
@@ -494,6 +507,8 @@ export class TransformController {
           const inst = this.transformOp.instIdx === -1 ? null : extraInstances[this.transformOp.instIdx];
           const src = inst ? inst.X : this.options.getX();
           const baseData = this.transformOp.objectDataStart;
+          const origin = this.options.getObjectOrigin(this.transformOp.instIdx);
+          const originStart = this.transformOp.originDataStart;
           const count = inst ? inst.M : M;
           if (count > 0) {
             const originalN = inst ? inst.originalN : this.options.getBaseOriginalN() || this.options.visibleDims();
@@ -509,6 +524,12 @@ export class TransformController {
               const b0 = baseData[dimB * count + i];
               src[dimA * count + i] = a0 * c - b0 * s;
               src[dimB * count + i] = a0 * s + b0 * c;
+            }
+            if (origin && originStart) {
+              const a0 = originStart[dimA] ?? 0;
+              const b0 = originStart[dimB] ?? 0;
+              origin[dimA] = a0 * c - b0 * s;
+              origin[dimB] = a0 * s + b0 * c;
             }
           }
         } else {
@@ -591,6 +612,10 @@ export class TransformController {
           const src = this.transformOp.instIdx === -1 ? this.options.getX() : extraInstances[this.transformOp.instIdx].X;
           src.set(this.transformOp.objectDataStart);
         }
+        if (this.transformOp.originDataStart) {
+          const origin = this.options.getObjectOrigin(this.transformOp.instIdx);
+          origin?.set(this.transformOp.originDataStart);
+        }
         target.pos.copy(this.transformOp.startPos);
         target.rot.copy(this.transformOp.startRot);
         target.scale.set(this.transformOp.startScale, this.transformOp.startScale, this.transformOp.startScale);
@@ -601,6 +626,7 @@ export class TransformController {
     this.transformOp.vertexDataStart = null;
     this.transformOp.lockAxis = -1;
     this.transformOp.objectDataStart = null;
+    this.transformOp.originDataStart = null;
     this.transformOp.extraPlane = false;
     this.clearAxisGuide();
     this.transformOp.moveOffset.set(0, 0, 0);
@@ -630,12 +656,7 @@ export class TransformController {
       const idx = this.transformOp.targetVertex * 3;
       center.set(posArr[idx], posArr[idx + 1], posArr[idx + 2]);
     } else {
-      if (this.transformOp.instIdx === -1 && this.options.getM() > 0) {
-        center = computeCenterFromPositions(this.options.getRendererND().positions, this.options.getM());
-      } else if (this.transformOp.instIdx >= 0) {
-        const inst = this.options.getExtraInstances()[this.transformOp.instIdx];
-        center = computeCenterFromPositions(inst.renderer.positions, inst.M);
-      }
+      center = this.getObjectOriginWorldPosition(this.transformOp.instIdx);
     }
 
     const len = 3;
@@ -675,6 +696,7 @@ export class TransformController {
     const transform = inst ? inst.transform : this.options.getBaseTransform();
     const originalN = inst ? inst.originalN : this.options.getBaseOriginalN() || this.options.visibleDims();
     const axisMap = inst ? inst.axisMap : this.options.getBaseAxisMap();
+    const origin = this.options.getObjectOrigin(instIdx);
     const N = this.options.getN();
 
     if (vertexIdx < 0 || vertexIdx >= count) return false;
@@ -705,7 +727,14 @@ export class TransformController {
     const params = this.options.getParams();
     const axes = [params.axesX % N, params.axesY % N, params.axesZ % N].map(v => Math.max(0, Math.min(N - 1, v)));
     const perspectiveDims = this.options.perspectiveDimsFor(originalN, axisMap);
-    const projectedTargets = [this.dragTargetY.x, this.dragTargetY.y, this.dragTargetY.z] as const;
+    const originProjected = origin
+      ? this.projectOriginForDrag(origin, axes, perspectiveDims, this.dragOriginProjected)
+      : this.dragOriginProjected.set(0, 0, 0);
+    const projectedTargets = [
+      this.dragTargetY.x + originProjected.x,
+      this.dragTargetY.y + originProjected.y,
+      this.dragTargetY.z + originProjected.z,
+    ] as const;
 
     let scale = 1;
     const iterations = perspectiveDims.length > 0 ? 6 : 1;
@@ -731,6 +760,49 @@ export class TransformController {
     }
 
     return true;
+  }
+
+  private projectOriginForDrag(
+    origin: ObjectOrigin,
+    axes: number[],
+    perspectiveDims: number[],
+    target: THREE.Vector3,
+  ) {
+    const N = this.options.getN();
+    const R = this.options.getRot().matrix;
+    for (let d = 0; d < N; d++) {
+      let acc = 0;
+      for (let a = 0; a < N; a++) acc += R[d * N + a] * (origin[a] ?? 0);
+      this.dragRotated[d] = acc;
+    }
+
+    if (N >= 4) {
+      const scale = perspectiveScaleFrom(this.dragRotated, perspectiveDims);
+      return target.set(
+        (this.dragRotated[axes[0]] ?? 0) * scale,
+        (this.dragRotated[axes[1]] ?? 0) * scale,
+        (this.dragRotated[axes[2]] ?? 0) * scale,
+      );
+    }
+
+    const P = this.options.getProjector().P;
+    const projected = [0, 0, 0];
+    for (let c = 0; c < 3; c++) {
+      let acc = 0;
+      const offset = c * N;
+      for (let k = 0; k < N; k++) acc += (P[offset + k] ?? 0) * (this.dragRotated[k] ?? 0);
+      projected[c] = acc;
+    }
+    return target.set(projected[0], projected[1], projected[2]);
+  }
+
+  private getObjectOriginWorldPosition(instIdx: number) {
+    if (instIdx === -1 && this.options.getM() > 0) return this.options.getRendererND().originPosition.clone();
+    if (instIdx >= 0) {
+      const inst = this.options.getExtraInstances()[instIdx];
+      if (inst) return inst.renderer.originPosition.clone();
+    }
+    return computeCenterFromPositions(this.options.getRendererND().positions, this.options.getM());
   }
 
   private resetControlDrag() {

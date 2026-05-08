@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { PrimitiveKind, PrimitiveSurfaceTopology } from '../geometry/primitives';
 import type { HypercubeRenderer } from '../rendering/HypercubeRenderer';
 import type { AxisMap } from '../geometry/projectionUtils';
+import type { ObjectOrigin } from './objectOrigin';
 import type { SurfaceState } from './surface';
 
 export type DataSource = 'primitive' | 'custom';
@@ -18,6 +19,7 @@ export type InstanceSnapshot = {
   label: string;
   kind: PrimitiveKind;
   transform: TransformState;
+  origin?: ObjectOrigin;
   originalN: number;
   axisMap: AxisMap;
   visible: boolean;
@@ -40,6 +42,7 @@ export type SceneSnapshot<TPrimitiveMode> = {
   axesOffset: number;
   baseAxisMap: AxisMap;
   baseTransform: TransformState;
+  baseOrigin?: ObjectOrigin;
   baseOrigN: number;
   baseVisible: boolean;
   baseSurface?: SurfaceState;
@@ -58,6 +61,7 @@ export type Instance = {
   label: string;
   kind: PrimitiveKind;
   transform: TransformState;
+  origin: ObjectOrigin;
   originalN: number;
   axisMap: AxisMap;
   visible: boolean;

@@ -10,7 +10,7 @@ type KeyboardCameraControllerOptions = {
   onCameraChange: () => void;
 };
 
-const ORBIT_TARGET = new THREE.Vector3(0, 0, 0);
+const DEFAULT_ORBIT_TARGET = new THREE.Vector3(0, 0, 0);
 const ORBIT_RATE = 1.9;
 const ZOOM_RATE = 2.6;
 const ZOOM_MIN_DISTANCE = 0.2;
@@ -79,7 +79,7 @@ export class KeyboardCameraController {
     this.smoothingActive = false;
     this.targetOffset.copy(this.options.defaultCameraPosition);
     this.currentOffset.copy(this.options.defaultCameraPosition);
-    this.setCameraToOriginOffset(this.options.defaultCameraPosition);
+    this.setCameraToTargetOffset(this.options.controls.target, this.options.defaultCameraPosition);
   }
 
   resetFocus() {
@@ -90,7 +90,18 @@ export class KeyboardCameraController {
     this.smoothingActive = false;
     this.targetOffset.copy(offset);
     this.currentOffset.copy(offset);
-    this.setCameraToOriginOffset(offset);
+    this.setCameraToTargetOffset(DEFAULT_ORBIT_TARGET, offset);
+  }
+
+  focusOn(target: THREE.Vector3) {
+    const { camera, controls, defaultCameraPosition } = this.options;
+    const offset = camera.position.clone().sub(controls.target);
+    if (offset.lengthSq() < 1e-8) offset.copy(defaultCameraPosition);
+
+    this.smoothingActive = false;
+    this.targetOffset.copy(offset);
+    this.currentOffset.copy(offset);
+    this.setCameraToTargetOffset(target, offset);
   }
 
   update(dt: number) {
@@ -98,12 +109,12 @@ export class KeyboardCameraController {
     this.applySmoothing(dt);
   }
 
-  private setCameraToOriginOffset(offset: THREE.Vector3) {
+  private setCameraToTargetOffset(target: THREE.Vector3, offset: THREE.Vector3) {
     const { camera, controls, worldUp, onCameraChange } = this.options;
-    controls.target.copy(ORBIT_TARGET);
+    controls.target.copy(target);
     camera.up.copy(worldUp);
-    camera.position.copy(ORBIT_TARGET).add(offset);
-    camera.lookAt(ORBIT_TARGET);
+    camera.position.copy(target).add(offset);
+    camera.lookAt(target);
     controls.update();
     onCameraChange();
   }
@@ -117,7 +128,7 @@ export class KeyboardCameraController {
     if (this.smoothingActive) {
       this.offset.copy(this.targetOffset);
     } else {
-      this.offset.copy(this.options.camera.position).sub(ORBIT_TARGET);
+      this.offset.copy(this.options.camera.position).sub(this.options.controls.target);
     }
     if (this.offset.lengthSq() < 1e-8) {
       this.offset.copy(this.options.defaultCameraPosition);
@@ -142,7 +153,7 @@ export class KeyboardCameraController {
 
   private applySmoothing(dt: number) {
     if (!this.smoothingActive) return;
-    this.offset.copy(this.options.camera.position).sub(ORBIT_TARGET);
+    this.offset.copy(this.options.camera.position).sub(this.options.controls.target);
     if (this.offset.lengthSq() < 1e-8) {
       this.offset.copy(this.options.defaultCameraPosition);
     }
@@ -152,7 +163,7 @@ export class KeyboardCameraController {
       this.currentOffset.copy(this.targetOffset);
       this.smoothingActive = false;
     }
-    this.setCameraToOriginOffset(this.currentOffset);
+    this.setCameraToTargetOffset(this.options.controls.target, this.currentOffset);
   }
 
   private orbitAroundOrigin(thetaDelta: number, phiDelta: number) {

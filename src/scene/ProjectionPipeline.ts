@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import type { RotND } from '../RotND';
 import type { NDProjector } from '../geometry/NDProjector';
-import { perspectiveScaleFrom, recenterProjected, type AxisMap } from '../geometry/projectionUtils';
+import { perspectiveScaleFrom, type AxisMap } from '../geometry/projectionUtils';
 import type { HypercubeRenderer } from '../rendering/HypercubeRenderer';
+import type { ObjectOrigin } from './objectOrigin';
 import type { Instance, TransformState } from './types';
 import type { ViewMode } from '../constants';
 
@@ -29,6 +30,7 @@ type ProjectionPipelineOptions = {
   getRendererND: () => HypercubeRenderer;
   getExtraInstances: () => Instance[];
   getBaseTransform: () => TransformState;
+  getBaseOrigin: () => ObjectOrigin;
   getBaseOriginalN: () => number;
   getBaseAxisMap: () => AxisMap;
   visibleDims: () => number;
@@ -80,6 +82,7 @@ export class ProjectionPipeline {
         Ydst: Float32Array,
         transform: TransformState,
         renderer: HypercubeRenderer,
+        origin: ObjectOrigin,
         originalN: number,
         axisMap: AxisMap,
       ) => {
@@ -98,8 +101,13 @@ export class ProjectionPipeline {
           Ydst[1 * Mloc + m] = tmpN[axes[1]] * scale;
           Ydst[2 * Mloc + m] = tmpN[axes[2]] * scale;
         }
-        const center = recenterProjected(Ydst, Mloc, this.options.tmpCenter);
-        const tpos = this.options.tmpVec.set(transform.pos.x + center.x, transform.pos.y + center.y, transform.pos.z + center.z);
+        const originProjected = this.projectPerspectiveOrigin(origin, axes, perspectiveDims, this.options.tmpCenter);
+        this.subtractOrigin(Ydst, Mloc, originProjected);
+        const tpos = this.options.tmpVec.set(
+          transform.pos.x + originProjected.x,
+          transform.pos.y + originProjected.y,
+          transform.pos.z + originProjected.z,
+        );
         renderer.setTransform(tpos, new THREE.Euler(transform.rot.x, transform.rot.y, transform.rot.z), transform.scale);
         renderer.writeInterleavedFrom(Ydst);
         renderer.refreshSurface();
@@ -112,12 +120,13 @@ export class ProjectionPipeline {
           this.options.getY(),
           this.options.getBaseTransform(),
           rendererND,
+          this.options.getBaseOrigin(),
           this.options.getBaseOriginalN() || this.options.visibleDims(),
           this.options.getBaseAxisMap(),
         );
       }
       this.options.getExtraInstances().forEach(inst => {
-        projectOne(inst.X, inst.M, inst.Y, inst.transform, inst.renderer, inst.originalN, inst.axisMap);
+        projectOne(inst.X, inst.M, inst.Y, inst.transform, inst.renderer, inst.origin, inst.originalN, inst.axisMap);
       });
     } else {
       this.applyProjectionMatrix();
@@ -125,17 +134,27 @@ export class ProjectionPipeline {
       if (M > 0 && rendererND.geometry) {
         const Y = this.options.getY();
         projector.project(this.options.getX(), M, Y);
-        const center = recenterProjected(Y, M, this.options.tmpCenter);
+        const originProjected = this.projectLinearOrigin(this.options.getBaseOrigin(), this.options.tmpCenter);
+        this.subtractOrigin(Y, M, originProjected);
         const baseTransform = this.options.getBaseTransform();
-        const tpos = this.options.tmpVec.set(baseTransform.pos.x + center.x, baseTransform.pos.y + center.y, baseTransform.pos.z + center.z);
+        const tpos = this.options.tmpVec.set(
+          baseTransform.pos.x + originProjected.x,
+          baseTransform.pos.y + originProjected.y,
+          baseTransform.pos.z + originProjected.z,
+        );
         rendererND.setTransform(tpos, new THREE.Euler(baseTransform.rot.x, baseTransform.rot.y, baseTransform.rot.z), baseTransform.scale);
         rendererND.writeInterleavedFrom(Y);
         rendererND.refreshSurface();
       }
       this.options.getExtraInstances().forEach(inst => {
         projector.project(inst.X, inst.M, inst.Y);
-        const center = recenterProjected(inst.Y, inst.M, this.options.tmpCenter);
-        const tpos = this.options.tmpVec.set(inst.transform.pos.x + center.x, inst.transform.pos.y + center.y, inst.transform.pos.z + center.z);
+        const originProjected = this.projectLinearOrigin(inst.origin, this.options.tmpCenter);
+        this.subtractOrigin(inst.Y, inst.M, originProjected);
+        const tpos = this.options.tmpVec.set(
+          inst.transform.pos.x + originProjected.x,
+          inst.transform.pos.y + originProjected.y,
+          inst.transform.pos.z + originProjected.z,
+        );
         inst.renderer.setTransform(tpos, new THREE.Euler(inst.transform.rot.x, inst.transform.rot.y, inst.transform.rot.z), inst.transform.scale);
         inst.renderer.writeInterleavedFrom(inst.Y);
         inst.renderer.refreshSurface();
@@ -146,6 +165,60 @@ export class ProjectionPipeline {
     this.options.updateSelectionOutline();
     if (params.editMode) this.options.updateVertexCloud();
     this.options.updateAxisGuide();
+  }
+
+  private subtractOrigin(Yarr: Float32Array, Mloc: number, origin: THREE.Vector3) {
+    for (let i = 0; i < Mloc; i++) {
+      Yarr[i] -= origin.x;
+      Yarr[Mloc + i] -= origin.y;
+      Yarr[2 * Mloc + i] -= origin.z;
+    }
+  }
+
+  private projectPerspectiveOrigin(
+    origin: ObjectOrigin,
+    axes: number[],
+    perspectiveDims: number[],
+    target: THREE.Vector3,
+  ) {
+    const N = this.options.getN();
+    const R = this.options.getRot().matrix;
+    const tmpN = this.options.tmpN;
+    for (let d = 0; d < N; d++) {
+      let acc = 0;
+      for (let a = 0; a < N; a++) acc += R[d * N + a] * (origin[a] ?? 0);
+      tmpN[d] = acc;
+    }
+    const scale = perspectiveScaleFrom(tmpN, perspectiveDims);
+    return target.set(
+      (tmpN[axes[0]] ?? 0) * scale,
+      (tmpN[axes[1]] ?? 0) * scale,
+      (tmpN[axes[2]] ?? 0) * scale,
+    );
+  }
+
+  private projectLinearOrigin(origin: ObjectOrigin, target: THREE.Vector3) {
+    const N = this.options.getN();
+    const projector = this.options.getProjector();
+    const R = this.options.getRot().matrix;
+    const P = projector.P;
+    const tmpN = this.options.tmpN;
+    for (let d = 0; d < N; d++) {
+      let acc = 0;
+      for (let a = 0; a < N; a++) acc += R[d * N + a] * (origin[a] ?? 0);
+      tmpN[d] = acc;
+    }
+    const x = this.projectLinearComponent(tmpN, P, 0, N);
+    const y = this.projectLinearComponent(tmpN, P, 1, N);
+    const z = this.projectLinearComponent(tmpN, P, 2, N);
+    return target.set(x, y, z);
+  }
+
+  private projectLinearComponent(rotated: Float32Array, P: Float32Array, component: number, N: number) {
+    let acc = 0;
+    const offset = component * N;
+    for (let k = 0; k < N; k++) acc += (P[offset + k] ?? 0) * (rotated[k] ?? 0);
+    return acc;
   }
 
   private applyProjectionMatrix() {

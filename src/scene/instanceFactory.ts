@@ -4,6 +4,7 @@ import { clonePrimitiveSurfaceTopology, type PrimitiveKind, type PrimitiveSurfac
 import type { AxisMap } from '../geometry/projectionUtils';
 import type { NDProjector } from '../geometry/NDProjector';
 import { HypercubeRenderer } from '../rendering/HypercubeRenderer';
+import { cloneObjectOrigin, type ObjectOrigin } from './objectOrigin';
 import { cloneSurface, normalizeSurface, type SurfaceState } from './surface';
 import type { Instance } from './types';
 
@@ -15,6 +16,7 @@ export type InstanceGeometryData = {
   kind: PrimitiveKind;
   axisMap: AxisMap;
   originalN: number;
+  origin?: ObjectOrigin;
 };
 
 type InstanceFactoryOptions = {
@@ -68,6 +70,7 @@ export function createSceneInstance(options: InstanceFactoryOptions): Instance {
     label: options.label,
     kind: options.data.kind,
     transform,
+    origin: cloneObjectOrigin(options.data.origin, options.data.verts, options.data.V, options.projectionN),
     originalN: options.data.originalN,
     axisMap: [...options.data.axisMap],
     visible: true,

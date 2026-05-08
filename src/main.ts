@@ -40,6 +40,7 @@ import {
   type AnimationKeyframeState,
 } from './animation/KeyframeTimelineController';
 import { createSceneInstance, type InstanceGeometryData } from './scene/instanceFactory';
+import { cloneObjectOrigin, computeObjectOrigin, type ObjectOrigin } from './scene/objectOrigin';
 import { ProjectionPipeline } from './scene/ProjectionPipeline';
 import { SceneHistory } from './scene/SceneHistory';
 import { DEFAULT_SURFACE, cloneSurface, normalizeSurface, surfacesEqual, type SurfaceState } from './scene/surface';
@@ -358,6 +359,7 @@ const NO_SELECTION = -2;
 let selectedInstance: number = BASE_SELECTION; // -1 base, >=0 extra, -2 none
 let selectionOutline: THREE.LineSegments | null = null;
 const baseTransform = { pos: new THREE.Vector3(), rot: new THREE.Vector3(), scale: new THREE.Vector3(1,1,1) };
+let baseOrigin: ObjectOrigin = new Float32Array(MAX_N);
 let baseOriginalN = 0;
 let baseAxisMap: AxisMap = Array.from({ length: MAX_N }, (_, i) => i);
 let baseVisible = true;
@@ -396,6 +398,7 @@ function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
     axesOffset: axisController.axesOffset,
     baseAxisMap: [...baseAxisMap],
     baseTransform: cloneTransformState(baseTransform),
+    baseOrigin: new Float32Array(baseOrigin),
     baseOrigN: baseOriginalN,
     baseVisible,
     baseSurface: cloneSurface(baseSurface),
@@ -409,6 +412,7 @@ function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
       label: inst.label,
       kind: inst.kind,
       transform: cloneTransformState(inst.transform),
+      origin: new Float32Array(inst.origin),
       originalN: inst.originalN,
       axisMap: [...inst.axisMap],
       visible: inst.visible,
@@ -441,6 +445,7 @@ function applySnapshot(snap: SceneSnapshot<PrimitiveMode>) {
   baseTransform.pos.copy(snap.baseTransform.pos);
   baseTransform.rot.copy(snap.baseTransform.rot);
   baseTransform.scale.copy(snap.baseTransform.scale);
+  baseOrigin = cloneObjectOrigin(snap.baseOrigin, X, M, MAX_N);
   baseVisible = snap.baseVisible;
   baseSurface = normalizeSurface(snap.baseSurface);
   rendererND.setSurface(baseSurface);
@@ -614,6 +619,41 @@ function placeVertexMarker(instIdx: number, vertexIdx: number) {
   transformController.placeVertexMarker(instIdx, vertexIdx);
 }
 
+function getObjectOrigin(idx: number) {
+  if (idx === BASE_SELECTION) return M > 0 ? baseOrigin : null;
+  return extraInstances[idx]?.origin ?? null;
+}
+
+function getObjectOriginWorldPosition(idx: number, target = new THREE.Vector3()) {
+  if (idx === BASE_SELECTION && M > 0 && baseVisible) return target.copy(rendererND.originPosition);
+  const inst = extraInstances[idx];
+  if (!inst || !inst.visible) return null;
+  return target.copy(inst.renderer.originPosition);
+}
+
+function recalculateObjectOrigin(idx: number) {
+  const origin = getObjectOrigin(idx);
+  if (!origin) return;
+
+  pushUndoSnapshot();
+  if (idx === BASE_SELECTION) {
+    computeObjectOrigin(X, M, MAX_N, baseOrigin);
+  } else {
+    const inst = extraInstances[idx];
+    if (!inst) return;
+    computeObjectOrigin(inst.X, inst.M, MAX_N, inst.origin);
+  }
+  projectAndRenderAll();
+  applySliceFilter();
+  updateSelectionOutline();
+}
+
+function focusObjectOrigin(idx: number) {
+  const origin = getObjectOriginWorldPosition(idx, tmpVec);
+  if (!origin) return;
+  keyboardCamera.focusOn(origin);
+}
+
 function deleteSelected() {
   if (selectedInstance < 0) return;
   pushUndoSnapshot();
@@ -664,6 +704,7 @@ function restoreInstanceSnapshot(snap: InstanceSnapshot): Instance {
     label: snap.label,
     kind: snap.kind,
     transform: cloneTransformState(snap.transform),
+    origin: cloneObjectOrigin(snap.origin, snap.X, snap.M, MAX_N),
     originalN: snap.originalN,
     axisMap: normalizeAxisMap(snap.axisMap, snap.originalN),
     visible: snap.visible,
@@ -994,6 +1035,7 @@ transformController = new TransformController({
   getRendererND: () => rendererND,
   getExtraInstances: () => extraInstances,
   getBaseTransform: () => baseTransform,
+  getObjectOrigin,
   getBaseOriginalN: () => baseOriginalN,
   getBaseAxisMap: () => baseAxisMap,
   getSelectedInstance: () => selectedInstance,
@@ -1033,6 +1075,7 @@ projectionPipeline = new ProjectionPipeline({
   getRendererND: () => rendererND,
   getExtraInstances: () => extraInstances,
   getBaseTransform: () => baseTransform,
+  getBaseOrigin: () => baseOrigin,
   getBaseOriginalN: () => baseOriginalN,
   getBaseAxisMap: () => baseAxisMap,
   visibleDims,
@@ -1143,6 +1186,8 @@ viewportInteraction = new ViewportInteractionController({
   removeLastKeyframe: () => animationTimeline?.removeLastKeyframe(),
   deleteSelected,
   hasActiveSelection,
+  recalculateSelectedOrigin: () => recalculateObjectOrigin(selectedInstance),
+  focusObjectOrigin,
   applySliceFilter,
   cycleAxes,
 });
@@ -1150,14 +1195,16 @@ viewportInteraction = new ViewportInteractionController({
 function createPrimitiveData(kind: PrimitiveKind, dimension: number): InstanceGeometryData {
   const data = buildPrimitive(kind, dimension);
   const axisMap = currentAxisMap(dimension);
+  const verts = embedToMax(data.verts, dimension, axisMap);
   return {
-    verts: embedToMax(data.verts, dimension, axisMap),
+    verts,
     edges: data.edges,
     surfaceTopology: clonePrimitiveSurfaceTopology(data.surfaceTopology),
     V: data.V,
     kind,
     axisMap,
     originalN: dimension,
+    origin: computeObjectOrigin(verts, data.V, MAX_N),
   };
 }
 
@@ -1203,6 +1250,7 @@ function addInstanceAt(offset: THREE.Vector3, recordUndo = true) {
       kind: PARAMS.primitive,
       axisMap: [...baseAxisMap],
       originalN: baseOriginalN || PARAMS.N,
+      origin: new Float32Array(baseOrigin),
     };
   } else {
     data = createPrimitiveData(PARAMS.primitive, PARAMS.N);
@@ -1246,6 +1294,7 @@ function rebuildState(
   baseTransform.pos.set(0,0,0);
   baseTransform.rot.set(0,0,0);
   baseTransform.scale.set(1,1,1);
+  baseOrigin = computeObjectOrigin(X, M, MAX_N, baseOrigin);
   baseOriginalN = localN ?? visibleDims();
   baseAxisMap = normalizeAxisMap(axisMap, baseOriginalN);
   baseSurface = cloneSurface(DEFAULT_SURFACE);

@@ -44,6 +44,7 @@ export class HypercubeRenderer {
   allEdges!: Uint32Array;
   visibleEdges!: Uint32Array;
   offset = new THREE.Vector3();
+  originPosition = new THREE.Vector3();
   private lineMaterial: THREE.LineBasicMaterial;
   private solidMaterial: THREE.MeshStandardMaterial;
   private facetedMaterial: THREE.MeshStandardMaterial;
@@ -122,6 +123,7 @@ export class HypercubeRenderer {
   }
 
   setTransform(position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3): void {
+    this.originPosition.copy(position);
     const q = new THREE.Quaternion().setFromEuler(rotation);
     this.transform.compose(position, q, scale);
   }

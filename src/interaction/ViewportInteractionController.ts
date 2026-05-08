@@ -46,6 +46,8 @@ type ViewportInteractionControllerOptions = {
   removeLastKeyframe: () => void;
   deleteSelected: () => void;
   hasActiveSelection: () => boolean;
+  recalculateSelectedOrigin: () => void;
+  focusObjectOrigin: (idx: number) => void;
   applySliceFilter: () => void;
   cycleAxes: (step: number) => void;
 };
@@ -75,6 +77,7 @@ export class ViewportInteractionController {
     canvas.addEventListener('wheel', ev => this.handleWheel(ev));
     canvas.addEventListener('mousedown', ev => this.handleMiddleMouseDown(ev), { capture: true });
     canvas.addEventListener('pointerdown', ev => this.handlePointerDown(ev));
+    canvas.addEventListener('dblclick', ev => this.handleDoubleClick(ev));
 
     window.addEventListener('click', () => this.hideContextMenuIfIdle());
     window.addEventListener('pointermove', ev => this.handleWindowPointerMove(ev));
@@ -265,6 +268,13 @@ export class ViewportInteractionController {
       this.appendTransformAction(menu, 'Move', 'move', ev);
       this.appendTransformAction(menu, 'Rotate', 'rotate', ev);
       this.appendTransformAction(menu, 'Scale', 'scale', ev);
+      const recalculateOriginButton = document.createElement('button');
+      recalculateOriginButton.textContent = 'Recalculate origin';
+      recalculateOriginButton.onclick = () => {
+        menu.style.display = 'none';
+        this.options.recalculateSelectedOrigin();
+      };
+      menu.appendChild(recalculateOriginButton);
       const deleteButton = document.createElement('button');
       deleteButton.textContent = 'Delete';
       deleteButton.onclick = () => this.showDeleteConfirm(ev);
@@ -394,7 +404,7 @@ export class ViewportInteractionController {
     this.deletePending = false;
   }
 
-  private selectObjectFromPointer(ev: PointerEvent) {
+  private selectObjectFromPointer(ev: { clientX: number; clientY: number }) {
     const rect = this.options.renderer.domElement.getBoundingClientRect();
     const mx = ev.clientX - rect.left;
     const my = ev.clientY - rect.top;
@@ -448,11 +458,20 @@ export class ViewportInteractionController {
 
     if (bestInst === this.options.noSelection) {
       this.options.selectObject(this.options.noSelection);
-      return;
+      return this.options.noSelection;
     }
 
     this.options.selectObject(bestInst);
     if (this.options.getParams().editMode) this.selectNearestVertex(bestInst, mx, my, w, h);
+    return bestInst;
+  }
+
+  private handleDoubleClick(ev: MouseEvent) {
+    if (this.options.transformController.isActive()) return;
+    ev.preventDefault();
+    this.lastPointer = { x: ev.clientX, y: ev.clientY };
+    const focused = this.selectObjectFromPointer(ev);
+    if (focused !== this.options.noSelection) this.options.focusObjectOrigin(focused);
   }
 
   private nearestInstanceByVertex(mx: number, my: number, width: number, height: number) {
