@@ -44,7 +44,6 @@ type TransformControllerOptions = {
   primaryExtraRotationDepthDim: (localN: number, axisMap: AxisMap) => number;
   extraRotationPlaneAxis: (lockAxis: -1 | 0 | 1 | 2, depthDim: number) => number;
   projectAndRenderAll: () => void;
-  setDraftInteractionActive?: (active: boolean) => void;
   updateSelectionOutline: () => void;
   pushUndoSnapshot: () => void;
   onStateChange?: () => void;
@@ -314,7 +313,6 @@ export class TransformController {
       this.transformOp.lastHit.copy(this.transformOp.vertexStart);
       this.transformOp.lockAxis = -1;
       this.transformOp.extraPlane = false;
-      this.options.setDraftInteractionActive?.(true);
       return;
     }
 
@@ -356,7 +354,6 @@ export class TransformController {
       this.transformOp.objectDataStart = null;
       this.transformOp.originDataStart = null;
     }
-    this.options.setDraftInteractionActive?.(true);
   }
 
   beginControlDrag(mode: TransformMode, ev: PointerEvent) {
@@ -540,7 +537,6 @@ export class TransformController {
     this.transformOp.objectStarts = [];
     this.clearAxisGuide();
     this.transformOp.moveOffset.set(0, 0, 0);
-    this.options.setDraftInteractionActive?.(false);
     this.options.projectAndRenderAll();
     if (params.editMode && this.selectedVertex >= 0) this.placeVertexMarker(this.options.getSelectedInstance(), this.selectedVertex);
     this.options.updateSelectionOutline();

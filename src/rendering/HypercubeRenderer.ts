@@ -29,10 +29,6 @@ export type SurfaceTopology = {
   facetIds: Uint16Array;
 };
 
-export type SurfaceUpdateOptions = {
-  draftSurface?: boolean;
-};
-
 type FaceInfo = {
   face: Face;
   planeConstant: number;
@@ -131,7 +127,7 @@ export class HypercubeRenderer {
     this.transform.compose(position, q, scale);
   }
 
-  writeInterleavedFrom(Y: Float32Array, options: SurfaceUpdateOptions = {}): void {
+  writeInterleavedFrom(Y: Float32Array): void {
     const M = this.M;
     const { positions } = this;
     const xs = Y.subarray(0, M);
@@ -153,7 +149,7 @@ export class HypercubeRenderer {
 
     if (this.mode !== 'wireframe') {
       this.surfaceNeedsUpdate = true;
-      if (!options.draftSurface) this.updateHullGeometry();
+      this.updateHullGeometry();
     }
   }
 

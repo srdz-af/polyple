@@ -23,6 +23,7 @@ type KeyboardShortcutControllerOptions = {
   hasSelection: () => boolean;
   undo: () => void;
   redo: () => void;
+  togglePerfOverlay: () => void;
 };
 
 export class KeyboardShortcutController {
@@ -80,6 +81,11 @@ export class KeyboardShortcutController {
     if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && !ev.altKey && transformMode === 'none' && key === 'e') {
       ev.preventDefault();
       this.options.exportAnimation();
+      return;
+    }
+    if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && !ev.altKey && transformMode === 'none' && key === 'd') {
+      ev.preventDefault();
+      this.options.togglePerfOverlay();
       return;
     }
 

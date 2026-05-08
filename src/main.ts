@@ -436,37 +436,111 @@ const updateAxisGizmo = () => axisController.updateAxisGizmo();
 const applyAutoRotation = (dt: number) => axisController.applyAutoRotation(dt);
 let projectionPipeline: ProjectionPipeline | null = null;
 let projectionDirty = true;
-let projectionDraftInteractionActive = false;
-let projectionDraftFrame = false;
 
 function markProjectionDirty() {
   projectionDirty = true;
 }
 
-function markProjectionDraftFrame() {
-  projectionDraftFrame = true;
-  markProjectionDirty();
-}
-
-function setProjectionDraftInteractionActive(active: boolean) {
-  if (projectionDraftInteractionActive === active) return;
-  projectionDraftInteractionActive = active;
-  markProjectionDirty();
-}
-
 function projectIfDirty() {
-  if (!projectionDirty || !projectionPipeline) return;
-  projectionPipeline.projectAndRenderAll({
-    draftSurface: downsampleSceneOnly && (projectionDraftInteractionActive || projectionDraftFrame),
-  });
+  if (!projectionDirty || !projectionPipeline) return 0;
+  const start = performance.now();
+  projectionPipeline.projectAndRenderAll();
   projectionDirty = false;
-  projectionDraftFrame = false;
+  return performance.now() - start;
 }
 
 const projectAndRenderAll = () => {
   markProjectionDirty();
   projectIfDirty();
 };
+
+const perfOverlay = document.createElement('div');
+perfOverlay.id = 'perf-overlay';
+perfOverlay.setAttribute('aria-hidden', 'true');
+Object.assign(perfOverlay.style, {
+  position: 'fixed',
+  right: 'calc(10px + var(--safe-right))',
+  top: 'calc(10px + var(--safe-top))',
+  zIndex: '80',
+  display: 'none',
+  minWidth: '128px',
+  boxSizing: 'border-box',
+  padding: '7px 8px',
+  border: '1px solid rgba(255, 255, 255, 0.14)',
+  borderRadius: '7px',
+  background: 'rgba(8, 11, 18, 0.72)',
+  color: 'rgba(236, 243, 255, 0.92)',
+  font: '700 10px/1.36 SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace',
+  letterSpacing: '0.01em',
+  pointerEvents: 'none',
+  whiteSpace: 'pre',
+  boxShadow: '0 10px 26px rgba(0, 0, 0, 0.28)',
+  backdropFilter: 'blur(10px) saturate(0.85)',
+  WebkitBackdropFilter: 'blur(10px) saturate(0.85)',
+});
+document.body.appendChild(perfOverlay);
+
+let perfOverlayVisible = false;
+let perfSampleStart = performance.now();
+const perfStats = {
+  frames: 0,
+  cpuMs: 0,
+  projectionMs: 0,
+  projectionFrames: 0,
+  renderMs: 0,
+};
+
+function resetPerfStats(now = performance.now()) {
+  perfSampleStart = now;
+  perfStats.frames = 0;
+  perfStats.cpuMs = 0;
+  perfStats.projectionMs = 0;
+  perfStats.projectionFrames = 0;
+  perfStats.renderMs = 0;
+}
+
+function togglePerfOverlay() {
+  perfOverlayVisible = !perfOverlayVisible;
+  perfOverlay.style.display = perfOverlayVisible ? 'block' : 'none';
+  perfOverlay.setAttribute('aria-hidden', String(!perfOverlayVisible));
+  resetPerfStats();
+  if (perfOverlayVisible) perfOverlay.textContent = 'FPS --\nFrame --ms\nCPU --ms\nProj --\nRender --ms';
+}
+
+function recordPerfFrame(frameStart: number, projectionMs: number, renderMs: number) {
+  if (!perfOverlayVisible) return;
+
+  const now = performance.now();
+  const cpuMs = Math.max(0, now - frameStart);
+
+  perfStats.frames += 1;
+  perfStats.cpuMs += cpuMs;
+  perfStats.renderMs += renderMs;
+  if (projectionMs > 0) {
+    perfStats.projectionMs += projectionMs;
+    perfStats.projectionFrames += 1;
+  }
+
+  const elapsed = now - perfSampleStart;
+  if (elapsed < 500 || perfStats.frames === 0) return;
+
+  const fps = (perfStats.frames * 1000) / elapsed;
+  const avgFrameMs = elapsed / perfStats.frames;
+  const avgCpuMs = perfStats.cpuMs / perfStats.frames;
+  const avgRenderMs = perfStats.renderMs / perfStats.frames;
+  const avgProjectionMs = perfStats.projectionFrames > 0
+    ? `${(perfStats.projectionMs / perfStats.projectionFrames).toFixed(1)}ms`
+    : 'idle';
+
+  perfOverlay.textContent = [
+    `FPS ${fps.toFixed(0)}`,
+    `Frame ${avgFrameMs.toFixed(1)}ms`,
+    `CPU ${avgCpuMs.toFixed(1)}ms`,
+    `Proj ${avgProjectionMs}`,
+    `Render ${avgRenderMs.toFixed(1)}ms`,
+  ].join('\n');
+  resetPerfStats(now);
+}
 let transformController: TransformController;
 let viewportInteraction: ViewportInteractionController;
 
@@ -1772,12 +1846,15 @@ function renderEffectsFrame() {
 }
 
 function renderViewportFrame() {
-  projectIfDirty();
+  const frameStart = performance.now();
+  const projectionMs = projectIfDirty();
   controls.update();
   updateTransformActionButtons();
   updateAxisGizmo();
+  const renderStart = performance.now();
   if (hasRenderEffects() || downsampleSceneOnly) renderEffectsFrame();
   else renderer.render(scene, camera);
+  recordPerfFrame(frameStart, projectionMs, performance.now() - renderStart);
 }
 
 function bindRenderEffectControls() {
@@ -1825,7 +1902,6 @@ transformController = new TransformController({
   primaryExtraRotationDepthDim: (localN, axisMap) => axisController.primaryExtraRotationDepthDim(localN, axisMap),
   extraRotationPlaneAxis,
   projectAndRenderAll,
-  setDraftInteractionActive: setProjectionDraftInteractionActive,
   updateSelectionOutline,
   pushUndoSnapshot,
   onStateChange: () => requestSceneUrlUpdate(),
@@ -1844,8 +1920,10 @@ axisController = new AxisGizmoController({
   applySceneBackground: () => backgroundController.applySceneBackground(PARAMS.editMode),
   setPaneCollapsed: collapsed => paneController.setCollapsed(collapsed),
   getPaneCollapsed: () => paneController.isCollapsed,
-  setDraftInteractionActive: setProjectionDraftInteractionActive,
-  onStateChange: () => requestSceneUrlUpdate(),
+  onStateChange: () => {
+    markProjectionDirty();
+    requestSceneUrlUpdate();
+  },
 });
 axisController.init();
 projectionPipeline = new ProjectionPipeline({
@@ -2263,6 +2341,7 @@ new KeyboardShortcutController({
   hasSelection: hasActiveSelection,
   undo: undoSceneSnapshot,
   redo: redoSceneSnapshot,
+  togglePerfOverlay,
 }).bind();
 
 updateTransformActionButtons();
@@ -2287,7 +2366,7 @@ function animate() {
     animationTimeline.update(dt);
   } else if (!animationVideoRendering) {
     if (applyAutoRotation(dt)) {
-      markProjectionDraftFrame();
+      markProjectionDirty();
       requestSceneUrlUpdate();
     }
   }
