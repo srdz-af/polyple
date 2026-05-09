@@ -1058,7 +1058,7 @@ export function bevelEdge(
     const prevCut = cutFor(endpoint, prev);
     const nextCut = cutFor(endpoint, next);
     if (prevCut < 0 && nextCut < 0) return [];
-    const profile = prevCut >= 0 && nextCut >= 0 ? profileSequence(endpoint, prev, next) : undefined;
+    const profile = prevCut >= 0 && nextCut >= 0 ? ensureEndpointProfile(endpoint, prev, next) : undefined;
     if (profile) return profile;
     if (prevCut >= 0 && nextCut >= 0) return prevCut === nextCut ? [prevCut] : [prevCut, nextCut];
     return [prevCut >= 0 ? prevCut : nextCut];
