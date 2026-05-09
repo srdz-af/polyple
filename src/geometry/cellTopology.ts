@@ -863,22 +863,28 @@ export function bevelEdge(
 
   const layerCount = Math.max(1, Math.min(32, Math.floor(smoothness)));
   const highestSourceDimension = maxCellDimension(topology);
-  const cellsByDim: number[][][] = Array.from({ length: highestSourceDimension + 1 }, (_entry, dim) => {
-    if (dim === 0) return Array.from({ length: vertexCount }, (_vertex, vertex) => [vertex]);
-    return cellVerticesForMutation(topology, dim);
-  });
 
   const vertexMap = new Int32Array(vertexCount);
-  for (let vertex = 0; vertex < vertexCount; vertex++) vertexMap[vertex] = vertex;
-  let nextVertex = vertexCount;
+  vertexMap.fill(-1);
+  let nextVertex = 0;
+  for (let vertex = 0; vertex < vertexCount; vertex++) {
+    if (vertex === edgeA || vertex === edgeB) continue;
+    vertexMap[vertex] = nextVertex++;
+  }
 
   const hasSelectedEdge = (cell: number[]) => cell.includes(edgeA) && cell.includes(edgeB);
+  const hasAffectedEndpoint = (cell: number[]) => cell.includes(edgeA) || cell.includes(edgeB);
   const edgeKey = `${Math.min(edgeA, edgeB)}:${Math.max(edgeA, edgeB)}`;
   const faceCutByFaceId = new Map<number, [number, number]>();
+  const cutByEndpointNeighbor = new Map<string, number>();
   const cuts: BevelEdgeCut[] = [];
   const sourceCellsByDim: number[][][] = Array.from({ length: highestSourceDimension + 1 }, (_entry, dim) => (
     dim > 0 ? cellVerticesForMutation(topology, dim) : []
   ));
+  const cutKey = (endpoint: number, sideNeighbor: number) => `${endpoint}:${sideNeighbor}`;
+  const cutFor = (endpoint: number, sideNeighbor: number) => (
+    cutByEndpointNeighbor.get(cutKey(endpoint, sideNeighbor)) ?? -1
+  );
 
   const selectedEdgeSideNeighbor = (face: number[], endpoint: number) => {
     const idx = face.indexOf(endpoint);
@@ -896,10 +902,18 @@ export function bevelEdge(
     const sideA = selectedEdgeSideNeighbor(face, edgeA);
     const sideB = selectedEdgeSideNeighbor(face, edgeB);
     if (sideA < 0 || sideB < 0) return undefined;
-    const cutA = nextVertex++;
-    const cutB = nextVertex++;
-    cuts.push({ vertex: cutA, endpoint: edgeA, faceId, sideNeighbor: sideA });
-    cuts.push({ vertex: cutB, endpoint: edgeB, faceId, sideNeighbor: sideB });
+    let cutA = cutFor(edgeA, sideA);
+    if (cutA < 0) {
+      cutA = nextVertex++;
+      cutByEndpointNeighbor.set(cutKey(edgeA, sideA), cutA);
+      cuts.push({ vertex: cutA, endpoint: edgeA, faceId, sideNeighbor: sideA });
+    }
+    let cutB = cutFor(edgeB, sideB);
+    if (cutB < 0) {
+      cutB = nextVertex++;
+      cutByEndpointNeighbor.set(cutKey(edgeB, sideB), cutB);
+      cuts.push({ vertex: cutB, endpoint: edgeB, faceId, sideNeighbor: sideB });
+    }
     const pair: [number, number] = [cutA, cutB];
     faceCutByFaceId.set(faceId, pair);
     return pair;
@@ -932,6 +946,27 @@ export function bevelEdge(
     return faceIds.flatMap(faceId => Array.from(faceCutByFaceId.get(faceId) ?? []));
   };
 
+  const remapCell = (cell: number[]) => {
+    const remapped = cell.map(vertex => vertexMap[vertex]).filter(vertex => vertex >= 0);
+    return remapped.length === cell.length ? remapped : [];
+  };
+
+  const pushMappedVertex = (target: number[], vertex: number) => {
+    const mapped = vertexMap[vertex];
+    if (mapped >= 0) target.push(mapped);
+  };
+
+  const endpointReplacementInFace = (face: number[], endpointIndex: number) => {
+    const endpoint = face[endpointIndex];
+    const prev = face[(endpointIndex - 1 + face.length) % face.length];
+    const next = face[(endpointIndex + 1) % face.length];
+    const prevCut = cutFor(endpoint, prev);
+    const nextCut = cutFor(endpoint, next);
+    if (prevCut < 0 && nextCut < 0) return [];
+    if (prevCut >= 0 && nextCut >= 0) return prevCut === nextCut ? [prevCut] : [prevCut, nextCut];
+    return [prevCut >= 0 ? prevCut : nextCut];
+  };
+
   const replaceSelectedEdgeInFace = (faceId: number, face: number[]) => {
     const cutsForFace = faceCutByFaceId.get(faceId);
     if (!cutsForFace) return [];
@@ -950,12 +985,55 @@ export function bevelEdge(
         idx++;
         continue;
       }
-      nextFace.push(current);
+      pushMappedVertex(nextFace, current);
     }
     return nextFace;
   };
 
-  const remapWithoutSelectedEdge = (cell: number[]) => cell.filter(vertex => vertex !== edgeA && vertex !== edgeB);
+  const replaceAffectedEndpointsInFace = (face: number[]) => {
+    const nextFace: number[] = [];
+    for (let idx = 0; idx < face.length; idx++) {
+      const current = face[idx];
+      if (current === edgeA || current === edgeB) {
+        const replacement = endpointReplacementInFace(face, idx);
+        if (!replacement.length) return [];
+        nextFace.push(...replacement);
+      } else {
+        pushMappedVertex(nextFace, current);
+      }
+    }
+    return nextFace;
+  };
+
+  const cutVerticesInCell = (cell: number[]) => {
+    const source = new Set(cell);
+    const result: number[] = [];
+    const seen = new Set<number>();
+    for (const cut of cuts) {
+      if (!source.has(cut.endpoint) || !source.has(cut.sideNeighbor) || seen.has(cut.vertex)) continue;
+      seen.add(cut.vertex);
+      result.push(cut.vertex);
+    }
+    return result;
+  };
+
+  const replaceAffectedEndpointsInCell = (cell: number[]) => {
+    const nextCell: number[] = [];
+    const seen = new Set<number>();
+    for (const vertex of cell) {
+      if (vertex === edgeA || vertex === edgeB) continue;
+      const mapped = vertexMap[vertex];
+      if (mapped < 0 || seen.has(mapped)) continue;
+      seen.add(mapped);
+      nextCell.push(mapped);
+    }
+    for (const cutVertex of cutVerticesInCell(cell)) {
+      if (seen.has(cutVertex)) continue;
+      seen.add(cutVertex);
+      nextCell.push(cutVertex);
+    }
+    return nextCell;
+  };
 
   const nextCellsByDim: number[][][] = Array.from({ length: highestSourceDimension + 1 }, () => []);
   nextCellsByDim[0] = Array.from({ length: nextVertex }, (_entry, vertex) => [vertex]);
@@ -966,17 +1044,29 @@ export function bevelEdge(
     for (let cellId = 0; cellId < sourceCells.length; cellId++) {
       const cell = sourceCells[cellId];
       if (dim === 1 && sortedCellSignature(cell) === edgeKey) continue;
+      if (dim === 1 && hasAffectedEndpoint(cell)) {
+        const endpoint = cell[0] === edgeA || cell[0] === edgeB ? cell[0] : cell[1];
+        const neighbor = cell[0] === endpoint ? cell[1] : cell[0];
+        const cutVertex = cutFor(endpoint, neighbor);
+        const mappedNeighbor = vertexMap[neighbor];
+        if (cutVertex >= 0 && mappedNeighbor >= 0) {
+          pushUniqueCell(nextCellsByDim[1], [cutVertex, mappedNeighbor], signatures);
+        }
+        continue;
+      }
       if (dim === 2 && hasSelectedEdge(cell)) {
         pushUniqueCell(nextCellsByDim[2], replaceSelectedEdgeInFace(cellId, cell), signatures);
         continue;
       }
-      if (dim >= 3 && hasSelectedEdge(cell)) {
-        const faceIds = faceIdsInCell(cell);
-        const cutVertices = cutVerticesForFaceIds(faceIds);
-        pushUniqueCell(nextCellsByDim[dim], [...remapWithoutSelectedEdge(cell), ...cutVertices], signatures);
+      if (dim === 2 && hasAffectedEndpoint(cell)) {
+        pushUniqueCell(nextCellsByDim[2], replaceAffectedEndpointsInFace(cell), signatures);
         continue;
       }
-      pushUniqueCell(nextCellsByDim[dim], [...cell], signatures);
+      if (dim >= 3 && hasAffectedEndpoint(cell)) {
+        pushUniqueCell(nextCellsByDim[dim], replaceAffectedEndpointsInCell(cell), signatures);
+        continue;
+      }
+      pushUniqueCell(nextCellsByDim[dim], remapCell(cell), signatures);
     }
   }
 
