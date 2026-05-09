@@ -1574,7 +1574,16 @@ function syncSceneLightControls() {
   syncSceneLightRuntimes();
 }
 
-function removeSelectedSceneLight() {
+function runImmediateViewportOperation(kind: string, scope: 'edit' | 'object' | 'viewport' | 'light' | 'axis', commit: () => void) {
+  if (!viewportInteraction) {
+    commit();
+    return;
+  }
+  if (!viewportInteraction.startOperation({ kind, scope, commit })) return;
+  viewportInteraction.finishOperation(true);
+}
+
+function performRemoveSelectedSceneLight() {
   const selected = selectedSceneLightRuntime();
   if (!selected) return;
   pushUndoSnapshot();
@@ -1600,7 +1609,11 @@ function removeSelectedSceneLight() {
   requestSceneUrlUpdate();
 }
 
-function updateSelectedSceneLight(mutator: (state: SceneLightState) => void) {
+function removeSelectedSceneLight() {
+  runImmediateViewportOperation('remove-scene-light', 'light', performRemoveSelectedSceneLight);
+}
+
+function performUpdateSelectedSceneLight(mutator: (state: SceneLightState) => void) {
   const selected = selectedSceneLightRuntime();
   if (!selected) return;
   const previousKind = selected.state.kind;
@@ -1620,6 +1633,10 @@ function updateSelectedSceneLight(mutator: (state: SceneLightState) => void) {
   updateObjectList();
   updateTransformActionButtons();
   requestSceneUrlUpdate();
+}
+
+function updateSelectedSceneLight(mutator: (state: SceneLightState) => void) {
+  runImmediateViewportOperation('update-scene-light', 'light', () => performUpdateSelectedSceneLight(mutator));
 }
 
 function setSelectedSceneLightKind(kind: SceneLightKind) {
