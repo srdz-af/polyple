@@ -28,8 +28,16 @@ import {
   buildGeneratedCellTopology,
   cellCount,
   cloneCellTopology,
+  bevelEdge,
+  bevelSelectedEdges,
+  bevelVertices,
   deleteCellAndPrune,
   extrudeCell,
+  getCellVertices,
+  type BevelEdgeResult,
+  type BevelFaceBoundaryResult,
+  type BevelSelectedEdgesResult,
+  type BevelVertexResult,
   maxCellDimension,
   surfaceTopologyFromCellTopology,
   type CellTopology,
@@ -216,6 +224,28 @@ type DuplicatePlacement = {
 };
 type EditExtrusionToken = {
   undoSnapshot: PackedSceneUrlState;
+};
+type EditBevelGeometrySnapshot = {
+  X: Float32Array;
+  E: Uint32Array;
+  M: number;
+  cellTopology?: CellTopology;
+  surfaceTopology?: PrimitiveSurfaceTopology;
+};
+type EditBevelToken = {
+  undoSnapshot: PackedSceneUrlState;
+  kind: 'vertex' | 'edge';
+  instIdx: number;
+  dimension: number;
+  cellId: number;
+  vertices: number[];
+  targetVertices: number[];
+  targetEdges: Array<[number, number]>;
+  targetEdgeIds: number[];
+  amount: number;
+  smoothness: number;
+  applied: boolean;
+  original: EditBevelGeometrySnapshot;
 };
 
 const DEFAULT_BLOOM_INTENSITY = 0;
@@ -1894,6 +1924,190 @@ function surfaceTopologyForEditedCellTopology(topology?: CellTopology): Primitiv
   return surfaceTopologyFromCellTopology(topology) ?? emptySurfaceTopology();
 }
 
+function dimensionMajorValue(data: Float32Array, vertexCount: number, dimension: number, vertex: number, axis: number) {
+  return data[(axis * vertexCount) + vertex] ?? 0;
+}
+
+function projectFaceToLocal2D(
+  data: Float32Array,
+  vertexCount: number,
+  dimension: number,
+  vertices: number[],
+) {
+  if (dimension <= 1 || vertices.length < 3) return undefined;
+  const origin = vertices[0];
+  const u = new Float64Array(dimension);
+  const v = new Float64Array(dimension);
+  let uLengthSq = 0;
+
+  for (let idx = 1; idx < vertices.length && uLengthSq <= 1e-16; idx++) {
+    const vertex = vertices[idx];
+    uLengthSq = 0;
+    for (let axis = 0; axis < dimension; axis++) {
+      const delta = dimensionMajorValue(data, vertexCount, dimension, vertex, axis)
+        - dimensionMajorValue(data, vertexCount, dimension, origin, axis);
+      u[axis] = delta;
+      uLengthSq += delta * delta;
+    }
+  }
+  if (uLengthSq <= 1e-16) return undefined;
+  const uLength = Math.sqrt(uLengthSq);
+  for (let axis = 0; axis < dimension; axis++) u[axis] /= uLength;
+
+  let vLengthSq = 0;
+  for (let idx = 1; idx < vertices.length && vLengthSq <= 1e-16; idx++) {
+    const vertex = vertices[idx];
+    let dotU = 0;
+    for (let axis = 0; axis < dimension; axis++) {
+      dotU += (dimensionMajorValue(data, vertexCount, dimension, vertex, axis)
+        - dimensionMajorValue(data, vertexCount, dimension, origin, axis)) * u[axis];
+    }
+    vLengthSq = 0;
+    for (let axis = 0; axis < dimension; axis++) {
+      const delta = dimensionMajorValue(data, vertexCount, dimension, vertex, axis)
+        - dimensionMajorValue(data, vertexCount, dimension, origin, axis);
+      const component = delta - (dotU * u[axis]);
+      v[axis] = component;
+      vLengthSq += component * component;
+    }
+  }
+  if (vLengthSq <= 1e-16) return undefined;
+  const vLength = Math.sqrt(vLengthSq);
+  for (let axis = 0; axis < dimension; axis++) v[axis] /= vLength;
+
+  return vertices.map(vertex => {
+    let x = 0;
+    let y = 0;
+    for (let axis = 0; axis < dimension; axis++) {
+      const delta = dimensionMajorValue(data, vertexCount, dimension, vertex, axis)
+        - dimensionMajorValue(data, vertexCount, dimension, origin, axis);
+      x += delta * u[axis];
+      y += delta * v[axis];
+    }
+    return { x, y };
+  });
+}
+
+function signedPolygonArea2(points: Array<{ x: number; y: number }>, polygon: number[]) {
+  let area = 0;
+  for (let i = 0; i < polygon.length; i++) {
+    const a = points[polygon[i]];
+    const b = points[polygon[(i + 1) % polygon.length]];
+    area += (a.x * b.y) - (b.x * a.y);
+  }
+  return area;
+}
+
+function cross2(a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }) {
+  return ((b.x - a.x) * (c.y - a.y)) - ((b.y - a.y) * (c.x - a.x));
+}
+
+function pointInTriangle2D(
+  point: { x: number; y: number },
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  c: { x: number; y: number },
+) {
+  const c1 = cross2(a, b, point);
+  const c2 = cross2(b, c, point);
+  const c3 = cross2(c, a, point);
+  const hasNegative = c1 < -1e-9 || c2 < -1e-9 || c3 < -1e-9;
+  const hasPositive = c1 > 1e-9 || c2 > 1e-9 || c3 > 1e-9;
+  return !(hasNegative && hasPositive);
+}
+
+function triangulateProjectedPolygon(points: Array<{ x: number; y: number }>) {
+  if (points.length < 3) return undefined;
+  if (points.length === 3) return [[0, 1, 2]];
+  const polygon = points.map((_point, index) => index);
+  const area = signedPolygonArea2(points, polygon);
+  if (Math.abs(area) <= 1e-12) return undefined;
+  const ccw = area > 0;
+  const triangles: number[][] = [];
+  let guard = 0;
+
+  while (polygon.length > 3 && guard++ < points.length * points.length) {
+    let earIndex = -1;
+    for (let i = 0; i < polygon.length; i++) {
+      const prev = polygon[(i - 1 + polygon.length) % polygon.length];
+      const curr = polygon[i];
+      const next = polygon[(i + 1) % polygon.length];
+      const turn = cross2(points[prev], points[curr], points[next]);
+      if (ccw ? turn <= 1e-10 : turn >= -1e-10) continue;
+
+      let containsPoint = false;
+      for (const candidate of polygon) {
+        if (candidate === prev || candidate === curr || candidate === next) continue;
+        if (pointInTriangle2D(points[candidate], points[prev], points[curr], points[next])) {
+          containsPoint = true;
+          break;
+        }
+      }
+      if (containsPoint) continue;
+      earIndex = i;
+      triangles.push(ccw ? [prev, curr, next] : [prev, next, curr]);
+      break;
+    }
+
+    if (earIndex < 0) return undefined;
+    polygon.splice(earIndex, 1);
+  }
+
+  if (polygon.length === 3) {
+    triangles.push(ccw ? [polygon[0], polygon[1], polygon[2]] : [polygon[0], polygon[2], polygon[1]]);
+  }
+  return triangles.length ? triangles : undefined;
+}
+
+function surfaceTopologyFromPositionedCellTopology(
+  topology: CellTopology | undefined,
+  data: Float32Array,
+  vertexCount: number,
+): PrimitiveSurfaceTopology | undefined {
+  if (!topology || vertexCount <= 0) return undefined;
+  const dimension = Math.floor(data.length / vertexCount);
+  if (dimension <= 0) return undefined;
+
+  const triangles: number[] = [];
+  const facetIds: number[] = [];
+  const faceCount = cellCount(topology, 2);
+  for (let faceId = 0; faceId < faceCount; faceId++) {
+    const seen = new Set<number>();
+    const face = getCellVertices(topology, 2, faceId).filter(vertex => {
+      if (vertex < 0 || vertex >= vertexCount || seen.has(vertex)) return false;
+      seen.add(vertex);
+      return true;
+    });
+    if (face.length < 3) continue;
+    if (face.length === 3) {
+      triangles.push(face[0], face[1], face[2]);
+      facetIds.push(faceId & 0xffff);
+      continue;
+    }
+
+    const projected = projectFaceToLocal2D(data, vertexCount, dimension, face);
+    const localTriangles = projected ? triangulateProjectedPolygon(projected) : undefined;
+    if (localTriangles) {
+      for (const triangle of localTriangles) {
+        triangles.push(face[triangle[0]], face[triangle[1]], face[triangle[2]]);
+        facetIds.push(faceId & 0xffff);
+      }
+      continue;
+    }
+
+    for (let i = 1; i < face.length - 1; i++) {
+      triangles.push(face[0], face[i], face[i + 1]);
+      facetIds.push(faceId & 0xffff);
+    }
+  }
+
+  if (triangles.length < 3 || facetIds.length * 3 !== triangles.length) return undefined;
+  return {
+    triangles: new Uint32Array(triangles),
+    facetIds: new Uint16Array(facetIds),
+  };
+}
+
 function shouldPackCellTopology(
   kind: PrimitiveKind,
   source: DataSource | undefined,
@@ -3219,6 +3433,626 @@ function appendDimensionMajorDuplicateVertices(
   return expanded;
 }
 
+const BEVEL_MAX_AMOUNT = 0.995;
+
+type BevelSphereBase = {
+  dimension: number;
+  origin: number[];
+  tangentDistance: number;
+  directions: Map<number, Float64Array>;
+};
+
+type LocalBevelSphere = {
+  center: Float64Array;
+  radius: number;
+  endpointRadials: Map<number, Float64Array>;
+};
+
+function vectorDot(a: ArrayLike<number>, b: ArrayLike<number>) {
+  let dot = 0;
+  for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
+  return dot;
+}
+
+function vectorLength(vector: ArrayLike<number>) {
+  return Math.sqrt(vectorDot(vector, vector));
+}
+
+function normalizedDeltaFromVertex(
+  data: Float32Array,
+  vertexCount: number,
+  dimension: number,
+  origin: number[],
+  vertex: number,
+) {
+  const direction = new Float64Array(dimension);
+  let lengthSq = 0;
+  for (let dim = 0; dim < dimension; dim++) {
+    const delta = (data[(dim * vertexCount) + vertex] ?? origin[dim]) - origin[dim];
+    direction[dim] = delta;
+    lengthSq += delta * delta;
+  }
+  const length = Math.sqrt(lengthSq);
+  if (length <= 1e-8) return null;
+  for (let dim = 0; dim < dimension; dim++) direction[dim] /= length;
+  return { direction, length };
+}
+
+function solveLinearSystem(matrix: number[][], rhs: number[]) {
+  const size = rhs.length;
+  const augmented = matrix.map((row, idx) => [...row, rhs[idx]]);
+  for (let col = 0; col < size; col++) {
+    let pivot = col;
+    for (let row = col + 1; row < size; row++) {
+      if (Math.abs(augmented[row][col]) > Math.abs(augmented[pivot][col])) pivot = row;
+    }
+    if (Math.abs(augmented[pivot][col]) <= 1e-8) return null;
+    if (pivot !== col) [augmented[pivot], augmented[col]] = [augmented[col], augmented[pivot]];
+
+    const divisor = augmented[col][col];
+    for (let entry = col; entry <= size; entry++) augmented[col][entry] /= divisor;
+    for (let row = 0; row < size; row++) {
+      if (row === col) continue;
+      const factor = augmented[row][col];
+      if (Math.abs(factor) <= 1e-12) continue;
+      for (let entry = col; entry <= size; entry++) augmented[row][entry] -= factor * augmented[col][entry];
+    }
+  }
+  return augmented.map(row => row[size]);
+}
+
+function slerpUnitVectors(a: ArrayLike<number>, b: ArrayLike<number>, t: number) {
+  const dot = Math.max(-1, Math.min(1, vectorDot(a, b)));
+  const result = new Float64Array(a.length);
+  if (1 - Math.abs(dot) <= 1e-6) {
+    for (let i = 0; i < a.length; i++) result[i] = ((1 - t) * a[i]) + (t * b[i]);
+    const length = vectorLength(result);
+    if (length > 1e-8) {
+      for (let i = 0; i < result.length; i++) result[i] /= length;
+    }
+    return result;
+  }
+
+  const theta = Math.acos(dot);
+  const sinTheta = Math.sin(theta);
+  const wa = Math.sin((1 - t) * theta) / sinTheta;
+  const wb = Math.sin(t * theta) / sinTheta;
+  for (let i = 0; i < a.length; i++) result[i] = (wa * a[i]) + (wb * b[i]);
+  return result;
+}
+
+function buildBevelSphere(
+  data: Float32Array,
+  oldVertexCount: number,
+  selectedVertex: number,
+  bevel: BevelVertexResult,
+  amount: number,
+): BevelSphereBase | null {
+  const dimension = oldVertexCount > 0 ? Math.floor(data.length / oldVertexCount) : 0;
+  if (dimension <= 0) return null;
+
+  const origin = Array.from({ length: dimension }, (_entry, dim) => (
+    data[(dim * oldVertexCount) + selectedVertex] ?? 0
+  ));
+  const neighborIds = Array.from(new Set(bevel.cuts.flatMap(cut => cut.neighbors)));
+  const directions = new Map<number, Float64Array>();
+  let minLength = Number.POSITIVE_INFINITY;
+  for (const neighbor of neighborIds) {
+    const delta = normalizedDeltaFromVertex(data, oldVertexCount, dimension, origin, neighbor);
+    if (!delta) continue;
+    directions.set(neighbor, delta.direction);
+    minLength = Math.min(minLength, delta.length);
+  }
+  if (!directions.size || !Number.isFinite(minLength)) return null;
+
+  const tangentDistance = Math.max(0, Math.min(BEVEL_MAX_AMOUNT, amount)) * minLength;
+  if (tangentDistance <= 1e-8) return null;
+  return {
+    dimension,
+    origin,
+    tangentDistance,
+    directions,
+  };
+}
+
+function buildLocalBevelSphere(
+  sphere: BevelSphereBase,
+  neighborIds: number[],
+): LocalBevelSphere | null {
+  const activeNeighbors = Array.from(new Set(neighborIds))
+    .filter(neighbor => sphere.directions.has(neighbor));
+  if (activeNeighbors.length < 2) return null;
+  const gram = activeNeighbors.map(a => activeNeighbors.map(b => (
+    vectorDot(sphere.directions.get(a) ?? [], sphere.directions.get(b) ?? [])
+  )));
+  const rhs = activeNeighbors.map(() => sphere.tangentDistance);
+  const coefficients = solveLinearSystem(gram, rhs);
+  if (!coefficients) return null;
+
+  const center = new Float64Array(sphere.dimension);
+  activeNeighbors.forEach((neighbor, idx) => {
+    const direction = sphere.directions.get(neighbor);
+    if (!direction) return;
+    const coefficient = coefficients[idx] ?? 0;
+    for (let dim = 0; dim < sphere.dimension; dim++) center[dim] += coefficient * direction[dim];
+  });
+
+  const endpointRadials = new Map<number, Float64Array>();
+  let radius = 0;
+  for (const neighbor of activeNeighbors) {
+    const direction = sphere.directions.get(neighbor);
+    if (!direction) continue;
+    const radial = new Float64Array(sphere.dimension);
+    for (let dim = 0; dim < sphere.dimension; dim++) radial[dim] = (direction[dim] * sphere.tangentDistance) - center[dim];
+    const radialLength = vectorLength(radial);
+    if (radialLength <= 1e-8) continue;
+    radius += radialLength;
+    for (let dim = 0; dim < sphere.dimension; dim++) radial[dim] /= radialLength;
+    endpointRadials.set(neighbor, radial);
+  }
+  if (!endpointRadials.size) return null;
+  radius /= endpointRadials.size;
+
+  return {
+    center,
+    radius,
+    endpointRadials,
+  };
+}
+
+function bevelArcPoint(
+  sphere: BevelSphereBase,
+  fromNeighbor: number,
+  toNeighbor: number,
+  fromWeight: number,
+  toWeight: number,
+) {
+  const localSphere = buildLocalBevelSphere(sphere, [fromNeighbor, toNeighbor]);
+  if (!localSphere) return null;
+
+  const from = localSphere.endpointRadials.get(fromNeighbor);
+  const to = localSphere.endpointRadials.get(toNeighbor);
+  const total = fromWeight + toWeight;
+  if (!from || !to || total <= 1e-8) return null;
+
+  const radial = slerpUnitVectors(from, to, toWeight / total);
+  const point = new Float64Array(sphere.dimension);
+  for (let dim = 0; dim < sphere.dimension; dim++) {
+    point[dim] = sphere.origin[dim]
+      + localSphere.center[dim]
+      + (radial[dim] * localSphere.radius);
+  }
+  return point;
+}
+
+function bevelEndpointPoint(sphere: BevelSphereBase, neighbor: number) {
+  const direction = sphere.directions.get(neighbor);
+  if (!direction) return null;
+  const point = new Float64Array(sphere.dimension);
+  for (let dim = 0; dim < sphere.dimension; dim++) {
+    point[dim] = sphere.origin[dim] + (direction[dim] * sphere.tangentDistance);
+  }
+  return point;
+}
+
+function blendedBevelCapPoint(
+  sphere: BevelSphereBase,
+  neighbors: number[],
+  weights: number[],
+) {
+  const point = new Float64Array(sphere.dimension);
+  let totalWeight = 0;
+  for (let i = 0; i < neighbors.length - 1; i++) {
+    const weightA = weights[i] ?? 0;
+    if (weightA <= 0) continue;
+    for (let j = i + 1; j < neighbors.length; j++) {
+      const weightB = weights[j] ?? 0;
+      if (weightB <= 0) continue;
+      const pairPoint = bevelArcPoint(sphere, neighbors[i], neighbors[j], weightA, weightB);
+      if (!pairPoint) continue;
+
+      const pairWeight = weightA * weightB;
+      totalWeight += pairWeight;
+      for (let dim = 0; dim < sphere.dimension; dim++) point[dim] += pairPoint[dim] * pairWeight;
+    }
+  }
+
+  if (totalWeight <= 1e-8) return null;
+  for (let dim = 0; dim < sphere.dimension; dim++) point[dim] /= totalWeight;
+  return point;
+}
+
+function circleProfileFullness(segments: number) {
+  const known = [0, 0.559, 0.642, 0.551, 0.646, 0.624, 0.646, 0.619, 0.647, 0.639, 0.647];
+  if (segments >= 1 && segments <= known.length) return known[segments - 1];
+  return segments % 2 === 0
+    ? (2.4506 * 0.5) - (0.000003 * segments) - 0.6266
+    : (2.3635 * 0.5) + (0.000152 * segments) - 0.6060;
+}
+
+function boundaryProfilePoint(
+  sphere: BevelSphereBase,
+  neighbors: number[],
+  weights: number[],
+) {
+  const active: Array<{ neighbor: number; weight: number }> = [];
+  for (let idx = 0; idx < neighbors.length; idx++) {
+    const weight = weights[idx] ?? 0;
+    if (weight > 1e-8) active.push({ neighbor: neighbors[idx], weight });
+  }
+  if (active.length === 1) return bevelEndpointPoint(sphere, active[0].neighbor);
+  if (active.length === 2) {
+    return bevelArcPoint(
+      sphere,
+      active[0].neighbor,
+      active[1].neighbor,
+      active[0].weight,
+      active[1].weight,
+    );
+  }
+  return null;
+}
+
+function blenderStyleBevelCapPoint(
+  sphere: BevelSphereBase,
+  neighbors: number[],
+  weights: number[],
+  segments: number,
+) {
+  if (neighbors.length !== 3) return null;
+  const total = weights.reduce((sum, weight) => sum + Math.max(0, weight), 0);
+  if (total <= 1e-8) return null;
+
+  const normalized = weights.map(weight => Math.max(0, weight) / total);
+  const minWeight = Math.min(normalized[0], normalized[1], normalized[2]);
+  const centerT = Math.min(1, Math.max(0, minWeight * 3));
+
+  const endpoints = neighbors.map(neighbor => bevelEndpointPoint(sphere, neighbor));
+  if (endpoints.some(point => !point)) return null;
+
+  const boundCenter = new Float64Array(sphere.dimension);
+  for (const endpoint of endpoints) {
+    if (!endpoint) continue;
+    for (let dim = 0; dim < sphere.dimension; dim++) boundCenter[dim] += endpoint[dim] / endpoints.length;
+  }
+
+  const fullness = Math.min(1, Math.max(0, circleProfileFullness(segments)));
+  const center = new Float64Array(sphere.dimension);
+  for (let dim = 0; dim < sphere.dimension; dim++) {
+    center[dim] = boundCenter[dim] + ((sphere.origin[dim] - boundCenter[dim]) * fullness);
+  }
+
+  if (centerT >= 1 - 1e-8) return center;
+
+  const boundaryScale = 1 - (3 * minWeight);
+  const boundaryWeights = boundaryScale > 1e-8
+    ? normalized.map(weight => (weight - minWeight) / boundaryScale)
+    : normalized;
+  const boundary = boundaryProfilePoint(sphere, neighbors, boundaryWeights);
+  if (!boundary) return center;
+
+  const point = new Float64Array(sphere.dimension);
+  for (let dim = 0; dim < sphere.dimension; dim++) {
+    point[dim] = boundary[dim] + ((center[dim] - boundary[dim]) * centerT);
+  }
+  return point;
+}
+
+function writeDimensionMajorPoint(data: Float32Array, vertexCount: number, vertex: number, point: ArrayLike<number>) {
+  for (let dim = 0; dim < point.length; dim++) data[(dim * vertexCount) + vertex] = point[dim];
+}
+
+function buildBeveledVertexData(
+  data: Float32Array,
+  oldVertexCount: number,
+  selectedVertex: number,
+  bevel: BevelVertexResult,
+  amount: number,
+) {
+  const dimension = oldVertexCount > 0 ? Math.floor(data.length / oldVertexCount) : 0;
+  const next = new Float32Array(dimension * bevel.vertexCount);
+  for (let oldVertex = 0; oldVertex < oldVertexCount; oldVertex++) {
+    const mapped = bevel.vertexMap[oldVertex];
+    if (mapped < 0) continue;
+    for (let dim = 0; dim < dimension; dim++) {
+      next[(dim * bevel.vertexCount) + mapped] = data[(dim * oldVertexCount) + oldVertex];
+    }
+  }
+
+  const spheres = new Map<number, BevelSphereBase | null>();
+  const sphereFor = (sourceVertex: number) => {
+    if (!spheres.has(sourceVertex)) {
+      spheres.set(sourceVertex, buildBevelSphere(data, oldVertexCount, sourceVertex, bevel, amount));
+    }
+    return spheres.get(sourceVertex) ?? null;
+  };
+  for (const cut of bevel.cuts) {
+    const sourceVertex = cut.sourceVertex ?? selectedVertex;
+    const sphere = sphereFor(sourceVertex);
+    if (!sphere) continue;
+    if (cut.neighbors.length === 1) {
+      const point = bevelEndpointPoint(sphere, cut.neighbors[0]);
+      if (point) writeDimensionMajorPoint(next, bevel.vertexCount, cut.vertex, point);
+      continue;
+    }
+
+    let point: Float64Array | null = null;
+    if (cut.neighbors.length === 2) {
+      point = bevelArcPoint(
+        sphere,
+        cut.neighbors[0],
+        cut.neighbors[1],
+        cut.weights[0] ?? 0,
+        cut.weights[1] ?? 0,
+      );
+    } else {
+      point = blenderStyleBevelCapPoint(sphere, cut.neighbors, cut.weights, bevel.smoothness)
+        ?? blendedBevelCapPoint(sphere, cut.neighbors, cut.weights);
+    }
+    if (!point) continue;
+
+    for (let dim = 0; dim < dimension; dim++) {
+      next[(dim * bevel.vertexCount) + cut.vertex] = point[dim];
+    }
+  }
+  return next;
+}
+
+function buildBeveledEdgeData(
+  data: Float32Array,
+  oldVertexCount: number,
+  bevel: BevelEdgeResult | BevelFaceBoundaryResult | BevelSelectedEdgesResult,
+  amount: number,
+  fixedDistance?: number,
+) {
+  const dimension = oldVertexCount > 0 ? Math.floor(data.length / oldVertexCount) : 0;
+  const next = new Float32Array(dimension * bevel.vertexCount);
+  for (let oldVertex = 0; oldVertex < oldVertexCount; oldVertex++) {
+    const mapped = bevel.vertexMap[oldVertex];
+    if (mapped < 0) continue;
+    for (let dim = 0; dim < dimension; dim++) {
+      next[(dim * bevel.vertexCount) + mapped] = data[(dim * oldVertexCount) + oldVertex];
+    }
+  }
+
+  let minLength = Number.POSITIVE_INFINITY;
+  for (const cut of bevel.cuts) {
+    for (const neighbor of [cut.sideNeighbor, cut.sideNeighborB, cut.profileOuterNeighbor]) {
+      if (neighbor === undefined) continue;
+      let lengthSq = 0;
+      for (let dim = 0; dim < dimension; dim++) {
+        const delta = data[(dim * oldVertexCount) + neighbor] - data[(dim * oldVertexCount) + cut.endpoint];
+        lengthSq += delta * delta;
+      }
+      const length = Math.sqrt(lengthSq);
+      if (length > 1e-8) minLength = Math.min(minLength, length);
+    }
+  }
+  if (!Number.isFinite(minLength)) return next;
+
+  const unitDirection = (endpoint: number, neighbor: number) => {
+    const direction = new Float64Array(dimension);
+    let lengthSq = 0;
+    for (let dim = 0; dim < dimension; dim++) {
+      const delta = data[(dim * oldVertexCount) + neighbor] - data[(dim * oldVertexCount) + endpoint];
+      direction[dim] = delta;
+      lengthSq += delta * delta;
+    }
+    const length = Math.sqrt(lengthSq);
+    if (length <= 1e-8) return null;
+    for (let dim = 0; dim < dimension; dim++) direction[dim] /= length;
+    return { direction, length };
+  };
+
+  const distance = fixedDistance ?? (Math.max(0, Math.min(BEVEL_MAX_AMOUNT, amount)) * minLength);
+  for (const cut of bevel.cuts) {
+    const endpoint = cut.endpoint;
+    const first = unitDirection(endpoint, cut.sideNeighbor);
+    if (!first) continue;
+
+    if (cut.sideNeighborB === undefined) {
+      const cutDistance = Math.min(distance, first.length * BEVEL_MAX_AMOUNT);
+      for (let dim = 0; dim < dimension; dim++) {
+        const origin = data[(dim * oldVertexCount) + endpoint];
+        next[(dim * bevel.vertexCount) + cut.vertex] = origin + (first.direction[dim] * cutDistance);
+      }
+      continue;
+    }
+
+    const second = unitDirection(endpoint, cut.sideNeighborB);
+    if (!second) continue;
+    const outer = cut.profileOuterNeighbor !== undefined
+      ? unitDirection(endpoint, cut.profileOuterNeighbor)
+      : null;
+    const cutDistance = Math.min(
+      distance,
+      first.length * BEVEL_MAX_AMOUNT,
+      second.length * BEVEL_MAX_AMOUNT,
+      outer ? outer.length * BEVEL_MAX_AMOUNT : Number.POSITIVE_INFINITY,
+    );
+    if (outer) {
+      const t = Math.max(0, Math.min(1, cut.profileT ?? 0.5));
+      let dot = 0;
+      for (let dim = 0; dim < dimension; dim++) dot += first.direction[dim] * second.direction[dim];
+      dot = Math.max(-0.999, Math.min(0.999, dot));
+      const sinAngle = Math.sqrt(Math.max(0, 1 - (dot * dot)));
+      const scale = sinAngle > 1e-6 ? cutDistance / sinAngle : cutDistance * 0.5;
+      const oneMinusT = 1 - t;
+      for (let dim = 0; dim < dimension; dim++) {
+        const origin = data[(dim * oldVertexCount) + endpoint];
+        const inner = origin + ((first.direction[dim] + second.direction[dim]) * scale);
+        const outerPoint = origin + (outer.direction[dim] * cutDistance);
+        next[(dim * bevel.vertexCount) + cut.vertex] = (
+          (inner * oneMinusT * oneMinusT)
+          + (origin * 2 * oneMinusT * t)
+          + (outerPoint * t * t)
+        );
+      }
+      continue;
+    }
+    if (cut.cornerMeet) {
+      let dot = 0;
+      for (let dim = 0; dim < dimension; dim++) dot += first.direction[dim] * second.direction[dim];
+      dot = Math.max(-0.999, Math.min(0.999, dot));
+      const sinAngle = Math.sqrt(Math.max(0, 1 - (dot * dot)));
+      const scale = sinAngle > 1e-6 ? cutDistance / sinAngle : cutDistance * 0.5;
+      for (let dim = 0; dim < dimension; dim++) {
+        const origin = data[(dim * oldVertexCount) + endpoint];
+        next[(dim * bevel.vertexCount) + cut.vertex] = origin + ((first.direction[dim] + second.direction[dim]) * scale);
+      }
+      continue;
+    }
+    const t = Math.max(0, Math.min(1, cut.profileT ?? 0.5));
+    let dot = 0;
+    for (let dim = 0; dim < dimension; dim++) dot += first.direction[dim] * second.direction[dim];
+    dot = Math.max(-0.999, Math.min(0.999, dot));
+
+    if (Math.abs(1 + dot) < 1e-5) {
+      for (let dim = 0; dim < dimension; dim++) {
+        const origin = data[(dim * oldVertexCount) + endpoint];
+        const a = first.direction[dim] * cutDistance;
+        const b = second.direction[dim] * cutDistance;
+        next[(dim * bevel.vertexCount) + cut.vertex] = origin + (a * (1 - t)) + (b * t);
+      }
+      continue;
+    }
+
+    const centerScale = cutDistance / (1 + dot);
+    const start = new Float64Array(dimension);
+    const end = new Float64Array(dimension);
+    let startLengthSq = 0;
+    let endLengthSq = 0;
+    for (let dim = 0; dim < dimension; dim++) {
+      const center = centerScale * (first.direction[dim] + second.direction[dim]);
+      start[dim] = (first.direction[dim] * cutDistance) - center;
+      end[dim] = (second.direction[dim] * cutDistance) - center;
+      startLengthSq += start[dim] * start[dim];
+      endLengthSq += end[dim] * end[dim];
+    }
+    const radius = Math.sqrt(startLengthSq);
+    const endRadius = Math.sqrt(endLengthSq);
+    if (radius <= 1e-8 || endRadius <= 1e-8) continue;
+    let profileDot = 0;
+    for (let dim = 0; dim < dimension; dim++) {
+      start[dim] /= radius;
+      end[dim] /= endRadius;
+      profileDot += start[dim] * end[dim];
+    }
+    profileDot = Math.max(-1, Math.min(1, profileDot));
+    const angle = Math.acos(profileDot);
+    const sinAngle = Math.sin(angle);
+    for (let dim = 0; dim < dimension; dim++) {
+      const origin = data[(dim * oldVertexCount) + endpoint];
+      const center = centerScale * (first.direction[dim] + second.direction[dim]);
+      const arcDirection = Math.abs(sinAngle) > 1e-6
+        ? ((Math.sin((1 - t) * angle) * start[dim]) + (Math.sin(t * angle) * end[dim])) / sinAngle
+        : (start[dim] * (1 - t)) + (end[dim] * t);
+      next[(dim * bevel.vertexCount) + cut.vertex] = origin + center + (arcDirection * radius);
+    }
+  }
+
+  return next;
+}
+
+function initialVertexOrigins(vertexCount: number) {
+  return Int32Array.from({ length: vertexCount }, (_entry, vertex) => vertex);
+}
+
+function vertexDistanceSquared(data: Float32Array, vertexCount: number, a: number, b: number) {
+  if (a < 0 || b < 0 || a >= vertexCount || b >= vertexCount) return 0;
+  const dimension = vertexCount > 0 ? Math.floor(data.length / vertexCount) : 0;
+  let lengthSq = 0;
+  for (let dim = 0; dim < dimension; dim++) {
+    const delta = data[(dim * vertexCount) + b] - data[(dim * vertexCount) + a];
+    lengthSq += delta * delta;
+  }
+  return lengthSq;
+}
+
+function findEdgeWithOrigins(
+  topology: CellTopology | undefined,
+  origins: Int32Array,
+  originA: number,
+  originB: number,
+  data?: Float32Array,
+  vertexCount = origins.length,
+) {
+  if (!topology || originA === originB) return -1;
+  const edgeCount = cellCount(topology, 1);
+  let bestEdge = -1;
+  let bestLengthSq = -1;
+  for (let edgeId = 0; edgeId < edgeCount; edgeId++) {
+    const edge = getCellVertices(topology, 1, edgeId);
+    if (edge.length < 2) continue;
+    const a = origins[edge[0]];
+    const b = origins[edge[1]];
+    if ((a !== originA || b !== originB) && (a !== originB || b !== originA)) continue;
+    if (!data) return edgeId;
+    const lengthSq = vertexDistanceSquared(data, vertexCount, edge[0], edge[1]);
+    if (lengthSq > bestLengthSq) {
+      bestLengthSq = lengthSq;
+      bestEdge = edgeId;
+    }
+  }
+  return bestEdge;
+}
+
+function edgeListFromCellTopology(topology: CellTopology | undefined) {
+  const packed: number[] = [];
+  const edgeCount = cellCount(topology, 1);
+  for (let edgeId = 0; edgeId < edgeCount; edgeId++) {
+    const edge = getCellVertices(topology, 1, edgeId);
+    if (edge.length >= 2) packed.push(edge[0], edge[1]);
+  }
+  return packed;
+}
+
+function batchEdgeBevelDistance(
+  data: Float32Array,
+  vertexCount: number,
+  targetEdges: Array<[number, number]>,
+  amount: number,
+) {
+  let minLengthSq = Number.POSITIVE_INFINITY;
+  for (const [a, b] of targetEdges) {
+    const lengthSq = vertexDistanceSquared(data, vertexCount, a, b);
+    if (lengthSq > 1e-12) minLengthSq = Math.min(minLengthSq, lengthSq);
+  }
+  return Number.isFinite(minLengthSq)
+    ? Math.max(0, Math.min(BEVEL_MAX_AMOUNT, amount)) * Math.sqrt(minLengthSq)
+    : undefined;
+}
+
+function remapOriginsAfterVertexBevel(
+  origins: Int32Array,
+  selectedVertex: number,
+  bevel: BevelVertexResult,
+) {
+  const next = new Int32Array(bevel.vertexCount);
+  next.fill(-1);
+  for (let vertex = 0; vertex < origins.length; vertex++) {
+    const mapped = bevel.vertexMap[vertex];
+    if (mapped >= 0) next[mapped] = origins[vertex];
+  }
+  const selectedOrigin = origins[selectedVertex] ?? -1;
+  for (const cut of bevel.cuts) next[cut.vertex] = origins[cut.sourceVertex ?? selectedVertex] ?? selectedOrigin;
+  return next;
+}
+
+function remapOriginsAfterEdgeBevel(
+  origins: Int32Array,
+  bevel: BevelEdgeResult | BevelFaceBoundaryResult | BevelSelectedEdgesResult,
+) {
+  const next = new Int32Array(bevel.vertexCount);
+  next.fill(-1);
+  for (let vertex = 0; vertex < origins.length; vertex++) {
+    const mapped = bevel.vertexMap[vertex];
+    if (mapped >= 0) next[mapped] = origins[vertex];
+  }
+  for (const cut of bevel.cuts) next[cut.vertex] = origins[cut.endpoint] ?? -1;
+  return next;
+}
+
 function deleteSelected() {
   const deleteIndices = selectedInstances.filter(idx => idx >= 0).sort((a, b) => b - a);
   const deleteLightIndices = selectedInstances
@@ -3322,6 +4156,16 @@ function selectedGeometryDimension() {
   return extraInstances[selectedInstance]?.originalN ?? 0;
 }
 
+function finalizeCommittedGeometryEdit() {
+  projectAndRenderAll();
+  applyObjectVisibility();
+  updateObjectList();
+  updateSelectionOutline();
+  updateTransformActionButtons();
+  if (PARAMS.editMode && getObjectVisible(selectedInstance)) updateVertexCloud(selectedInstance);
+  requestSceneUrlUpdate();
+}
+
 function extrudeSelectedEditCell(): EditExtrusionToken | null {
   if (!PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return null;
   const selection = transformController.getEditSelection();
@@ -3378,12 +4222,287 @@ function commitEditExtrusion(token: unknown) {
   if (!isEditExtrusionToken(token)) return;
   if (sceneUrlApplying) return;
   sceneHistory.push(token.undoSnapshot);
-  requestSceneUrlUpdate();
+  finalizeCommittedGeometryEdit();
 }
 
 function cancelEditExtrusion(token: unknown) {
   if (!isEditExtrusionToken(token)) return;
   void applySceneUrlState(token.undoSnapshot);
+}
+
+function captureEditBevelTargetSnapshot(instIdx: number): EditBevelGeometrySnapshot | null {
+  if (instIdx === BASE_SELECTION) {
+    if (M <= 0 || !baseVisible) return null;
+    return {
+      X: new Float32Array(X),
+      E: new Uint32Array(E),
+      M,
+      cellTopology: cloneCellTopology(baseCellTopology),
+      surfaceTopology: clonePrimitiveSurfaceTopology(baseSurfaceTopology),
+    };
+  }
+
+  const target = extraInstances[instIdx];
+  if (!target || target.M <= 0 || !target.visible) return null;
+  return {
+    X: new Float32Array(target.X),
+    E: new Uint32Array(target.E),
+    M: target.M,
+    cellTopology: cloneCellTopology(target.cellTopology),
+    surfaceTopology: clonePrimitiveSurfaceTopology(target.surfaceTopology),
+  };
+}
+
+function restoreEditBevelTarget(token: EditBevelToken) {
+  const original = token.original;
+  if (token.instIdx === BASE_SELECTION) {
+    X = new Float32Array(original.X);
+    M = original.M;
+    Y = new Float32Array(3 * M);
+    E = new Uint32Array(original.E);
+    baseCellTopology = cloneCellTopology(original.cellTopology);
+    baseSurfaceTopology = clonePrimitiveSurfaceTopology(original.surfaceTopology);
+    if (M > 0) {
+      rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
+      rendererND.setSurface(baseSurface);
+      rendererND.setMode(PARAMS.renderMode);
+      baseVisible = true;
+    }
+  } else {
+    const target = extraInstances[token.instIdx];
+    if (!target) return;
+    target.X = new Float32Array(original.X);
+    target.M = original.M;
+    target.Y = new Float32Array(3 * target.M);
+    target.E = new Uint32Array(original.E);
+    target.cellTopology = cloneCellTopology(original.cellTopology);
+    target.surfaceTopology = clonePrimitiveSurfaceTopology(original.surfaceTopology);
+    target.renderer.build(target.M, target.E, target.surfaceTopology, target.cellTopology);
+    target.renderer.setSurface(target.surface);
+    target.renderer.setMode(PARAMS.renderMode);
+  }
+}
+
+function collectEditBevelTargets(
+  topology: CellTopology | undefined,
+  selection: { dimension: number; cellId: number; vertices: number[] },
+  kind: 'vertex' | 'edge',
+) {
+  if (!topology) return null;
+  const selectedVertices = selection.vertices
+    .filter(vertex => Number.isInteger(vertex) && vertex >= 0)
+    .filter((vertex, index, arr) => arr.indexOf(vertex) === index);
+  if (!selectedVertices.length) return null;
+
+  if (kind === 'vertex') {
+    return {
+      targetVertices: selectedVertices,
+      targetEdges: [] as Array<[number, number]>,
+      targetEdgeIds: [] as number[],
+    };
+  }
+
+  const targetEdges: Array<[number, number]> = [];
+  const targetEdgeIds: number[] = [];
+  const seen = new Set<string>();
+  const selectedSet = new Set(selectedVertices);
+  const addEdge = (edgeId: number, edge: number[]) => {
+    if (edge.length < 2) return;
+    const a = edge[0];
+    const b = edge[1];
+    if (!selectedSet.has(a) || !selectedSet.has(b) || a === b) return;
+    const signature = a < b ? `${a}:${b}` : `${b}:${a}`;
+    if (seen.has(signature)) return;
+    seen.add(signature);
+    targetEdges.push([a, b]);
+    targetEdgeIds.push(edgeId);
+  };
+
+  if (selection.dimension === 1) {
+    addEdge(selection.cellId, getCellVertices(topology, 1, selection.cellId));
+  } else {
+    for (let edgeId = 0; edgeId < cellCount(topology, 1); edgeId++) {
+      addEdge(edgeId, getCellVertices(topology, 1, edgeId));
+    }
+  }
+
+  return targetEdges.length ? { targetVertices: [] as number[], targetEdges, targetEdgeIds } : null;
+}
+
+function startEditBevel(smoothness: number, kind: 'vertex' | 'edge' = 'edge'): EditBevelToken | null {
+  if (!PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return null;
+  const selection = transformController.getEditSelection();
+  if (!selection || selection.cellId < 0 || !selection.vertices.length) return null;
+  const targetIsBase = selectedInstance === BASE_SELECTION;
+  const target = targetIsBase ? null : extraInstances[selectedInstance];
+  const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
+  const targets = collectEditBevelTargets(topology, selection, kind);
+  if (!targets) return null;
+  const original = captureEditBevelTargetSnapshot(selectedInstance);
+  if (!original) return null;
+  return {
+    undoSnapshot: captureSceneUrlState(),
+    kind,
+    instIdx: selectedInstance,
+    dimension: selection.dimension,
+    cellId: selection.cellId,
+    vertices: [...selection.vertices],
+    targetVertices: targets.targetVertices,
+    targetEdges: targets.targetEdges,
+    targetEdgeIds: targets.targetEdgeIds,
+    amount: 0,
+    smoothness: Math.max(1, Math.floor(smoothness)),
+    applied: false,
+    original,
+  };
+}
+
+function isEditBevelToken(token: unknown): token is EditBevelToken {
+  return typeof token === 'object'
+    && token !== null
+    && 'kind' in token
+    && 'instIdx' in token
+    && 'dimension' in token
+    && 'cellId' in token
+    && 'amount' in token
+    && 'smoothness' in token;
+}
+
+function applyEditBevelPreview(token: EditBevelToken) {
+  restoreEditBevelTarget(token);
+  if (token.cellId < 0 || token.amount <= 0) {
+    token.applied = false;
+    projectAndRenderAll();
+    if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
+    return;
+  }
+
+  const targetIsBase = token.instIdx === BASE_SELECTION;
+  const target = targetIsBase ? null : extraInstances[token.instIdx];
+  const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
+  const oldVertexCount = targetIsBase ? M : (target?.M ?? 0);
+  const oldX = targetIsBase ? X : target?.X;
+  if (!oldX || oldVertexCount <= 0) return;
+
+  let currentTopology = topology;
+  let currentX = oldX;
+  let currentVertexCount = oldVertexCount;
+  let currentOrigins = initialVertexOrigins(oldVertexCount);
+  const sharedEdgeDistance = token.kind === 'edge'
+    ? batchEdgeBevelDistance(oldX, oldVertexCount, token.targetEdges, token.amount)
+    : undefined;
+  let appliedAny = false;
+
+  if (token.kind === 'vertex') {
+    const bevel = bevelVertices(currentTopology, token.targetVertices, currentVertexCount, token.smoothness);
+    if (!bevel) return;
+    const sourceVertex = token.targetVertices[0] ?? -1;
+    const nextX = buildBeveledVertexData(currentX, currentVertexCount, sourceVertex, bevel, token.amount);
+    currentOrigins = remapOriginsAfterVertexBevel(currentOrigins, sourceVertex, bevel);
+    currentTopology = bevel.topology;
+    currentX = nextX;
+    currentVertexCount = bevel.vertexCount;
+    appliedAny = true;
+  } else if (token.targetEdgeIds.length > 1) {
+    const bevel = bevelSelectedEdges(currentTopology, token.targetEdgeIds, currentVertexCount, token.smoothness);
+    if (!bevel) return;
+    const nextX = buildBeveledEdgeData(currentX, currentVertexCount, bevel, token.amount, sharedEdgeDistance);
+    currentOrigins = remapOriginsAfterEdgeBevel(currentOrigins, bevel);
+    currentTopology = bevel.topology;
+    currentX = nextX;
+    currentVertexCount = bevel.vertexCount;
+    appliedAny = true;
+  } else {
+    for (const [originA, originB] of token.targetEdges) {
+      const currentEdge = findEdgeWithOrigins(
+        currentTopology,
+        currentOrigins,
+        originA,
+        originB,
+        currentX,
+        currentVertexCount,
+      );
+      if (currentEdge < 0) continue;
+      const bevel = bevelEdge(currentTopology, currentEdge, currentVertexCount, token.smoothness);
+      if (!bevel) continue;
+      const nextX = buildBeveledEdgeData(currentX, currentVertexCount, bevel, token.amount, sharedEdgeDistance);
+      currentOrigins = remapOriginsAfterEdgeBevel(currentOrigins, bevel);
+      currentTopology = bevel.topology;
+      currentX = nextX;
+      currentVertexCount = bevel.vertexCount;
+      appliedAny = true;
+    }
+  }
+  if (!appliedAny || !currentTopology) return;
+
+  const nextSurfaceTopology = surfaceTopologyFromPositionedCellTopology(currentTopology, currentX, currentVertexCount)
+    ?? surfaceTopologyForEditedCellTopology(currentTopology);
+
+  transformController.clearEditSelection();
+  if (targetIsBase) {
+    X = new Float32Array(currentX);
+    M = currentVertexCount;
+    Y = new Float32Array(3 * M);
+    E = new Uint32Array(edgeListFromCellTopology(currentTopology));
+    baseCellTopology = currentTopology;
+    baseSurfaceTopology = nextSurfaceTopology;
+    rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
+    rendererND.setSurface(baseSurface);
+    rendererND.setMode(PARAMS.renderMode);
+  } else if (target) {
+    target.X = new Float32Array(currentX);
+    target.M = currentVertexCount;
+    target.Y = new Float32Array(3 * target.M);
+    target.E = new Uint32Array(edgeListFromCellTopology(currentTopology));
+    target.cellTopology = currentTopology;
+    target.surfaceTopology = nextSurfaceTopology;
+    target.renderer.build(target.M, target.E, target.surfaceTopology, target.cellTopology);
+    target.renderer.setSurface(target.surface);
+    target.renderer.setMode(PARAMS.renderMode);
+  }
+
+  token.applied = true;
+  projectAndRenderAll();
+  applyObjectVisibility();
+  updateObjectList();
+  updateSelectionOutline();
+  updateTransformActionButtons();
+  if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
+}
+
+function updateEditBevel(token: unknown, amount: number, smoothness: number) {
+  if (!isEditBevelToken(token)) return;
+  token.amount = Math.max(0, Math.min(BEVEL_MAX_AMOUNT, amount));
+  token.smoothness = Math.max(1, Math.floor(smoothness));
+  applyEditBevelPreview(token);
+}
+
+function commitEditBevel(token: unknown) {
+  if (!isEditBevelToken(token)) return;
+  if (!token.applied) {
+    restoreEditBevelTarget(token);
+    projectAndRenderAll();
+    if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
+    updateSelectionOutline();
+    updateTransformActionButtons();
+    updateObjectList();
+    return;
+  }
+  if (sceneUrlApplying) return;
+  sceneHistory.push(token.undoSnapshot);
+  finalizeCommittedGeometryEdit();
+}
+
+function cancelEditBevel(token: unknown) {
+  if (!isEditBevelToken(token)) return;
+  restoreEditBevelTarget(token);
+  transformController.setSelectedEditElement(token.dimension, token.vertices, token.cellId);
+  projectAndRenderAll();
+  applyObjectVisibility();
+  updateObjectList();
+  updateSelectionOutline();
+  updateTransformActionButtons();
+  if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
 }
 
 const extraInstances: Instance[] = [];
@@ -4226,6 +5345,10 @@ viewportInteraction = new ViewportInteractionController({
   extrudeSelectedEditCell,
   commitEditExtrusion,
   cancelEditExtrusion,
+  startEditBevel,
+  updateEditBevel,
+  commitEditBevel,
+  cancelEditBevel,
   insertKeyframe: () => animationTimeline?.addKeyframeAtCurrentFrame(),
   removeLastKeyframe: () => animationTimeline?.removeLastKeyframe(),
   deleteSelected,
@@ -4519,6 +5642,7 @@ new KeyboardShortcutController({
   toggleEditMode: () => setEditMode(!PARAMS.editMode),
   startTransformFromPointer: mode => viewportInteraction.startTransformFromLastPointer(mode),
   extrudeEditSelectionFromPointer: () => viewportInteraction.startEditExtrusionFromLastPointer(),
+  startBevelEditSelection: kind => viewportInteraction.startEditBevelFromLastPointer(kind),
   showAddObjectMenuAtPointer: () => viewportInteraction.showAddObjectMenuAtLastPointer(),
   duplicateSelectionFromPointer: () => viewportInteraction.startDuplicateFromLastPointer(),
   deleteOrConfirmSelection: () => viewportInteraction.deleteOrConfirmSelection(),
