@@ -646,7 +646,7 @@ export class ViewportInteractionController {
     this.lastPointer = { x: point.clientX, y: point.clientY };
     const dx = point.clientX - this.editBevel.startX;
     const dy = this.editBevel.startY - point.clientY;
-    const amount = Math.max(0, Math.min(0.49, (dx + dy) * 0.004));
+    const amount = Math.max(0, Math.min(0.995, (dx + dy) * 0.004));
     if (Math.abs(amount - this.editBevel.amount) < 0.0005) return true;
     this.editBevel.amount = amount;
     this.options.updateEditBevel(this.editBevel.token, amount, this.editBevel.smoothness);

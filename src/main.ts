@@ -3424,6 +3424,150 @@ function appendDimensionMajorDuplicateVertices(
   return expanded;
 }
 
+const BEVEL_MAX_AMOUNT = 0.995;
+
+function vectorDot(a: ArrayLike<number>, b: ArrayLike<number>) {
+  let dot = 0;
+  for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
+  return dot;
+}
+
+function vectorLength(vector: ArrayLike<number>) {
+  return Math.sqrt(vectorDot(vector, vector));
+}
+
+function normalizedDeltaFromVertex(
+  data: Float32Array,
+  vertexCount: number,
+  dimension: number,
+  origin: number[],
+  vertex: number,
+) {
+  const direction = new Float64Array(dimension);
+  let lengthSq = 0;
+  for (let dim = 0; dim < dimension; dim++) {
+    const delta = (data[(dim * vertexCount) + vertex] ?? origin[dim]) - origin[dim];
+    direction[dim] = delta;
+    lengthSq += delta * delta;
+  }
+  const length = Math.sqrt(lengthSq);
+  if (length <= 1e-8) return null;
+  for (let dim = 0; dim < dimension; dim++) direction[dim] /= length;
+  return { direction, length };
+}
+
+function solveLinearSystem(matrix: number[][], rhs: number[]) {
+  const size = rhs.length;
+  const augmented = matrix.map((row, idx) => [...row, rhs[idx]]);
+  for (let col = 0; col < size; col++) {
+    let pivot = col;
+    for (let row = col + 1; row < size; row++) {
+      if (Math.abs(augmented[row][col]) > Math.abs(augmented[pivot][col])) pivot = row;
+    }
+    if (Math.abs(augmented[pivot][col]) <= 1e-8) return null;
+    if (pivot !== col) [augmented[pivot], augmented[col]] = [augmented[col], augmented[pivot]];
+
+    const divisor = augmented[col][col];
+    for (let entry = col; entry <= size; entry++) augmented[col][entry] /= divisor;
+    for (let row = 0; row < size; row++) {
+      if (row === col) continue;
+      const factor = augmented[row][col];
+      if (Math.abs(factor) <= 1e-12) continue;
+      for (let entry = col; entry <= size; entry++) augmented[row][entry] -= factor * augmented[col][entry];
+    }
+  }
+  return augmented.map(row => row[size]);
+}
+
+function slerpUnitVectors(a: ArrayLike<number>, b: ArrayLike<number>, t: number) {
+  const dot = Math.max(-1, Math.min(1, vectorDot(a, b)));
+  const result = new Float64Array(a.length);
+  if (1 - Math.abs(dot) <= 1e-6) {
+    for (let i = 0; i < a.length; i++) result[i] = ((1 - t) * a[i]) + (t * b[i]);
+    const length = vectorLength(result);
+    if (length > 1e-8) {
+      for (let i = 0; i < result.length; i++) result[i] /= length;
+    }
+    return result;
+  }
+
+  const theta = Math.acos(dot);
+  const sinTheta = Math.sin(theta);
+  const wa = Math.sin((1 - t) * theta) / sinTheta;
+  const wb = Math.sin(t * theta) / sinTheta;
+  for (let i = 0; i < a.length; i++) result[i] = (wa * a[i]) + (wb * b[i]);
+  return result;
+}
+
+function buildBevelSphere(
+  data: Float32Array,
+  oldVertexCount: number,
+  selectedVertex: number,
+  bevel: BevelVertexResult,
+  amount: number,
+) {
+  const dimension = oldVertexCount > 0 ? Math.floor(data.length / oldVertexCount) : 0;
+  if (dimension <= 0) return null;
+
+  const origin = Array.from({ length: dimension }, (_entry, dim) => (
+    data[(dim * oldVertexCount) + selectedVertex] ?? 0
+  ));
+  const neighborIds = Array.from(new Set(bevel.cuts.flatMap(cut => cut.neighbors)));
+  const directions = new Map<number, Float64Array>();
+  let minLength = Number.POSITIVE_INFINITY;
+  for (const neighbor of neighborIds) {
+    const delta = normalizedDeltaFromVertex(data, oldVertexCount, dimension, origin, neighbor);
+    if (!delta) continue;
+    directions.set(neighbor, delta.direction);
+    minLength = Math.min(minLength, delta.length);
+  }
+  if (!directions.size || !Number.isFinite(minLength)) return null;
+
+  const tangentDistance = Math.max(0, Math.min(BEVEL_MAX_AMOUNT, amount)) * minLength;
+  if (tangentDistance <= 1e-8) return null;
+  const activeNeighbors = Array.from(directions.keys());
+  const gram = activeNeighbors.map(a => activeNeighbors.map(b => (
+    vectorDot(directions.get(a) ?? [], directions.get(b) ?? [])
+  )));
+  const rhs = activeNeighbors.map(() => tangentDistance);
+  const coefficients = solveLinearSystem(gram, rhs);
+  if (!coefficients) return null;
+
+  const center = new Float64Array(dimension);
+  activeNeighbors.forEach((neighbor, idx) => {
+    const direction = directions.get(neighbor);
+    if (!direction) return;
+    const coefficient = coefficients[idx] ?? 0;
+    for (let dim = 0; dim < dimension; dim++) center[dim] += coefficient * direction[dim];
+  });
+
+  const endpointRadials = new Map<number, Float64Array>();
+  let radius = 0;
+  for (const neighbor of activeNeighbors) {
+    const direction = directions.get(neighbor);
+    if (!direction) continue;
+    const radial = new Float64Array(dimension);
+    for (let dim = 0; dim < dimension; dim++) radial[dim] = (direction[dim] * tangentDistance) - center[dim];
+    const radialLength = vectorLength(radial);
+    if (radialLength <= 1e-8) continue;
+    radius += radialLength;
+    for (let dim = 0; dim < dimension; dim++) radial[dim] /= radialLength;
+    endpointRadials.set(neighbor, radial);
+  }
+  if (!endpointRadials.size) return null;
+  radius /= endpointRadials.size;
+
+  return {
+    dimension,
+    origin,
+    tangentDistance,
+    center,
+    radius,
+    directions,
+    endpointRadials,
+  };
+}
+
 function buildBeveledVertexData(
   data: Float32Array,
   oldVertexCount: number,
@@ -3441,37 +3585,43 @@ function buildBeveledVertexData(
     }
   }
 
-  const t = Math.max(0, Math.min(0.49, amount));
+  const sphere = buildBevelSphere(data, oldVertexCount, selectedVertex, bevel, amount);
   for (const cut of bevel.cuts) {
-    const selectedValues = Array.from({ length: dimension }, (_entry, dim) => (
-      data[(dim * oldVertexCount) + selectedVertex] ?? 0
-    ));
-    const direction = new Float32Array(dimension);
-    let radius = 0;
-    for (let idx = 0; idx < cut.neighbors.length; idx++) {
-      const neighbor = cut.neighbors[idx];
-      const weight = cut.weights[idx] ?? 0;
-      let lengthSq = 0;
+    if (!sphere) continue;
+    let radial = new Float64Array(dimension);
+    if (cut.neighbors.length === 1) {
+      const direction = sphere.directions.get(cut.neighbors[0]);
+      if (!direction) continue;
       for (let dim = 0; dim < dimension; dim++) {
-        const delta = (data[(dim * oldVertexCount) + neighbor] ?? selectedValues[dim]) - selectedValues[dim];
-        lengthSq += delta * delta;
+        next[(dim * bevel.vertexCount) + cut.vertex] = sphere.origin[dim] + (direction[dim] * sphere.tangentDistance);
       }
-      const length = Math.sqrt(lengthSq);
-      if (length <= 1e-8) continue;
-      radius += weight * length;
-      for (let dim = 0; dim < dimension; dim++) {
-        const delta = (data[(dim * oldVertexCount) + neighbor] ?? selectedValues[dim]) - selectedValues[dim];
-        direction[dim] += weight * (delta / length);
-      }
+      continue;
     }
-    let directionLengthSq = 0;
-    for (let dim = 0; dim < dimension; dim++) directionLengthSq += direction[dim] * direction[dim];
-    const directionLength = Math.sqrt(directionLengthSq);
+
+    if (cut.neighbors.length === 2) {
+      const a = sphere.endpointRadials.get(cut.neighbors[0]);
+      const b = sphere.endpointRadials.get(cut.neighbors[1]);
+      const weightA = cut.weights[0] ?? 0;
+      const weightB = cut.weights[1] ?? 0;
+      const total = weightA + weightB;
+      if (!a || !b || total <= 1e-8) continue;
+      radial = slerpUnitVectors(a, b, weightB / total);
+    } else {
+      for (let idx = 0; idx < cut.neighbors.length; idx++) {
+        const endpoint = sphere.endpointRadials.get(cut.neighbors[idx]);
+        const weight = cut.weights[idx] ?? 0;
+        if (!endpoint || weight <= 0) continue;
+        for (let dim = 0; dim < dimension; dim++) radial[dim] += endpoint[dim] * weight;
+      }
+      const radialLength = vectorLength(radial);
+      if (radialLength <= 1e-8) continue;
+      for (let dim = 0; dim < dimension; dim++) radial[dim] /= radialLength;
+    }
+
     for (let dim = 0; dim < dimension; dim++) {
-      const selectedValue = selectedValues[dim];
-      next[(dim * bevel.vertexCount) + cut.vertex] = directionLength > 1e-8
-        ? selectedValue + ((direction[dim] / directionLength) * radius * t)
-        : selectedValue;
+      next[(dim * bevel.vertexCount) + cut.vertex] = sphere.origin[dim]
+        + sphere.center[dim]
+        + (radial[dim] * sphere.radius);
     }
   }
   return next;
