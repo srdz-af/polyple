@@ -3802,32 +3802,97 @@ function buildBeveledEdgeData(
 
   let minLength = Number.POSITIVE_INFINITY;
   for (const cut of bevel.cuts) {
+    for (const neighbor of [cut.sideNeighbor, cut.sideNeighborB]) {
+      if (neighbor === undefined) continue;
+      let lengthSq = 0;
+      for (let dim = 0; dim < dimension; dim++) {
+        const delta = data[(dim * oldVertexCount) + neighbor] - data[(dim * oldVertexCount) + cut.endpoint];
+        lengthSq += delta * delta;
+      }
+      const length = Math.sqrt(lengthSq);
+      if (length > 1e-8) minLength = Math.min(minLength, length);
+    }
+  }
+  if (!Number.isFinite(minLength)) return next;
+
+  const unitDirection = (endpoint: number, neighbor: number) => {
+    const direction = new Float64Array(dimension);
     let lengthSq = 0;
     for (let dim = 0; dim < dimension; dim++) {
-      const delta = data[(dim * oldVertexCount) + cut.sideNeighbor] - data[(dim * oldVertexCount) + cut.endpoint];
+      const delta = data[(dim * oldVertexCount) + neighbor] - data[(dim * oldVertexCount) + endpoint];
+      direction[dim] = delta;
       lengthSq += delta * delta;
     }
     const length = Math.sqrt(lengthSq);
-    if (length > 1e-8) minLength = Math.min(minLength, length);
-  }
-  if (!Number.isFinite(minLength)) return next;
+    if (length <= 1e-8) return null;
+    for (let dim = 0; dim < dimension; dim++) direction[dim] /= length;
+    return { direction, length };
+  };
 
   const distance = Math.max(0, Math.min(BEVEL_MAX_AMOUNT, amount)) * minLength;
   for (const cut of bevel.cuts) {
     const endpoint = cut.endpoint;
-    const sideNeighbor = cut.sideNeighbor;
-    let lengthSq = 0;
-    for (let dim = 0; dim < dimension; dim++) {
-      const delta = data[(dim * oldVertexCount) + sideNeighbor] - data[(dim * oldVertexCount) + endpoint];
-      lengthSq += delta * delta;
+    const first = unitDirection(endpoint, cut.sideNeighbor);
+    if (!first) continue;
+
+    if (cut.sideNeighborB === undefined) {
+      const cutDistance = Math.min(distance, first.length * BEVEL_MAX_AMOUNT);
+      for (let dim = 0; dim < dimension; dim++) {
+        const origin = data[(dim * oldVertexCount) + endpoint];
+        next[(dim * bevel.vertexCount) + cut.vertex] = origin + (first.direction[dim] * cutDistance);
+      }
+      continue;
     }
-    const length = Math.sqrt(lengthSq);
-    if (length <= 1e-8) continue;
-    const cutDistance = Math.min(distance, length * BEVEL_MAX_AMOUNT);
+
+    const second = unitDirection(endpoint, cut.sideNeighborB);
+    if (!second) continue;
+    const cutDistance = Math.min(distance, first.length * BEVEL_MAX_AMOUNT, second.length * BEVEL_MAX_AMOUNT);
+    const t = Math.max(0, Math.min(1, cut.profileT ?? 0.5));
+    let dot = 0;
+    for (let dim = 0; dim < dimension; dim++) dot += first.direction[dim] * second.direction[dim];
+    dot = Math.max(-0.999, Math.min(0.999, dot));
+
+    if (Math.abs(1 + dot) < 1e-5) {
+      for (let dim = 0; dim < dimension; dim++) {
+        const origin = data[(dim * oldVertexCount) + endpoint];
+        const a = first.direction[dim] * cutDistance;
+        const b = second.direction[dim] * cutDistance;
+        next[(dim * bevel.vertexCount) + cut.vertex] = origin + (a * (1 - t)) + (b * t);
+      }
+      continue;
+    }
+
+    const centerScale = cutDistance / (1 + dot);
+    const start = new Float64Array(dimension);
+    const end = new Float64Array(dimension);
+    let startLengthSq = 0;
+    let endLengthSq = 0;
+    for (let dim = 0; dim < dimension; dim++) {
+      const center = centerScale * (first.direction[dim] + second.direction[dim]);
+      start[dim] = (first.direction[dim] * cutDistance) - center;
+      end[dim] = (second.direction[dim] * cutDistance) - center;
+      startLengthSq += start[dim] * start[dim];
+      endLengthSq += end[dim] * end[dim];
+    }
+    const radius = Math.sqrt(startLengthSq);
+    const endRadius = Math.sqrt(endLengthSq);
+    if (radius <= 1e-8 || endRadius <= 1e-8) continue;
+    let profileDot = 0;
+    for (let dim = 0; dim < dimension; dim++) {
+      start[dim] /= radius;
+      end[dim] /= endRadius;
+      profileDot += start[dim] * end[dim];
+    }
+    profileDot = Math.max(-1, Math.min(1, profileDot));
+    const angle = Math.acos(profileDot);
+    const sinAngle = Math.sin(angle);
     for (let dim = 0; dim < dimension; dim++) {
       const origin = data[(dim * oldVertexCount) + endpoint];
-      const delta = data[(dim * oldVertexCount) + sideNeighbor] - origin;
-      next[(dim * bevel.vertexCount) + cut.vertex] = origin + ((delta / length) * cutDistance);
+      const center = centerScale * (first.direction[dim] + second.direction[dim]);
+      const arcDirection = Math.abs(sinAngle) > 1e-6
+        ? ((Math.sin((1 - t) * angle) * start[dim]) + (Math.sin(t * angle) * end[dim])) / sinAngle
+        : (start[dim] * (1 - t)) + (end[dim] * t);
+      next[(dim * bevel.vertexCount) + cut.vertex] = origin + center + (arcDirection * radius);
     }
   }
 

@@ -63,6 +63,8 @@ export type BevelEdgeCut = {
   endpoint: number;
   faceId: number;
   sideNeighbor: number;
+  sideNeighborB?: number;
+  profileT?: number;
 };
 
 export type BevelEdgeResult = {
@@ -877,6 +879,7 @@ export function bevelEdge(
   const edgeKey = `${Math.min(edgeA, edgeB)}:${Math.max(edgeA, edgeB)}`;
   const faceCutByFaceId = new Map<number, [number, number]>();
   const cutByEndpointNeighbor = new Map<string, number>();
+  const profileByEndpointNeighbors = new Map<string, number[]>();
   const cuts: BevelEdgeCut[] = [];
   const sourceCellsByDim: number[][][] = Array.from({ length: highestSourceDimension + 1 }, (_entry, dim) => (
     dim > 0 ? cellVerticesForMutation(topology, dim) : []
@@ -884,6 +887,10 @@ export function bevelEdge(
   const cutKey = (endpoint: number, sideNeighbor: number) => `${endpoint}:${sideNeighbor}`;
   const cutFor = (endpoint: number, sideNeighbor: number) => (
     cutByEndpointNeighbor.get(cutKey(endpoint, sideNeighbor)) ?? -1
+  );
+  const profileKey = (endpoint: number, sideA: number, sideB: number) => `${endpoint}:${sideA}:${sideB}`;
+  const profileSequence = (endpoint: number, sideA: number, sideB: number) => (
+    profileByEndpointNeighbors.get(profileKey(endpoint, sideA, sideB))
   );
 
   const selectedEdgeSideNeighbor = (face: number[], endpoint: number) => {
@@ -925,6 +932,47 @@ export function bevelEdge(
   }
   if (!cuts.length) return undefined;
 
+  const sideNeighborsByEndpoint = new Map<number, number[]>();
+  const addEndpointSideNeighbor = (endpoint: number, sideNeighbor: number) => {
+    let neighbors = sideNeighborsByEndpoint.get(endpoint);
+    if (!neighbors) {
+      neighbors = [];
+      sideNeighborsByEndpoint.set(endpoint, neighbors);
+    }
+    if (!neighbors.includes(sideNeighbor)) neighbors.push(sideNeighbor);
+  };
+  for (const cut of cuts) addEndpointSideNeighbor(cut.endpoint, cut.sideNeighbor);
+
+  const ensureEndpointProfile = (endpoint: number, sideA: number, sideB: number) => {
+    const existing = profileSequence(endpoint, sideA, sideB);
+    if (existing) return existing;
+    const start = cutFor(endpoint, sideA);
+    const end = cutFor(endpoint, sideB);
+    if (start < 0 || end < 0) return undefined;
+    const sequence = [start];
+    for (let step = 1; step < layerCount; step++) {
+      const vertex = nextVertex++;
+      cuts.push({
+        vertex,
+        endpoint,
+        faceId: -1,
+        sideNeighbor: sideA,
+        sideNeighborB: sideB,
+        profileT: step / layerCount,
+      });
+      sequence.push(vertex);
+    }
+    sequence.push(end);
+    profileByEndpointNeighbors.set(profileKey(endpoint, sideA, sideB), sequence);
+    profileByEndpointNeighbors.set(profileKey(endpoint, sideB, sideA), [...sequence].reverse());
+    return sequence;
+  };
+
+  for (const [endpoint, neighbors] of sideNeighborsByEndpoint) {
+    if (neighbors.length !== 2) continue;
+    ensureEndpointProfile(endpoint, neighbors[0], neighbors[1]);
+  }
+
   const faceIdsInCell = (cell: number[]) => {
     const source = new Set(cell);
     const faceIds: number[] = [];
@@ -946,6 +994,31 @@ export function bevelEdge(
     return faceIds.flatMap(faceId => Array.from(faceCutByFaceId.get(faceId) ?? []));
   };
 
+  const endpointProfileForFacePair = (endpoint: number, firstFaceId: number, secondFaceId: number) => {
+    const firstFace = sourceCellsByDim[2]?.[firstFaceId];
+    const secondFace = sourceCellsByDim[2]?.[secondFaceId];
+    if (!firstFace || !secondFace) return undefined;
+    const firstSide = selectedEdgeSideNeighbor(firstFace, endpoint);
+    const secondSide = selectedEdgeSideNeighbor(secondFace, endpoint);
+    if (firstSide < 0 || secondSide < 0) return undefined;
+    return ensureEndpointProfile(endpoint, firstSide, secondSide);
+  };
+
+  const bevelStripFacesForFaceIds = (faceIds: number[]) => {
+    if (faceIds.length !== 2) return [];
+    const edgeAProfile = endpointProfileForFacePair(edgeA, faceIds[0], faceIds[1]);
+    const edgeBProfile = endpointProfileForFacePair(edgeB, faceIds[0], faceIds[1]);
+    if (!edgeAProfile || !edgeBProfile || edgeAProfile.length !== edgeBProfile.length || edgeAProfile.length < 2) {
+      const fallback = cutVerticesForFaceIds(faceIds);
+      return fallback.length >= 3 ? [fallback] : [];
+    }
+    const faces: number[][] = [];
+    for (let step = 0; step < edgeAProfile.length - 1; step++) {
+      faces.push([edgeAProfile[step], edgeBProfile[step], edgeBProfile[step + 1], edgeAProfile[step + 1]]);
+    }
+    return faces;
+  };
+
   const remapCell = (cell: number[]) => {
     const remapped = cell.map(vertex => vertexMap[vertex]).filter(vertex => vertex >= 0);
     return remapped.length === cell.length ? remapped : [];
@@ -963,6 +1036,8 @@ export function bevelEdge(
     const prevCut = cutFor(endpoint, prev);
     const nextCut = cutFor(endpoint, next);
     if (prevCut < 0 && nextCut < 0) return [];
+    const profile = prevCut >= 0 && nextCut >= 0 ? profileSequence(endpoint, prev, next) : undefined;
+    if (profile) return profile;
     if (prevCut >= 0 && nextCut >= 0) return prevCut === nextCut ? [prevCut] : [prevCut, nextCut];
     return [prevCut >= 0 ? prevCut : nextCut];
   };
@@ -1011,6 +1086,7 @@ export function bevelEdge(
     const seen = new Set<number>();
     for (const cut of cuts) {
       if (!source.has(cut.endpoint) || !source.has(cut.sideNeighbor) || seen.has(cut.vertex)) continue;
+      if (cut.sideNeighborB !== undefined && !source.has(cut.sideNeighborB)) continue;
       seen.add(cut.vertex);
       result.push(cut.vertex);
     }
@@ -1079,6 +1155,12 @@ export function bevelEdge(
     for (const sourceCell of sourceCellsByDim[dim] ?? []) {
       if (!hasSelectedEdge(sourceCell)) continue;
       const faceIds = faceIdsInCell(sourceCell);
+      if (replacementDim === 2) {
+        for (const stripFace of bevelStripFacesForFaceIds(faceIds)) {
+          pushUniqueCell(nextCellsByDim[replacementDim], stripFace, signatures);
+        }
+        continue;
+      }
       const cutVertices = cutVerticesForFaceIds(faceIds);
       pushUniqueCell(nextCellsByDim[replacementDim], cutVertices, signatures);
     }
