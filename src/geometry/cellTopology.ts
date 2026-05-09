@@ -88,6 +88,8 @@ export type BevelFaceBoundaryResult = {
   smoothness: number;
 };
 
+export type BevelSelectedEdgesResult = BevelEdgeResult | BevelFaceBoundaryResult;
+
 const DEFAULT_PRODUCT_TOPOLOGY_MAX_CELLS = 250000;
 const DEFAULT_PRODUCT_TOPOLOGY_MAX_VERTEX_REFS = 2000000;
 const boundaryFaceCache = new WeakMap<CellTopology, Map<number, Map<number, number[]>>>();
@@ -1602,6 +1604,42 @@ export function bevelFaceBoundary(
     faceVertices: selectedFace,
     smoothness: layerCount,
   };
+}
+
+export function bevelSelectedEdges(
+  topology: CellTopology | undefined,
+  edgeCellIds: number[],
+  vertexCount: number,
+  smoothness = 1,
+): BevelSelectedEdgesResult | undefined {
+  if (!topology) return undefined;
+  const selectedEdgeIds = edgeCellIds
+    .filter((edgeId, index, arr) => Number.isInteger(edgeId) && edgeId >= 0 && arr.indexOf(edgeId) === index)
+    .filter(edgeId => edgeId < cellCount(topology, 1));
+  if (!selectedEdgeIds.length) return undefined;
+  if (selectedEdgeIds.length === 1) return bevelEdge(topology, selectedEdgeIds[0], vertexCount, smoothness);
+
+  const selectedSignatures = new Set<string>();
+  for (const edgeId of selectedEdgeIds) {
+    const edge = getCellVertices(topology, 1, edgeId);
+    if (edge.length >= 2) selectedSignatures.add(sortedCellSignature([edge[0], edge[1]]));
+  }
+
+  for (let faceId = 0; faceId < cellCount(topology, 2); faceId++) {
+    const face = getCellVertices(topology, 2, faceId);
+    if (face.length !== selectedSignatures.size || face.length < 3) continue;
+    let matches = true;
+    for (let idx = 0; idx < face.length; idx++) {
+      const edgeSignature = sortedCellSignature([face[idx], face[(idx + 1) % face.length]]);
+      if (!selectedSignatures.has(edgeSignature)) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return bevelFaceBoundary(topology, faceId, vertexCount, smoothness);
+  }
+
+  return undefined;
 }
 
 export function buildCellTopologyFromEdgesAndSurface(
