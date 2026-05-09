@@ -3258,11 +3258,35 @@ function buildBeveledVertexData(
 
   const t = Math.max(0, Math.min(0.49, amount));
   for (const cut of bevel.cuts) {
-    const cutT = t * cut.weight;
+    const selectedValues = Array.from({ length: dimension }, (_entry, dim) => (
+      data[(dim * oldVertexCount) + selectedVertex] ?? 0
+    ));
+    const direction = new Float32Array(dimension);
+    let radius = 0;
+    for (let idx = 0; idx < cut.neighbors.length; idx++) {
+      const neighbor = cut.neighbors[idx];
+      const weight = cut.weights[idx] ?? 0;
+      let lengthSq = 0;
+      for (let dim = 0; dim < dimension; dim++) {
+        const delta = (data[(dim * oldVertexCount) + neighbor] ?? selectedValues[dim]) - selectedValues[dim];
+        lengthSq += delta * delta;
+      }
+      const length = Math.sqrt(lengthSq);
+      if (length <= 1e-8) continue;
+      radius += weight * length;
+      for (let dim = 0; dim < dimension; dim++) {
+        const delta = (data[(dim * oldVertexCount) + neighbor] ?? selectedValues[dim]) - selectedValues[dim];
+        direction[dim] += weight * (delta / length);
+      }
+    }
+    let directionLengthSq = 0;
+    for (let dim = 0; dim < dimension; dim++) directionLengthSq += direction[dim] * direction[dim];
+    const directionLength = Math.sqrt(directionLengthSq);
     for (let dim = 0; dim < dimension; dim++) {
-      const selectedValue = data[(dim * oldVertexCount) + selectedVertex] ?? 0;
-      const neighborValue = data[(dim * oldVertexCount) + cut.neighbor] ?? selectedValue;
-      next[(dim * bevel.vertexCount) + cut.vertex] = selectedValue + ((neighborValue - selectedValue) * cutT);
+      const selectedValue = selectedValues[dim];
+      next[(dim * bevel.vertexCount) + cut.vertex] = directionLength > 1e-8
+        ? selectedValue + ((direction[dim] / directionLength) * radius * t)
+        : selectedValue;
     }
   }
   return next;
