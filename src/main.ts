@@ -3791,6 +3791,7 @@ function buildBeveledEdgeData(
   oldVertexCount: number,
   bevel: BevelEdgeResult,
   amount: number,
+  fixedDistance?: number,
 ) {
   const dimension = oldVertexCount > 0 ? Math.floor(data.length / oldVertexCount) : 0;
   const next = new Float32Array(dimension * bevel.vertexCount);
@@ -3831,7 +3832,7 @@ function buildBeveledEdgeData(
     return { direction, length };
   };
 
-  const distance = Math.max(0, Math.min(BEVEL_MAX_AMOUNT, amount)) * minLength;
+  const distance = fixedDistance ?? (Math.max(0, Math.min(BEVEL_MAX_AMOUNT, amount)) * minLength);
   for (const cut of bevel.cuts) {
     const endpoint = cut.endpoint;
     const first = unitDirection(endpoint, cut.sideNeighbor);
@@ -3912,22 +3913,43 @@ function findVertexWithOrigin(origins: Int32Array, origin: number) {
   return -1;
 }
 
+function vertexDistanceSquared(data: Float32Array, vertexCount: number, a: number, b: number) {
+  if (a < 0 || b < 0 || a >= vertexCount || b >= vertexCount) return 0;
+  const dimension = vertexCount > 0 ? Math.floor(data.length / vertexCount) : 0;
+  let lengthSq = 0;
+  for (let dim = 0; dim < dimension; dim++) {
+    const delta = data[(dim * vertexCount) + b] - data[(dim * vertexCount) + a];
+    lengthSq += delta * delta;
+  }
+  return lengthSq;
+}
+
 function findEdgeWithOrigins(
   topology: CellTopology | undefined,
   origins: Int32Array,
   originA: number,
   originB: number,
+  data?: Float32Array,
+  vertexCount = origins.length,
 ) {
   if (!topology || originA === originB) return -1;
   const edgeCount = cellCount(topology, 1);
+  let bestEdge = -1;
+  let bestLengthSq = -1;
   for (let edgeId = 0; edgeId < edgeCount; edgeId++) {
     const edge = getCellVertices(topology, 1, edgeId);
     if (edge.length < 2) continue;
     const a = origins[edge[0]];
     const b = origins[edge[1]];
-    if ((a === originA && b === originB) || (a === originB && b === originA)) return edgeId;
+    if ((a !== originA || b !== originB) && (a !== originB || b !== originA)) continue;
+    if (!data) return edgeId;
+    const lengthSq = vertexDistanceSquared(data, vertexCount, edge[0], edge[1]);
+    if (lengthSq > bestLengthSq) {
+      bestLengthSq = lengthSq;
+      bestEdge = edgeId;
+    }
   }
-  return -1;
+  return bestEdge;
 }
 
 function edgeListFromCellTopology(topology: CellTopology | undefined) {
@@ -3938,6 +3960,22 @@ function edgeListFromCellTopology(topology: CellTopology | undefined) {
     if (edge.length >= 2) packed.push(edge[0], edge[1]);
   }
   return packed;
+}
+
+function batchEdgeBevelDistance(
+  data: Float32Array,
+  vertexCount: number,
+  targetEdges: Array<[number, number]>,
+  amount: number,
+) {
+  let minLengthSq = Number.POSITIVE_INFINITY;
+  for (const [a, b] of targetEdges) {
+    const lengthSq = vertexDistanceSquared(data, vertexCount, a, b);
+    if (lengthSq > 1e-12) minLengthSq = Math.min(minLengthSq, lengthSq);
+  }
+  return Number.isFinite(minLengthSq)
+    ? Math.max(0, Math.min(BEVEL_MAX_AMOUNT, amount)) * Math.sqrt(minLengthSq)
+    : undefined;
 }
 
 function remapOriginsAfterVertexBevel(
@@ -4291,6 +4329,9 @@ function applyEditBevelPreview(token: EditBevelToken) {
   let currentX = oldX;
   let currentVertexCount = oldVertexCount;
   let currentOrigins = initialVertexOrigins(oldVertexCount);
+  const sharedEdgeDistance = token.kind === 'edge'
+    ? batchEdgeBevelDistance(oldX, oldVertexCount, token.targetEdges, token.amount)
+    : undefined;
   let appliedAny = false;
 
   if (token.kind === 'vertex') {
@@ -4308,11 +4349,18 @@ function applyEditBevelPreview(token: EditBevelToken) {
     }
   } else {
     for (const [originA, originB] of token.targetEdges) {
-      const currentEdge = findEdgeWithOrigins(currentTopology, currentOrigins, originA, originB);
+      const currentEdge = findEdgeWithOrigins(
+        currentTopology,
+        currentOrigins,
+        originA,
+        originB,
+        currentX,
+        currentVertexCount,
+      );
       if (currentEdge < 0) continue;
       const bevel = bevelEdge(currentTopology, currentEdge, currentVertexCount, token.smoothness);
       if (!bevel) continue;
-      const nextX = buildBeveledEdgeData(currentX, currentVertexCount, bevel, token.amount);
+      const nextX = buildBeveledEdgeData(currentX, currentVertexCount, bevel, token.amount, sharedEdgeDistance);
       currentOrigins = remapOriginsAfterEdgeBevel(currentOrigins, bevel);
       currentTopology = bevel.topology;
       currentX = nextX;
