@@ -895,6 +895,16 @@ let sceneLightIdCounter = 1;
 let selectedSceneLightId = '';
 const sceneLights: SceneLightRuntime[] = [];
 const sceneLightMarkerGeometry = new THREE.SphereGeometry(SCENE_LIGHT_MARKER_RADIUS, 12, 8);
+const sceneLightDrag = {
+  active: false,
+  moved: false,
+  pointerId: -1,
+  lightId: '',
+  controlsEnabled: true,
+  plane: new THREE.Plane(),
+  startHit: new THREE.Vector3(),
+  startPosition: new THREE.Vector3(),
+};
 const axes = new THREE.AxesHelper(1000);
 axes.position.set(0, -0.6, 0);
 scene.add(axes);
@@ -1502,12 +1512,11 @@ function updateSceneLightMarkersScreenSpace() {
   });
 }
 
-function handleSceneLightPointerDown(ev: PointerEvent) {
-  if (ev.button !== 0 || PARAMS.editMode || transformController.isActive() || transformController.isGizmoDragging()) return;
+function pickSceneLightMarker(ev: PointerEvent) {
   const markers = sceneLights
     .map(runtime => runtime.marker)
     .filter(marker => marker.visible);
-  if (!markers.length) return;
+  if (!markers.length) return null;
 
   const rect = renderer.domElement.getBoundingClientRect();
   ndc.set(
@@ -1517,14 +1526,104 @@ function handleSceneLightPointerDown(ev: PointerEvent) {
   raycaster.setFromCamera(ndc, camera);
   const hit = raycaster.intersectObjects(markers, false)[0];
   const lightId = hit?.object.userData.sceneLightId;
-  if (typeof lightId !== 'string') return;
+  return typeof lightId === 'string'
+    ? sceneLights.find(runtime => runtime.state.id === lightId) ?? null
+    : null;
+}
 
-  selectedSceneLightId = lightId;
+function handleSceneLightPointerDown(ev: PointerEvent) {
+  if (ev.button !== 0 || PARAMS.editMode || transformController.isActive() || transformController.isGizmoDragging()) return;
+  const runtime = pickSceneLightMarker(ev);
+  if (!runtime) return;
+
+  selectedSceneLightId = runtime.state.id;
   selectObject(NO_SELECTION);
   syncSceneLightControls();
+  startSceneLightDrag(runtime, ev);
   ev.preventDefault();
   ev.stopPropagation();
   ev.stopImmediatePropagation();
+}
+
+function startSceneLightDrag(runtime: SceneLightRuntime, ev: PointerEvent) {
+  camera.getWorldDirection(tmpVec).normalize();
+  sceneLightDrag.plane.setFromNormalAndCoplanarPoint(tmpVec, runtime.state.position);
+  raycaster.setFromCamera(ndc, camera);
+  const hit = raycaster.ray.intersectPlane(sceneLightDrag.plane, tmpVec);
+  sceneLightDrag.active = true;
+  sceneLightDrag.moved = false;
+  sceneLightDrag.pointerId = ev.pointerId;
+  sceneLightDrag.lightId = runtime.state.id;
+  sceneLightDrag.controlsEnabled = controls.enabled;
+  sceneLightDrag.startPosition.copy(runtime.state.position);
+  sceneLightDrag.startHit.copy(hit ?? runtime.state.position);
+  controls.enabled = false;
+  try {
+    renderer.domElement.setPointerCapture(ev.pointerId);
+  } catch {
+    // Window handlers still keep the drag alive if pointer capture is unavailable.
+  }
+}
+
+function updateSceneLightDrag(ev: PointerEvent) {
+  if (!sceneLightDrag.active || ev.pointerId !== sceneLightDrag.pointerId) return false;
+  const runtime = sceneLights.find(entry => entry.state.id === sceneLightDrag.lightId);
+  if (!runtime) return false;
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  ndc.set(
+    ((ev.clientX - rect.left) / rect.width) * 2 - 1,
+    -((ev.clientY - rect.top) / rect.height) * 2 + 1,
+  );
+  raycaster.setFromCamera(ndc, camera);
+  const hit = raycaster.ray.intersectPlane(sceneLightDrag.plane, tmpVec);
+  if (!hit) return true;
+
+  const nextPosition = sceneLightDrag.startPosition.clone().add(hit.sub(sceneLightDrag.startHit));
+  if (!sceneLightDrag.moved && nextPosition.distanceToSquared(sceneLightDrag.startPosition) > 1e-8) {
+    pushUndoSnapshot();
+    sceneLightDrag.moved = true;
+  }
+  runtime.state.position.copy(nextPosition);
+  syncSceneLightControls();
+  requestSceneUrlUpdate();
+  ev.preventDefault();
+  return true;
+}
+
+function endSceneLightDrag(ev: PointerEvent, commit: boolean) {
+  if (!sceneLightDrag.active || ev.pointerId !== sceneLightDrag.pointerId) return false;
+  try {
+    if (renderer.domElement.hasPointerCapture(ev.pointerId)) renderer.domElement.releasePointerCapture(ev.pointerId);
+  } catch {
+    // Pointer capture release is best-effort.
+  }
+  if (!commit) {
+    const runtime = sceneLights.find(entry => entry.state.id === sceneLightDrag.lightId);
+    if (runtime) runtime.state.position.copy(sceneLightDrag.startPosition);
+  }
+  controls.enabled = sceneLightDrag.controlsEnabled;
+  sceneLightDrag.active = false;
+  sceneLightDrag.pointerId = -1;
+  sceneLightDrag.lightId = '';
+  sceneLightDrag.moved = false;
+  syncSceneLightControls();
+  if (commit) requestSceneUrlUpdate();
+  ev.preventDefault();
+  return true;
+}
+
+function cancelSceneLightDrag() {
+  if (!sceneLightDrag.active) return false;
+  const runtime = sceneLights.find(entry => entry.state.id === sceneLightDrag.lightId);
+  if (runtime) runtime.state.position.copy(sceneLightDrag.startPosition);
+  controls.enabled = sceneLightDrag.controlsEnabled;
+  sceneLightDrag.active = false;
+  sceneLightDrag.pointerId = -1;
+  sceneLightDrag.lightId = '';
+  sceneLightDrag.moved = false;
+  syncSceneLightControls();
+  return true;
 }
 
 function objectLabelForMaterialList(idx: number) {
@@ -3847,6 +3946,18 @@ updateTransformActionButtons();
 paneController.syncToViewport(true);
 modalOverlayController.initializeMobileOnboarding();
 renderer.domElement.addEventListener('pointerdown', handleSceneLightPointerDown, { capture: true });
+window.addEventListener('pointermove', ev => {
+  updateSceneLightDrag(ev);
+});
+window.addEventListener('pointerup', ev => {
+  endSceneLightDrag(ev, true);
+});
+window.addEventListener('pointercancel', ev => {
+  endSceneLightDrag(ev, false);
+});
+window.addEventListener('blur', () => {
+  cancelSceneLightDrag();
+});
 viewportInteraction.bind();
 void backgroundSelectorReady
   .then(() => initializeSceneUrlState())
