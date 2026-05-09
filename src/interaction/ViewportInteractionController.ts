@@ -6,6 +6,7 @@ import type { HypercubeRenderer } from '../rendering/HypercubeRenderer';
 import type { Instance, SceneLightKind, TransformMode } from '../scene/types';
 import type { KeyboardCameraController } from '../controls/KeyboardCameraController';
 import type { TransformController } from './TransformController';
+import { ViewportOperationManager } from './ViewportOperationManager';
 
 type ViewportParams = {
   editMode: boolean;
@@ -125,11 +126,8 @@ export class ViewportInteractionController {
     prevZoom: true,
     prevPan: true,
   };
+  private readonly operationManager = new ViewportOperationManager();
   private transformGizmoPrevControlsEnabled = true;
-  private duplicatePlacement: {
-    token: DuplicatePlacementToken;
-    prevControlsEnabled: boolean;
-  } | null = null;
   private editExtrusion: {
     token: EditExtrusionToken;
   } | null = null;
@@ -193,7 +191,7 @@ export class ViewportInteractionController {
   }
 
   startEditExtrusionFromLastPointer() {
-    if (this.editExtrusion || this.editInset || this.duplicatePlacement) return;
+    if (this.editExtrusion || this.editInset || this.operationManager.isActive()) return;
     if (!this.options.getParams().editMode) return;
     if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
     const token = this.options.extrudeSelectedEditCell();
@@ -207,7 +205,7 @@ export class ViewportInteractionController {
   }
 
   startEditInsetFromLastPointer() {
-    if (this.editBevel || this.editExtrusion || this.editInset || this.duplicatePlacement) return;
+    if (this.editBevel || this.editExtrusion || this.editInset || this.operationManager.isActive()) return;
     if (!this.options.getParams().editMode) return;
     if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
     const token = this.options.startEditInset();
@@ -222,7 +220,7 @@ export class ViewportInteractionController {
   }
 
   startEditBevelFromLastPointer(kind: 'vertex' | 'edge' = 'edge', inward = false) {
-    if (this.editBevel || this.editExtrusion || this.editInset || this.duplicatePlacement) return;
+    if (this.editBevel || this.editExtrusion || this.editInset || this.operationManager.isActive()) return;
     if (!this.options.getParams().editMode) return;
     if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
     const smoothness = this.lastBevelSmoothness;
@@ -239,21 +237,35 @@ export class ViewportInteractionController {
   }
 
   startDuplicateFromLastPointer() {
-    if (this.duplicatePlacement || this.options.getParams().editMode) return;
+    if (this.operationManager.isActive() || this.options.getParams().editMode) return;
     if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
     const point = this.pickPointOnTargetPlane({ clientX: this.lastPointer.x, clientY: this.lastPointer.y });
     const token = this.options.startDuplicatePlacement(point);
     if (!token) return;
     if (this.options.contextMenuEl) this.options.contextMenuEl.style.display = 'none';
-    this.duplicatePlacement = {
-      token,
-      prevControlsEnabled: this.options.controls.enabled,
-    };
+    const prevControlsEnabled = this.options.controls.enabled;
     this.options.controls.enabled = false;
+    this.operationManager.start({
+      kind: 'duplicate-placement',
+      scope: 'object',
+      blocksCamera: true,
+      blocksSelection: true,
+      blocksContextMenu: true,
+      updatePointer: point => {
+        this.lastPointer = { x: point.clientX, y: point.clientY };
+        this.options.moveDuplicatePlacement(token, this.pickPointOnTargetPlane(point));
+        return true;
+      },
+      commit: () => this.options.commitDuplicatePlacement(token),
+      cancel: () => this.options.cancelDuplicatePlacement(token),
+      cleanup: () => {
+        this.options.controls.enabled = prevControlsEnabled;
+      },
+    });
   }
 
   isDuplicatePlacementActive() {
-    return this.duplicatePlacement !== null;
+    return this.operationManager.isKind('duplicate-placement');
   }
 
   handleTransformConstraintKey(key: string) {
@@ -312,7 +324,7 @@ export class ViewportInteractionController {
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
     if (this.updateEditInset(ev)) return;
     if (this.updateEditBevel(ev)) return;
-    if (this.updateDuplicatePlacement(ev)) return;
+    if (this.operationManager.updatePointer(ev, ev)) return;
     if (this.options.transformController.isGizmoDragging()) return;
     if (!this.options.transformController.isActive()) return;
     ev.preventDefault();
@@ -338,9 +350,9 @@ export class ViewportInteractionController {
       return;
     }
 
-    if (this.duplicatePlacement) {
+    if (this.operationManager.isKind('duplicate-placement')) {
       ev.preventDefault();
-      this.finishDuplicatePlacement(false);
+      this.operationManager.finish(false);
       return;
     }
 
@@ -490,9 +502,9 @@ export class ViewportInteractionController {
     if (this.axisDrag.active) return;
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
 
-    if (this.duplicatePlacement) {
-      if (ev.button === 0) this.finishDuplicatePlacement(true);
-      else if (ev.button === 2) this.finishDuplicatePlacement(false);
+    if (this.operationManager.isKind('duplicate-placement')) {
+      if (ev.button === 0) this.operationManager.finish(true);
+      else if (ev.button === 2) this.operationManager.finish(false);
       ev.preventDefault();
       ev.stopPropagation();
       return;
@@ -561,7 +573,7 @@ export class ViewportInteractionController {
   private handleWindowPointerMove(ev: PointerEvent) {
     if (this.updateEditInset(ev)) return;
     if (this.updateEditBevel(ev)) return;
-    if (this.updateDuplicatePlacement(ev)) return;
+    if (this.operationManager.updatePointer(ev, ev)) return;
     if (this.options.transformController.handleGizmoPointerMove(ev, point => { this.lastPointer = point; })) return;
     if (!this.axisDrag.active) return;
     if ((ev.buttons & 4) === 0) {
@@ -587,8 +599,8 @@ export class ViewportInteractionController {
   }
 
   private handleWindowPointerUp(ev: PointerEvent) {
-    if (this.duplicatePlacement && ev.button === 0) {
-      this.finishDuplicatePlacement(true);
+    if (this.operationManager.isKind('duplicate-placement') && ev.button === 0) {
+      this.operationManager.finish(true);
       ev.preventDefault();
       return;
     }
@@ -611,8 +623,8 @@ export class ViewportInteractionController {
       return;
     }
 
-    if (this.duplicatePlacement) {
-      this.finishDuplicatePlacement(false);
+    if (this.operationManager.isKind('duplicate-placement')) {
+      this.operationManager.finish(false);
       ev.preventDefault();
       return;
     }
@@ -632,7 +644,7 @@ export class ViewportInteractionController {
   private handleWindowBlur() {
     if (this.editBevel) this.finishEditBevel(false);
     if (this.editInset) this.finishEditInset(false);
-    if (this.duplicatePlacement) this.finishDuplicatePlacement(false);
+    if (this.operationManager.isKind('duplicate-placement')) this.operationManager.finish(false);
     if (this.options.transformController.cancelGizmoDrag()) {
       this.options.controls.enabled = this.transformGizmoPrevControlsEnabled;
     }
@@ -655,13 +667,6 @@ export class ViewportInteractionController {
     this.deletePending = false;
   }
 
-  private updateDuplicatePlacement(point: { clientX: number; clientY: number }) {
-    if (!this.duplicatePlacement) return false;
-    this.lastPointer = { x: point.clientX, y: point.clientY };
-    this.options.moveDuplicatePlacement(this.duplicatePlacement.token, this.pickPointOnTargetPlane(point));
-    return true;
-  }
-
   private updateEditInset(point: { clientX: number; clientY: number }) {
     if (!this.editInset) return false;
     this.lastPointer = { x: point.clientX, y: point.clientY };
@@ -681,15 +686,6 @@ export class ViewportInteractionController {
     if (this.options.contextMenuEl) this.options.contextMenuEl.style.display = 'none';
     if (commit) this.options.commitEditInset(inset.token);
     else this.options.cancelEditInset(inset.token);
-  }
-
-  private finishDuplicatePlacement(commit: boolean) {
-    const placement = this.duplicatePlacement;
-    if (!placement) return;
-    this.duplicatePlacement = null;
-    this.options.controls.enabled = placement.prevControlsEnabled;
-    if (commit) this.options.commitDuplicatePlacement(placement.token);
-    else this.options.cancelDuplicatePlacement(placement.token);
   }
 
   private handleWheel(ev: WheelEvent) {
