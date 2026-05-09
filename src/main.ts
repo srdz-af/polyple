@@ -217,6 +217,13 @@ type DuplicatePlacement = {
 type EditExtrusionToken = {
   undoSnapshot: PackedSceneUrlState;
 };
+type EditBevelToken = {
+  instIdx: number;
+  dimension: number;
+  cellId: number;
+  vertices: number[];
+  smoothness: number;
+};
 
 const DEFAULT_BLOOM_INTENSITY = 0;
 const DEFAULT_MOTION_BLUR_INTENSITY = 0;
@@ -3386,6 +3393,42 @@ function cancelEditExtrusion(token: unknown) {
   void applySceneUrlState(token.undoSnapshot);
 }
 
+function startEditBevel(smoothness: number): EditBevelToken | null {
+  if (!PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return null;
+  const selection = transformController.getEditSelection();
+  if (!selection || selection.cellId < 0 || !selection.vertices.length) return null;
+  return {
+    instIdx: selectedInstance,
+    dimension: selection.dimension,
+    cellId: selection.cellId,
+    vertices: [...selection.vertices],
+    smoothness: Math.max(1, Math.floor(smoothness)),
+  };
+}
+
+function isEditBevelToken(token: unknown): token is EditBevelToken {
+  return typeof token === 'object'
+    && token !== null
+    && 'instIdx' in token
+    && 'dimension' in token
+    && 'cellId' in token
+    && 'smoothness' in token;
+}
+
+function updateEditBevelSmoothness(token: unknown, smoothness: number) {
+  if (!isEditBevelToken(token)) return;
+  token.smoothness = Math.max(1, Math.floor(smoothness));
+}
+
+function commitEditBevel(token: unknown) {
+  if (!isEditBevelToken(token)) return;
+  // Geometry beveling will consume this token in the next pass.
+}
+
+function cancelEditBevel(token: unknown) {
+  if (!isEditBevelToken(token)) return;
+}
+
 const extraInstances: Instance[] = [];
 const objectListController = new ObjectListController({
   getRows: () => [
@@ -4226,6 +4269,10 @@ viewportInteraction = new ViewportInteractionController({
   extrudeSelectedEditCell,
   commitEditExtrusion,
   cancelEditExtrusion,
+  startEditBevel,
+  updateEditBevelSmoothness,
+  commitEditBevel,
+  cancelEditBevel,
   insertKeyframe: () => animationTimeline?.addKeyframeAtCurrentFrame(),
   removeLastKeyframe: () => animationTimeline?.removeLastKeyframe(),
   deleteSelected,
@@ -4519,6 +4566,7 @@ new KeyboardShortcutController({
   toggleEditMode: () => setEditMode(!PARAMS.editMode),
   startTransformFromPointer: mode => viewportInteraction.startTransformFromLastPointer(mode),
   extrudeEditSelectionFromPointer: () => viewportInteraction.startEditExtrusionFromLastPointer(),
+  startBevelEditSelection: () => viewportInteraction.startEditBevelFromLastPointer(),
   showAddObjectMenuAtPointer: () => viewportInteraction.showAddObjectMenuAtLastPointer(),
   duplicateSelectionFromPointer: () => viewportInteraction.startDuplicateFromLastPointer(),
   deleteOrConfirmSelection: () => viewportInteraction.deleteOrConfirmSelection(),

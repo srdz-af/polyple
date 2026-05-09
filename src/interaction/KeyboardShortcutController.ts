@@ -20,6 +20,7 @@ type KeyboardShortcutControllerOptions = {
   toggleEditMode: () => void;
   startTransformFromPointer: (mode: TransformMode) => void;
   extrudeEditSelectionFromPointer: () => void;
+  startBevelEditSelection: () => void;
   showAddObjectMenuAtPointer: () => void;
   duplicateSelectionFromPointer: () => void;
   deleteOrConfirmSelection: () => void;
@@ -104,6 +105,11 @@ export class KeyboardShortcutController {
     if (!hasSystemMod && !ev.shiftKey && transformMode === 'none' && this.options.isEditMode() && key === 'e') {
       ev.preventDefault();
       this.options.extrudeEditSelectionFromPointer();
+      return;
+    }
+    if (!hasSystemMod && !ev.shiftKey && transformMode === 'none' && this.options.isEditMode() && key === 'b') {
+      ev.preventDefault();
+      this.options.startBevelEditSelection();
       return;
     }
 

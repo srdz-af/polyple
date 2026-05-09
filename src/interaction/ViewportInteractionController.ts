@@ -23,12 +23,15 @@ type LightMenuOption = {
 
 type DuplicatePlacementToken = unknown;
 type EditExtrusionToken = unknown;
+type EditBevelToken = unknown;
 
 const OBJECT_FOCUS_DOUBLE_CLICK_MS = 220;
 const OBJECT_FOCUS_DOUBLE_CLICK_MAX_DIST = 8;
 const CELL_CENTER_PICK_RADIUS = 16;
 const CELL_CENTER_FALLBACK_RADIUS = 48;
 const CELL_CYCLE_MAX_DIST = 10;
+const BEVEL_MIN_SMOOTHNESS = 1;
+const BEVEL_MAX_SMOOTHNESS = 32;
 
 type CellPickCandidate = {
   cellId: number;
@@ -71,6 +74,10 @@ type ViewportInteractionControllerOptions = {
   extrudeSelectedEditCell: () => EditExtrusionToken | null;
   commitEditExtrusion: (token: EditExtrusionToken) => void;
   cancelEditExtrusion: (token: EditExtrusionToken) => void;
+  startEditBevel: (smoothness: number) => EditBevelToken | null;
+  updateEditBevelSmoothness: (token: EditBevelToken, smoothness: number) => void;
+  commitEditBevel: (token: EditBevelToken) => void;
+  cancelEditBevel: (token: EditBevelToken) => void;
   insertKeyframe: () => void;
   removeLastKeyframe: () => void;
   deleteSelected: () => void;
@@ -119,6 +126,10 @@ export class ViewportInteractionController {
   private editExtrusion: {
     token: EditExtrusionToken;
   } | null = null;
+  private editBevel: {
+    token: EditBevelToken;
+    smoothness: number;
+  } | null = null;
 
   constructor(private readonly options: ViewportInteractionControllerOptions) {}
 
@@ -128,6 +139,7 @@ export class ViewportInteractionController {
     canvas.addEventListener('contextmenu', ev => this.handleContextMenu(ev));
     canvas.addEventListener('mousedown', ev => this.handleMiddleMouseDown(ev), { capture: true });
     canvas.addEventListener('pointerdown', ev => this.handlePointerDown(ev));
+    canvas.addEventListener('wheel', ev => this.handleWheel(ev), { passive: false, capture: true });
 
     window.addEventListener('click', ev => this.hideContextMenuIfIdle(ev));
     window.addEventListener('pointermove', ev => this.handleWindowPointerMove(ev));
@@ -172,6 +184,17 @@ export class ViewportInteractionController {
       return;
     }
     this.editExtrusion = { token };
+  }
+
+  startEditBevelFromLastPointer() {
+    if (this.editBevel || this.editExtrusion || this.duplicatePlacement) return;
+    if (!this.options.getParams().editMode) return;
+    if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
+    const smoothness = BEVEL_MIN_SMOOTHNESS;
+    const token = this.options.startEditBevel(smoothness);
+    if (!token) return;
+    this.editBevel = { token, smoothness };
+    this.showBevelStatus();
   }
 
   startDuplicateFromLastPointer() {
@@ -254,6 +277,12 @@ export class ViewportInteractionController {
   }
 
   private handleContextMenu(ev: MouseEvent) {
+    if (this.editBevel) {
+      ev.preventDefault();
+      this.finishEditBevel(false);
+      return;
+    }
+
     if (this.duplicatePlacement) {
       ev.preventDefault();
       this.finishDuplicatePlacement(false);
@@ -386,6 +415,11 @@ export class ViewportInteractionController {
 
   private handleMiddleMouseDown(ev: MouseEvent) {
     if (ev.button !== 1) return;
+    if (this.editBevel) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      return;
+    }
     ev.preventDefault();
     ev.stopPropagation();
     this.axisDrag.active = true;
@@ -400,6 +434,14 @@ export class ViewportInteractionController {
   private handlePointerDown(ev: PointerEvent) {
     if (this.axisDrag.active) return;
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
+
+    if (this.editBevel) {
+      if (ev.button === 0) this.finishEditBevel(true);
+      else if (ev.button === 2) this.finishEditBevel(false);
+      ev.preventDefault();
+      ev.stopPropagation();
+      return;
+    }
 
     if (this.duplicatePlacement) {
       if (ev.button === 0) this.finishDuplicatePlacement(true);
@@ -491,6 +533,12 @@ export class ViewportInteractionController {
   }
 
   private handleWindowPointerCancel(ev: PointerEvent) {
+    if (this.editBevel) {
+      this.finishEditBevel(false);
+      ev.preventDefault();
+      return;
+    }
+
     if (this.duplicatePlacement) {
       this.finishDuplicatePlacement(false);
       ev.preventDefault();
@@ -510,6 +558,7 @@ export class ViewportInteractionController {
   }
 
   private handleWindowBlur() {
+    if (this.editBevel) this.finishEditBevel(false);
     if (this.duplicatePlacement) this.finishDuplicatePlacement(false);
     if (this.options.transformController.cancelGizmoDrag()) {
       this.options.controls.enabled = this.transformGizmoPrevControlsEnabled;
@@ -526,6 +575,7 @@ export class ViewportInteractionController {
   private hideContextMenuIfIdle(ev: MouseEvent) {
     const menu = this.options.contextMenuEl;
     const target = ev.target;
+    if (this.editBevel) return;
     if (this.deletePending && target instanceof Node && menu?.contains(target)) return;
     if (menu) menu.style.display = 'none';
     this.deletePending = false;
@@ -545,6 +595,56 @@ export class ViewportInteractionController {
     this.options.controls.enabled = placement.prevControlsEnabled;
     if (commit) this.options.commitDuplicatePlacement(placement.token);
     else this.options.cancelDuplicatePlacement(placement.token);
+  }
+
+  private handleWheel(ev: WheelEvent) {
+    if (!this.editBevel) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+
+    const step = ev.deltaY < 0 ? 1 : -1;
+    const smoothness = Math.max(
+      BEVEL_MIN_SMOOTHNESS,
+      Math.min(BEVEL_MAX_SMOOTHNESS, this.editBevel.smoothness + step),
+    );
+    if (smoothness === this.editBevel.smoothness) return;
+
+    this.editBevel.smoothness = smoothness;
+    this.options.updateEditBevelSmoothness(this.editBevel.token, smoothness);
+    this.showBevelStatus();
+  }
+
+  private finishEditBevel(commit: boolean) {
+    const bevel = this.editBevel;
+    if (!bevel) return;
+    this.editBevel = null;
+    if (this.options.contextMenuEl) this.options.contextMenuEl.style.display = 'none';
+    if (commit) this.options.commitEditBevel(bevel.token);
+    else this.options.cancelEditBevel(bevel.token);
+  }
+
+  private showBevelStatus() {
+    const menu = this.options.contextMenuEl;
+    const bevel = this.editBevel;
+    if (!menu || !bevel) return;
+
+    menu.replaceChildren();
+    menu.classList.remove('primitive-menu', 'submenu-left');
+    const wrap = document.createElement('div');
+    wrap.className = 'context-menu-status';
+
+    const title = document.createElement('strong');
+    title.textContent = 'Bevel';
+    const value = document.createElement('span');
+    value.textContent = `Smoothness ${bevel.smoothness}`;
+    const hint = document.createElement('small');
+    hint.textContent = 'Wheel adjusts, left click commits, right click cancels';
+    wrap.append(title, value, hint);
+    menu.appendChild(wrap);
+
+    this.placeMenu(menu, this.lastPointer.x, this.lastPointer.y, 220, 0, 92);
+    menu.style.display = 'block';
   }
 
   private selectObjectFromPointer(ev: PointerEvent) {
