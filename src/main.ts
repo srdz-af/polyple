@@ -3653,31 +3653,78 @@ function blendedBevelCapPoint(
   return point;
 }
 
-function sphericalBevelCapPoint(
+function circleProfileFullness(segments: number) {
+  const known = [0, 0.559, 0.642, 0.551, 0.646, 0.624, 0.646, 0.619, 0.647, 0.639, 0.647];
+  if (segments >= 1 && segments <= known.length) return known[segments - 1];
+  return segments % 2 === 0
+    ? (2.4506 * 0.5) - (0.000003 * segments) - 0.6266
+    : (2.3635 * 0.5) + (0.000152 * segments) - 0.6060;
+}
+
+function boundaryProfilePoint(
   sphere: BevelSphereBase,
   neighbors: number[],
   weights: number[],
 ) {
-  const localSphere = buildLocalBevelSphere(sphere, neighbors);
-  if (!localSphere) return null;
-
-  const radial = new Float64Array(sphere.dimension);
+  const active: Array<{ neighbor: number; weight: number }> = [];
   for (let idx = 0; idx < neighbors.length; idx++) {
-    const endpoint = localSphere.endpointRadials.get(neighbors[idx]);
     const weight = weights[idx] ?? 0;
-    if (!endpoint || weight <= 0) continue;
-    for (let dim = 0; dim < sphere.dimension; dim++) radial[dim] += endpoint[dim] * weight;
+    if (weight > 1e-8) active.push({ neighbor: neighbors[idx], weight });
+  }
+  if (active.length === 1) return bevelEndpointPoint(sphere, active[0].neighbor);
+  if (active.length === 2) {
+    return bevelArcPoint(
+      sphere,
+      active[0].neighbor,
+      active[1].neighbor,
+      active[0].weight,
+      active[1].weight,
+    );
+  }
+  return null;
+}
+
+function blenderStyleBevelCapPoint(
+  sphere: BevelSphereBase,
+  neighbors: number[],
+  weights: number[],
+  segments: number,
+) {
+  if (neighbors.length !== 3) return null;
+  const total = weights.reduce((sum, weight) => sum + Math.max(0, weight), 0);
+  if (total <= 1e-8) return null;
+
+  const normalized = weights.map(weight => Math.max(0, weight) / total);
+  const minWeight = Math.min(normalized[0], normalized[1], normalized[2]);
+  const centerT = Math.min(1, Math.max(0, minWeight * 3));
+
+  const endpoints = neighbors.map(neighbor => bevelEndpointPoint(sphere, neighbor));
+  if (endpoints.some(point => !point)) return null;
+
+  const boundCenter = new Float64Array(sphere.dimension);
+  for (const endpoint of endpoints) {
+    if (!endpoint) continue;
+    for (let dim = 0; dim < sphere.dimension; dim++) boundCenter[dim] += endpoint[dim] / endpoints.length;
   }
 
-  const radialLength = vectorLength(radial);
-  if (radialLength <= 1e-8) return null;
-  for (let dim = 0; dim < radial.length; dim++) radial[dim] /= radialLength;
+  const fullness = Math.min(1, Math.max(0, circleProfileFullness(segments)));
+  const center = new Float64Array(sphere.dimension);
+  for (let dim = 0; dim < sphere.dimension; dim++) {
+    center[dim] = boundCenter[dim] + ((sphere.origin[dim] - boundCenter[dim]) * fullness);
+  }
+
+  if (centerT >= 1 - 1e-8) return center;
+
+  const boundaryScale = 1 - (3 * minWeight);
+  const boundaryWeights = boundaryScale > 1e-8
+    ? normalized.map(weight => (weight - minWeight) / boundaryScale)
+    : normalized;
+  const boundary = boundaryProfilePoint(sphere, neighbors, boundaryWeights);
+  if (!boundary) return center;
 
   const point = new Float64Array(sphere.dimension);
   for (let dim = 0; dim < sphere.dimension; dim++) {
-    point[dim] = sphere.origin[dim]
-      + localSphere.center[dim]
-      + (radial[dim] * localSphere.radius);
+    point[dim] = boundary[dim] + ((center[dim] - boundary[dim]) * centerT);
   }
   return point;
 }
@@ -3722,7 +3769,7 @@ function buildBeveledVertexData(
         cut.weights[1] ?? 0,
       );
     } else {
-      point = sphericalBevelCapPoint(sphere, cut.neighbors, cut.weights)
+      point = blenderStyleBevelCapPoint(sphere, cut.neighbors, cut.weights, bevel.smoothness)
         ?? blendedBevelCapPoint(sphere, cut.neighbors, cut.weights);
     }
     if (!point) continue;

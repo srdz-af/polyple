@@ -55,6 +55,7 @@ export type BevelVertexResult = {
   edges: Uint32Array;
   cuts: BevelVertexCut[];
   capCellId: number;
+  smoothness: number;
 };
 
 const DEFAULT_PRODUCT_TOPOLOGY_MAX_CELLS = 250000;
@@ -708,6 +709,7 @@ export function bevelVertex(
     edges: edgeListFromCells(cellsByDim[1]),
     cuts,
     capCellId,
+    smoothness: layerCount,
   };
 }
 
