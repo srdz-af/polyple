@@ -2675,8 +2675,8 @@ function applyAnimationState(state: AnimationKeyframeState) {
   projectAndRenderAll();
 }
 
-function renderReferenceLinesClean(gridWasVisible: boolean, axesWereVisible: boolean) {
-  if (!gridWasVisible && !axesWereVisible) return;
+function renderAxesClean(axesWereVisible: boolean) {
+  if (!axesWereVisible) return;
 
   const previousAutoClear = renderer.autoClear;
   const previousBackground = scene.background;
@@ -2694,7 +2694,7 @@ function renderReferenceLinesClean(gridWasVisible: boolean, axesWereVisible: boo
   scene.overrideMaterial = previousOverrideMaterial;
 
   for (const { child } of childVisibility) {
-    child.visible = (child === gridGroup && gridWasVisible) || (child === axes && axesWereVisible);
+    child.visible = child === axes && axesWereVisible;
   }
   renderer.render(scene, camera);
 
@@ -2705,16 +2705,13 @@ function renderReferenceLinesClean(gridWasVisible: boolean, axesWereVisible: boo
 }
 
 function renderEffectsFrame() {
-  const gridWasVisible = gridGroup.visible;
   const axesWereVisible = axes.visible;
 
-  gridGroup.visible = false;
   axes.visible = false;
   composer.render();
 
-  gridGroup.visible = gridWasVisible;
   axes.visible = axesWereVisible;
-  renderReferenceLinesClean(gridWasVisible, axesWereVisible);
+  renderAxesClean(axesWereVisible);
 }
 
 function renderViewportFrame() {

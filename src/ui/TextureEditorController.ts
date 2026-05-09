@@ -78,6 +78,7 @@ export class TextureEditorController {
   private previewStandardMaterial: THREE.MeshStandardMaterial | null = null;
   private previewGlassMaterial: THREE.MeshPhysicalMaterial | null = null;
   private previewEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
+  private previewBackdropTexture: THREE.CanvasTexture | null = null;
   private textureControlsEnabled = false;
 
   constructor(private readonly options: TextureEditorControllerOptions) {}
@@ -231,16 +232,17 @@ export class TextureEditorController {
     rendererRef.toneMappingExposure = this.options.renderer.toneMappingExposure;
     rendererRef.setClearColor(0x000000, 0);
 
+    const cameraRef = new THREE.PerspectiveCamera(36, 1, 0.1, 10);
+    cameraRef.position.set(1.8, 1.35, 1.9);
+    cameraRef.lookAt(0, 0, 0);
+
     const sceneRef = new THREE.Scene();
     sceneRef.background = null;
     const previewPmrem = new THREE.PMREMGenerator(rendererRef);
     this.previewEnvironmentTarget = previewPmrem.fromScene(new RoomEnvironment(), 0.04);
     previewPmrem.dispose();
     sceneRef.environment = this.previewEnvironmentTarget.texture;
-
-    const cameraRef = new THREE.PerspectiveCamera(36, 1, 0.1, 10);
-    cameraRef.position.set(1.8, 1.35, 1.9);
-    cameraRef.lookAt(0, 0, 0);
+    this.addPreviewBackdrop(sceneRef, cameraRef);
 
     const cubeMaterial = new THREE.MeshStandardMaterial({
       color: DEFAULT_SURFACE.color,
@@ -293,6 +295,75 @@ export class TextureEditorController {
     this.previewCube = cube;
     this.previewStandardMaterial = cubeMaterial;
     this.previewGlassMaterial = glassMaterial;
+  }
+
+  private addPreviewBackdrop(sceneRef: THREE.Scene, cameraRef: THREE.Camera) {
+    this.previewBackdropTexture = this.createPreviewBackdropTexture();
+    this.previewBackdropTexture.wrapS = THREE.RepeatWrapping;
+    this.previewBackdropTexture.wrapT = THREE.RepeatWrapping;
+    this.previewBackdropTexture.repeat.set(1.35, 1);
+    this.previewBackdropTexture.colorSpace = THREE.SRGBColorSpace;
+
+    const backdropMaterial = new THREE.MeshBasicMaterial({
+      map: this.previewBackdropTexture,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    });
+    const backdrop = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 2.25), backdropMaterial);
+    const viewDir = new THREE.Vector3().subVectors(new THREE.Vector3(), cameraRef.position).normalize();
+    backdrop.position.copy(viewDir.multiplyScalar(1.16));
+    backdrop.lookAt(cameraRef.position);
+    backdrop.renderOrder = -20;
+    sceneRef.add(backdrop);
+
+    const floorMaterial = backdropMaterial.clone();
+    floorMaterial.map = this.previewBackdropTexture;
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(2.3, 2.3), floorMaterial);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.set(0, -0.68, 0);
+    floor.renderOrder = -10;
+    sceneRef.add(floor);
+  }
+
+  private createPreviewBackdropTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return new THREE.CanvasTexture(canvas);
+
+    const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+    gradient.addColorStop(0, '#f6d47d');
+    gradient.addColorStop(0.48, '#4f7dd8');
+    gradient.addColorStop(1, '#141a23');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const size = 32;
+    for (let y = 0; y < canvas.height; y += size) {
+      for (let x = 0; x < canvas.width; x += size) {
+        ctx.fillStyle = ((x / size + y / size) % 2 === 0)
+          ? 'rgba(255,255,255,0.34)'
+          : 'rgba(0,0,0,0.26)';
+        ctx.fillRect(x, y, size, size);
+      }
+    }
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = 3;
+    for (let x = -canvas.height; x < canvas.width; x += 48) {
+      ctx.beginPath();
+      ctx.moveTo(x, canvas.height);
+      ctx.lineTo(x + canvas.height, 0);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.beginPath();
+    ctx.arc(196, 58, 26, 0, Math.PI * 2);
+    ctx.fill();
+
+    return new THREE.CanvasTexture(canvas);
   }
 
   private renderTexturePreview(surface: SurfaceState | null) {
