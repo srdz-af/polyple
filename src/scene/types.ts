@@ -21,6 +21,7 @@ export type SceneLightState = {
   intensity: number;
   position: THREE.Vector3;
   visible: boolean;
+  castShadow: boolean;
 };
 
 export type InstanceSnapshot = {

@@ -120,7 +120,7 @@ type PackedSceneMaterial = [string, string, PackedSurface];
 type PackedTopology = [string, string];
 type PackedCellTopology = Array<PackedTopology | null>;
 type PackedBackgroundState = [string, string, number, number, number];
-type PackedSceneLight = [0 | 1, string, string, number, number, PackedVec3, 0 | 1];
+type PackedSceneLight = [0 | 1, string, string, number, number, PackedVec3, 0 | 1, 0 | 1];
 type PackedAnimationSettings = [number, number, number, number, number];
 type PackedAnimationKeyframeState = {
   d: number;
@@ -216,6 +216,12 @@ const GRAIN_TEXTURE_SCALE = 0.5;
 const SCENE_LIGHT_MARKER_RADIUS = 0.025;
 const SCENE_LIGHT_MARKER_PIXEL_DIAMETER = 11;
 const SELECTED_SCENE_LIGHT_MARKER_PIXEL_DIAMETER = 15;
+const SHADOW_MAP_SIZE_BY_QUALITY: Record<RenderQuality, number> = {
+  full: 2048,
+  high: 1024,
+  medium: 512,
+  low: 0,
+};
 
 let sceneUrlApplying = false;
 
@@ -618,6 +624,8 @@ const sceneLightLabelInput = document.getElementById('scene-light-label') as HTM
 const sceneLightKindValue = document.getElementById('scene-light-kind-value') as HTMLOutputElement | null;
 const sceneLightVisibleInput = document.getElementById('scene-light-visible') as HTMLInputElement | null;
 const sceneLightVisibleValue = document.getElementById('scene-light-visible-value') as HTMLOutputElement | null;
+const sceneLightShadowInput = document.getElementById('scene-light-shadow') as HTMLInputElement | null;
+const sceneLightShadowValue = document.getElementById('scene-light-shadow-value') as HTMLOutputElement | null;
 const sceneLightColorInput = document.getElementById('scene-light-color') as HTMLInputElement | null;
 const sceneLightColorValue = document.getElementById('scene-light-color-value') as HTMLOutputElement | null;
 const sceneLightIntensityInput = document.getElementById('scene-light-intensity') as HTMLInputElement | null;
@@ -658,6 +666,8 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.1;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_VIEWPORT_PIXEL_RATIO));
+renderer.shadowMap.enabled = false;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
 const baseBackground = new THREE.Color(0x10141a);
@@ -725,11 +735,13 @@ const RENDER_QUALITY_PIXEL_RATIO_SCALE: Record<RenderQuality, number> = {
   medium: 0.5,
   low: 0.25,
 };
+let currentRenderQuality: RenderQuality = 'full';
 
 function setCaptureResolutionMode(renderQuality: RenderQuality) {
   renderer.getSize(captureResolutionViewportSize);
   const fullPixelRatio = fullViewportPixelRatio();
   const normalizedQuality = normalizeRenderQuality(renderQuality);
+  currentRenderQuality = normalizedQuality;
   const nextDownsampleSceneOnly = normalizedQuality !== 'full';
   const qualityChanged = downsampleSceneOnly !== nextDownsampleSceneOnly;
   const scenePixelRatio = Math.max(0.25, fullPixelRatio * RENDER_QUALITY_PIXEL_RATIO_SCALE[normalizedQuality]);
@@ -740,6 +752,8 @@ function setCaptureResolutionMode(renderQuality: RenderQuality) {
   composer.setPixelRatio(scenePixelRatio);
   composer.setSize(captureResolutionViewportSize.x, captureResolutionViewportSize.y);
   if (qualityChanged) markProjectionDirty();
+  syncSceneLightRuntimes();
+  syncSceneLightControls();
 }
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -1150,6 +1164,7 @@ function normalizeSceneLightState(state: Partial<SceneLightState>): SceneLightSt
     intensity: Math.max(0, Math.min(20, finiteNumber(state.intensity, kind === 'point' ? 3 : 1))),
     position: state.position?.clone() ?? fallbackPosition,
     visible: state.visible !== false,
+    castShadow: state.castShadow === true,
   };
 }
 
@@ -1222,6 +1237,41 @@ function createSceneLightRuntime(state: SceneLightState): SceneLightRuntime {
   return runtime;
 }
 
+function currentShadowMapSize() {
+  return SHADOW_MAP_SIZE_BY_QUALITY[currentRenderQuality] ?? SHADOW_MAP_SIZE_BY_QUALITY.full;
+}
+
+function syncRendererShadowState() {
+  const shadowMapSize = currentShadowMapSize();
+  const enabled = shadowMapSize > 0 && sceneLights.some(runtime => runtime.state.visible && runtime.state.castShadow);
+  renderer.shadowMap.enabled = enabled;
+  renderer.shadowMap.needsUpdate = enabled;
+}
+
+function syncSceneLightShadow(runtime: SceneLightRuntime) {
+  const shadowMapSize = currentShadowMapSize();
+  const enabled = runtime.state.visible && runtime.state.castShadow && shadowMapSize > 0;
+  runtime.light.castShadow = enabled;
+  if (!enabled) return;
+
+  runtime.light.shadow.mapSize.set(shadowMapSize, shadowMapSize);
+  runtime.light.shadow.bias = -0.00025;
+  runtime.light.shadow.normalBias = 0.02;
+  runtime.light.shadow.camera.near = runtime.light instanceof THREE.PointLight ? 0.05 : 0.1;
+  runtime.light.shadow.camera.far = 100;
+  if (runtime.light instanceof THREE.DirectionalLight) {
+    const shadowCamera = runtime.light.shadow.camera as THREE.OrthographicCamera;
+    shadowCamera.left = -20;
+    shadowCamera.right = 20;
+    shadowCamera.top = 20;
+    shadowCamera.bottom = -20;
+    shadowCamera.updateProjectionMatrix();
+  } else {
+    runtime.light.shadow.camera.updateProjectionMatrix();
+  }
+  runtime.light.shadow.needsUpdate = true;
+}
+
 function syncSceneLightRuntime(runtime: SceneLightRuntime) {
   const { state, light, helper, marker } = runtime;
   const selected = state.id === selectedSceneLightId;
@@ -1245,10 +1295,12 @@ function syncSceneLightRuntime(runtime: SceneLightRuntime) {
   helper.visible = state.visible && selected;
   configureLightHelperMaterials(helper, state.color, selected ? 0.92 : 0.72);
   helper.update();
+  syncSceneLightShadow(runtime);
 }
 
 function syncSceneLightRuntimes() {
   sceneLights.forEach(syncSceneLightRuntime);
+  syncRendererShadowState();
 }
 
 function disposeSceneLightRuntime(runtime: SceneLightRuntime) {
@@ -1311,6 +1363,14 @@ function syncSceneLightControls() {
     sceneLightVisibleInput.checked = selected?.state.visible ?? false;
   }
   if (sceneLightVisibleValue) sceneLightVisibleValue.textContent = selected?.state.visible ? 'On' : 'Off';
+  if (sceneLightShadowInput) {
+    sceneLightShadowInput.disabled = !enabled;
+    sceneLightShadowInput.checked = selected?.state.castShadow ?? false;
+  }
+  if (sceneLightShadowValue) {
+    if (!selected?.state.castShadow) sceneLightShadowValue.textContent = 'Off';
+    else sceneLightShadowValue.textContent = currentShadowMapSize() > 0 ? 'On' : 'Quality off';
+  }
   if (sceneLightColorInput) {
     sceneLightColorInput.disabled = !enabled;
     sceneLightColorInput.value = colorToHex(selected?.state.color ?? 0xffffff);
@@ -1390,6 +1450,11 @@ function bindSceneLightControls() {
   sceneLightVisibleInput?.addEventListener('change', () => {
     updateSelectedSceneLight(state => {
       state.visible = !!sceneLightVisibleInput.checked;
+    });
+  });
+  sceneLightShadowInput?.addEventListener('change', () => {
+    updateSelectedSceneLight(state => {
+      state.castShadow = !!sceneLightShadowInput.checked;
     });
   });
   sceneLightColorInput?.addEventListener('change', () => {
@@ -1663,6 +1728,7 @@ function packSceneLightState(lightState: SceneLightState): PackedSceneLight {
     lightState.intensity,
     [lightState.position.x, lightState.position.y, lightState.position.z],
     lightState.visible ? 1 : 0,
+    lightState.castShadow ? 1 : 0,
   ];
 }
 
@@ -1679,6 +1745,7 @@ function unpackSceneLightState(state: PackedSceneLight | undefined, fallbackInde
     intensity: finiteNumber(state[4], kind === 'point' ? 3 : 1),
     position: unpackVec3(state[5], kind === 'point' ? new THREE.Vector3(1.8, 1.8, 1.8) : new THREE.Vector3(2, 3, 4)),
     visible: state[6] !== 0,
+    castShadow: state[7] === 1,
   });
 }
 

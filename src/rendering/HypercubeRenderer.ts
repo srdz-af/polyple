@@ -162,6 +162,8 @@ export class HypercubeRenderer {
     });
 
     this.mesh = new THREE.Mesh(new THREE.BufferGeometry(), this.currentSolidMaterial());
+    this.mesh.castShadow = true;
+    this.mesh.receiveShadow = true;
     this.mesh.visible = this.mode !== 'wireframe';
     this.group.add(this.mesh);
 
