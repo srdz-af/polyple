@@ -3626,46 +3626,11 @@ function bevelEndpointPoint(sphere: BevelSphereBase, neighbor: number) {
   return point;
 }
 
-function triangularBevelCapPoint(
-  sphere: BevelSphereBase,
-  neighbors: number[],
-  weights: number[],
-) {
-  if (neighbors.length !== 3) return null;
-  const total = Math.max(1e-8, (weights[0] ?? 0) + (weights[1] ?? 0) + (weights[2] ?? 0));
-  const a = Math.max(0, weights[0] ?? 0) / total;
-  const b = Math.max(0, weights[1] ?? 0) / total;
-  const c = Math.max(0, weights[2] ?? 0) / total;
-
-  const endpointA = bevelEndpointPoint(sphere, neighbors[0]);
-  const endpointB = bevelEndpointPoint(sphere, neighbors[1]);
-  const endpointC = bevelEndpointPoint(sphere, neighbors[2]);
-  const arcAB = bevelArcPoint(sphere, neighbors[0], neighbors[1], a, b);
-  const arcBC = bevelArcPoint(sphere, neighbors[1], neighbors[2], b, c);
-  const arcCA = bevelArcPoint(sphere, neighbors[2], neighbors[0], c, a);
-  if (!endpointA || !endpointB || !endpointC || !arcAB || !arcBC || !arcCA) return null;
-
-  const point = new Float64Array(sphere.dimension);
-  for (let dim = 0; dim < sphere.dimension; dim++) {
-    point[dim] =
-      ((a + b) * arcAB[dim])
-      + ((b + c) * arcBC[dim])
-      + ((c + a) * arcCA[dim])
-      - (a * endpointA[dim])
-      - (b * endpointB[dim])
-      - (c * endpointC[dim]);
-  }
-  return point;
-}
-
 function blendedBevelCapPoint(
   sphere: BevelSphereBase,
   neighbors: number[],
   weights: number[],
 ) {
-  const triangularPoint = triangularBevelCapPoint(sphere, neighbors, weights);
-  if (triangularPoint) return triangularPoint;
-
   const point = new Float64Array(sphere.dimension);
   let totalWeight = 0;
   for (let i = 0; i < neighbors.length - 1; i++) {
@@ -3686,6 +3651,83 @@ function blendedBevelCapPoint(
   if (totalWeight <= 1e-8) return null;
   for (let dim = 0; dim < sphere.dimension; dim++) point[dim] /= totalWeight;
   return point;
+}
+
+function readDimensionMajorPoint(data: Float32Array, vertexCount: number, vertex: number, dimension: number) {
+  const point = new Float64Array(dimension);
+  for (let dim = 0; dim < dimension; dim++) point[dim] = data[(dim * vertexCount) + vertex] ?? 0;
+  return point;
+}
+
+function writeDimensionMajorPoint(data: Float32Array, vertexCount: number, vertex: number, point: ArrayLike<number>) {
+  for (let dim = 0; dim < point.length; dim++) data[(dim * vertexCount) + vertex] = point[dim];
+}
+
+function relaxBevelCapInterior(
+  data: Float32Array,
+  dimension: number,
+  bevel: BevelVertexResult,
+) {
+  const cutByVertex = new Map(bevel.cuts.map(cut => [cut.vertex, cut]));
+  const interiorVertices = bevel.cuts
+    .filter(cut => cut.neighbors.length >= 3)
+    .map(cut => cut.vertex);
+  if (!interiorVertices.length) return;
+
+  const adjacency = new Map<number, Set<number>>();
+  const addAdjacent = (a: number, b: number) => {
+    if (!cutByVertex.has(a) || !cutByVertex.has(b) || a === b) return;
+    let aSet = adjacency.get(a);
+    if (!aSet) {
+      aSet = new Set();
+      adjacency.set(a, aSet);
+    }
+    aSet.add(b);
+    let bSet = adjacency.get(b);
+    if (!bSet) {
+      bSet = new Set();
+      adjacency.set(b, bSet);
+    }
+    bSet.add(a);
+  };
+
+  const faceCount = cellCount(bevel.topology, 2);
+  for (let faceId = 0; faceId < faceCount; faceId++) {
+    const face = getCellVertices(bevel.topology, 2, faceId);
+    for (let idx = 0; idx < face.length; idx++) {
+      addAdjacent(face[idx], face[(idx + 1) % face.length]);
+    }
+  }
+
+  const positions = new Map<number, Float64Array>();
+  for (const cut of bevel.cuts) {
+    positions.set(cut.vertex, readDimensionMajorPoint(data, bevel.vertexCount, cut.vertex, dimension));
+  }
+
+  const iterations = Math.min(96, Math.max(12, Math.ceil(Math.sqrt(interiorVertices.length)) * 5));
+  for (let iteration = 0; iteration < iterations; iteration++) {
+    const nextPositions = new Map<number, Float64Array>();
+    for (const vertex of interiorVertices) {
+      const neighbors = Array.from(adjacency.get(vertex) ?? []).filter(neighbor => positions.has(neighbor));
+      if (!neighbors.length) continue;
+
+      const point = new Float64Array(dimension);
+      for (const neighbor of neighbors) {
+        const neighborPoint = positions.get(neighbor);
+        if (!neighborPoint) continue;
+        for (let dim = 0; dim < dimension; dim++) point[dim] += neighborPoint[dim];
+      }
+      for (let dim = 0; dim < dimension; dim++) point[dim] /= neighbors.length;
+      nextPositions.set(vertex, point);
+    }
+
+    for (const [vertex, point] of nextPositions) positions.set(vertex, point);
+  }
+
+  for (const vertex of interiorVertices) {
+    const point = positions.get(vertex);
+    if (point) writeDimensionMajorPoint(data, bevel.vertexCount, vertex, point);
+  }
 }
 
 function buildBeveledVertexData(
@@ -3709,11 +3751,8 @@ function buildBeveledVertexData(
   for (const cut of bevel.cuts) {
     if (!sphere) continue;
     if (cut.neighbors.length === 1) {
-      const direction = sphere.directions.get(cut.neighbors[0]);
-      if (!direction) continue;
-      for (let dim = 0; dim < dimension; dim++) {
-        next[(dim * bevel.vertexCount) + cut.vertex] = sphere.origin[dim] + (direction[dim] * sphere.tangentDistance);
-      }
+      const point = bevelEndpointPoint(sphere, cut.neighbors[0]);
+      if (point) writeDimensionMajorPoint(next, bevel.vertexCount, cut.vertex, point);
       continue;
     }
 
@@ -3735,6 +3774,7 @@ function buildBeveledVertexData(
       next[(dim * bevel.vertexCount) + cut.vertex] = point[dim];
     }
   }
+  if (sphere) relaxBevelCapInterior(next, dimension, bevel);
   return next;
 }
 
