@@ -1541,12 +1541,13 @@ export class TransformController {
       const delta = targetCenter.sub(center);
       const localDir = this.transformOp.localAxisDim >= 0 ? this.localAxisDirectionForDim(this.transformOp.localAxisDim) : null;
       if (this.transformOp.localAxisDim >= 0 && this.transformOp.editLocalDirections.size > 0) {
+        const scalar = localDir ? delta.dot(localDir) : delta.length();
         this.transformOp.editVertexStarts.forEach((start, index) => {
           const vertex = this.transformOp.targetVertices[index];
           const direction = this.transformOp.editLocalDirections.get(vertex) ?? localDir ?? new THREE.Vector3(1, 0, 0);
-          targets.push(start.clone().add(direction.clone().multiplyScalar(delta.dot(direction))));
+          targets.push(start.clone().add(direction.clone().multiplyScalar(scalar)));
         });
-        this.transformOp.lastHit.copy(center).add(delta);
+        this.transformOp.lastHit.copy(center).add((localDir ?? delta.clone().normalize()).multiplyScalar(scalar));
       } else if (localDir) {
         delta.copy(localDir).multiplyScalar(delta.dot(localDir));
         this.transformOp.editVertexStarts.forEach(start => targets.push(start.clone().add(delta)));
