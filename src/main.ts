@@ -3616,11 +3616,56 @@ function bevelArcPoint(
   return point;
 }
 
+function bevelEndpointPoint(sphere: BevelSphereBase, neighbor: number) {
+  const direction = sphere.directions.get(neighbor);
+  if (!direction) return null;
+  const point = new Float64Array(sphere.dimension);
+  for (let dim = 0; dim < sphere.dimension; dim++) {
+    point[dim] = sphere.origin[dim] + (direction[dim] * sphere.tangentDistance);
+  }
+  return point;
+}
+
+function triangularBevelCapPoint(
+  sphere: BevelSphereBase,
+  neighbors: number[],
+  weights: number[],
+) {
+  if (neighbors.length !== 3) return null;
+  const total = Math.max(1e-8, (weights[0] ?? 0) + (weights[1] ?? 0) + (weights[2] ?? 0));
+  const a = Math.max(0, weights[0] ?? 0) / total;
+  const b = Math.max(0, weights[1] ?? 0) / total;
+  const c = Math.max(0, weights[2] ?? 0) / total;
+
+  const endpointA = bevelEndpointPoint(sphere, neighbors[0]);
+  const endpointB = bevelEndpointPoint(sphere, neighbors[1]);
+  const endpointC = bevelEndpointPoint(sphere, neighbors[2]);
+  const arcAB = bevelArcPoint(sphere, neighbors[0], neighbors[1], a, b);
+  const arcBC = bevelArcPoint(sphere, neighbors[1], neighbors[2], b, c);
+  const arcCA = bevelArcPoint(sphere, neighbors[2], neighbors[0], c, a);
+  if (!endpointA || !endpointB || !endpointC || !arcAB || !arcBC || !arcCA) return null;
+
+  const point = new Float64Array(sphere.dimension);
+  for (let dim = 0; dim < sphere.dimension; dim++) {
+    point[dim] =
+      ((a + b) * arcAB[dim])
+      + ((b + c) * arcBC[dim])
+      + ((c + a) * arcCA[dim])
+      - (a * endpointA[dim])
+      - (b * endpointB[dim])
+      - (c * endpointC[dim]);
+  }
+  return point;
+}
+
 function blendedBevelCapPoint(
   sphere: BevelSphereBase,
   neighbors: number[],
   weights: number[],
 ) {
+  const triangularPoint = triangularBevelCapPoint(sphere, neighbors, weights);
+  if (triangularPoint) return triangularPoint;
+
   const point = new Float64Array(sphere.dimension);
   let totalWeight = 0;
   for (let i = 0; i < neighbors.length - 1; i++) {
