@@ -3809,7 +3809,7 @@ function buildBeveledEdgeData(
 
   let minLength = Number.POSITIVE_INFINITY;
   for (const cut of bevel.cuts) {
-    for (const neighbor of [cut.sideNeighbor, cut.sideNeighborB]) {
+    for (const neighbor of [cut.sideNeighbor, cut.sideNeighborB, cut.profileOuterNeighbor]) {
       if (neighbor === undefined) continue;
       let lengthSq = 0;
       for (let dim = 0; dim < dimension; dim++) {
@@ -3853,7 +3853,35 @@ function buildBeveledEdgeData(
 
     const second = unitDirection(endpoint, cut.sideNeighborB);
     if (!second) continue;
-    const cutDistance = Math.min(distance, first.length * BEVEL_MAX_AMOUNT, second.length * BEVEL_MAX_AMOUNT);
+    const outer = cut.profileOuterNeighbor !== undefined
+      ? unitDirection(endpoint, cut.profileOuterNeighbor)
+      : null;
+    const cutDistance = Math.min(
+      distance,
+      first.length * BEVEL_MAX_AMOUNT,
+      second.length * BEVEL_MAX_AMOUNT,
+      outer ? outer.length * BEVEL_MAX_AMOUNT : Number.POSITIVE_INFINITY,
+    );
+    if (outer) {
+      const t = Math.max(0, Math.min(1, cut.profileT ?? 0.5));
+      let dot = 0;
+      for (let dim = 0; dim < dimension; dim++) dot += first.direction[dim] * second.direction[dim];
+      dot = Math.max(-0.999, Math.min(0.999, dot));
+      const sinAngle = Math.sqrt(Math.max(0, 1 - (dot * dot)));
+      const scale = sinAngle > 1e-6 ? cutDistance / sinAngle : cutDistance * 0.5;
+      const oneMinusT = 1 - t;
+      for (let dim = 0; dim < dimension; dim++) {
+        const origin = data[(dim * oldVertexCount) + endpoint];
+        const inner = origin + ((first.direction[dim] + second.direction[dim]) * scale);
+        const outerPoint = origin + (outer.direction[dim] * cutDistance);
+        next[(dim * bevel.vertexCount) + cut.vertex] = (
+          (inner * oneMinusT * oneMinusT)
+          + (origin * 2 * oneMinusT * t)
+          + (outerPoint * t * t)
+        );
+      }
+      continue;
+    }
     if (cut.cornerMeet) {
       let dot = 0;
       for (let dim = 0; dim < dimension; dim++) dot += first.direction[dim] * second.direction[dim];
