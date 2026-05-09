@@ -11,6 +11,7 @@ export type TransformMode = 'none' | 'move' | 'rotate' | 'scale';
 export type EditCellDimension = number;
 export type ProjectionAxes = { x: number; y: number; z: number };
 export type TransformState = { pos: THREE.Vector3; rot: THREE.Vector3; scale: THREE.Vector3 };
+export type SceneMaterialState = { id: string; name: string; surface: SurfaceState };
 
 export type InstanceSnapshot = {
   X: Float32Array;
@@ -26,6 +27,7 @@ export type InstanceSnapshot = {
   originalN: number;
   axisMap: AxisMap;
   visible: boolean;
+  materialId?: string;
   surface?: SurfaceState;
 };
 
@@ -49,6 +51,8 @@ export type SceneSnapshot<TPrimitiveMode> = {
   baseOrigin?: ObjectOrigin;
   baseOrigN: number;
   baseVisible: boolean;
+  materials?: SceneMaterialState[];
+  baseMaterialId?: string;
   baseSurface?: SurfaceState;
   selectedInstance: number;
   selectedInstances?: number[];
@@ -71,5 +75,6 @@ export type Instance = {
   originalN: number;
   axisMap: AxisMap;
   visible: boolean;
+  materialId: string;
   surface: SurfaceState;
 };

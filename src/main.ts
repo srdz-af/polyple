@@ -47,8 +47,10 @@ import { ViewportCaptureController } from './viewport/ViewportCaptureController'
 import { HypercubeRenderer } from './rendering/HypercubeRenderer';
 import {
   KeyframeTimelineController,
+  normalizeRenderQuality,
   type AnimationKeyframeState,
   type AnimationTimelineState,
+  type RenderQuality,
 } from './animation/KeyframeTimelineController';
 import { createSceneInstance, type InstanceGeometryData } from './scene/instanceFactory';
 import { cloneObjectOrigin, computeObjectOrigin, type ObjectOrigin } from './scene/objectOrigin';
@@ -74,6 +76,7 @@ import type {
   Instance,
   InstanceSnapshot,
   ProjectionAxes,
+  SceneMaterialState,
   SceneSnapshot,
   TransformMode,
   TransformState,
@@ -99,10 +102,11 @@ type PackedSurface = [
   number, number, number, number, number,
   number, number, number,
 ];
+type PackedSceneMaterial = [string, string, PackedSurface];
 type PackedTopology = [string, string];
 type PackedCellTopology = Array<PackedTopology | null>;
 type PackedBackgroundState = [string, string, number, number, number];
-type PackedAnimationSettings = [number, number, 0 | 1, number, number];
+type PackedAnimationSettings = [number, number, number, number, number];
 type PackedAnimationKeyframeState = {
   d: number;
   r: string;
@@ -134,6 +138,7 @@ type PackedInstanceState = {
   n: number;
   a: number[];
   v: 0 | 1;
+  mi?: string;
   s: PackedSurface;
 };
 type PackedSceneUrlState = {
@@ -160,6 +165,8 @@ type PackedSceneUrlState = {
   bo: string;
   bn: number;
   bv: 0 | 1;
+  ma?: PackedSceneMaterial[];
+  bm?: string;
   bs: PackedSurface;
   si: number;
   ss: number[];
@@ -175,7 +182,6 @@ type PackedSceneUrlState = {
 const DEFAULT_BLOOM_INTENSITY = 0;
 const DEFAULT_MOTION_BLUR_INTENSITY = 0;
 const MAX_VIEWPORT_PIXEL_RATIO = 2;
-const LOW_RES_CAPTURE_PIXEL_RATIO_SCALE = 0.5;
 
 let sceneUrlApplying = false;
 
@@ -442,14 +448,20 @@ const captureResolutionViewportSize = new THREE.Vector2();
 const fullViewportPixelRatio = () => Math.min(window.devicePixelRatio, MAX_VIEWPORT_PIXEL_RATIO);
 let downsampleSceneOnly = false;
 
-function setCaptureResolutionMode(fullResolution: boolean) {
+const RENDER_QUALITY_PIXEL_RATIO_SCALE: Record<RenderQuality, number> = {
+  full: 1,
+  high: 0.75,
+  medium: 0.5,
+  low: 0.25,
+};
+
+function setCaptureResolutionMode(renderQuality: RenderQuality) {
   renderer.getSize(captureResolutionViewportSize);
   const fullPixelRatio = fullViewportPixelRatio();
-  const nextDownsampleSceneOnly = !fullResolution;
+  const normalizedQuality = normalizeRenderQuality(renderQuality);
+  const nextDownsampleSceneOnly = normalizedQuality !== 'full';
   const qualityChanged = downsampleSceneOnly !== nextDownsampleSceneOnly;
-  const scenePixelRatio = fullResolution
-    ? fullPixelRatio
-    : Math.max(0.25, fullPixelRatio * LOW_RES_CAPTURE_PIXEL_RATIO_SCALE);
+  const scenePixelRatio = Math.max(0.25, fullPixelRatio * RENDER_QUALITY_PIXEL_RATIO_SCALE[normalizedQuality]);
   downsampleSceneOnly = nextDownsampleSceneOnly;
 
   renderer.setPixelRatio(fullPixelRatio);
@@ -659,6 +671,9 @@ let baseOriginalN = 0;
 let baseAxisMap: AxisMap = Array.from({ length: MAX_N }, (_, i) => i);
 let baseVisible = true;
 let baseSurface: SurfaceState = cloneSurface(DEFAULT_SURFACE);
+let baseMaterialId = 'mat_1';
+let materialSlots: SceneMaterialState[] = [{ id: baseMaterialId, name: 'Material 1', surface: cloneSurface(DEFAULT_SURFACE) }];
+let materialIdCounter = 2;
 let baseCellTopology: CellTopology | undefined;
 let baseSurfaceTopology: PrimitiveSurfaceTopology | undefined;
 keyboardCamera = new KeyboardCameraController({
@@ -757,6 +772,148 @@ function unpackSurfaceState(surface: ArrayLike<unknown> | undefined) {
     clearcoat: finiteNumber(surface?.[10], DEFAULT_SURFACE.clearcoat),
     clearcoatRoughness: finiteNumber(surface?.[11], DEFAULT_SURFACE.clearcoatRoughness),
     specularIntensity: finiteNumber(surface?.[12], DEFAULT_SURFACE.specularIntensity),
+  });
+}
+
+function packMaterialState(material: SceneMaterialState): PackedSceneMaterial {
+  return [material.id, material.name, packSurfaceState(normalizeSurface(material.surface))];
+}
+
+function unpackMaterialState(material: PackedSceneMaterial | undefined, fallbackIndex: number): SceneMaterialState | null {
+  if (!Array.isArray(material)) return null;
+  const id = typeof material[0] === 'string' && material[0].trim() ? material[0].trim() : createMaterialId();
+  const name = typeof material[1] === 'string' && material[1].trim() ? material[1].trim() : `Material ${fallbackIndex + 1}`;
+  return {
+    id,
+    name,
+    surface: unpackSurfaceState(material[2]),
+  };
+}
+
+function createMaterialId() {
+  return `mat_${materialIdCounter++}`;
+}
+
+function syncMaterialIdCounter() {
+  let max = 0;
+  for (const material of materialSlots) {
+    const match = /^mat_(\d+)$/.exec(material.id);
+    if (match) max = Math.max(max, Number.parseInt(match[1], 10));
+  }
+  materialIdCounter = Math.max(materialIdCounter, max + 1);
+}
+
+function createSceneMaterial(surface: SurfaceState, name?: string): SceneMaterialState {
+  const materialNumber = materialSlots.length + 1;
+  return {
+    id: createMaterialId(),
+    name: name?.trim() || `Material ${materialNumber}`,
+    surface: cloneSurface(normalizeSurface(surface)),
+  };
+}
+
+function setSceneMaterials(materials: SceneMaterialState[]) {
+  materialSlots = materials.length
+    ? materials.map((material, idx) => ({
+      id: material.id || `mat_${idx + 1}`,
+      name: material.name?.trim() || `Material ${idx + 1}`,
+      surface: cloneSurface(normalizeSurface(material.surface)),
+    }))
+    : [createSceneMaterial(DEFAULT_SURFACE, 'Material 1')];
+  syncMaterialIdCounter();
+}
+
+function materialSlotById(id: string | undefined) {
+  return materialSlots.find(material => material.id === id) ?? null;
+}
+
+function ensureMaterialSlot(id: string | undefined, fallbackSurface = DEFAULT_SURFACE, fallbackName?: string) {
+  const existing = materialSlotById(id);
+  if (existing) return existing;
+
+  const material = createSceneMaterial(fallbackSurface, fallbackName);
+  materialSlots.push(material);
+  return material;
+}
+
+function objectLabelForMaterialList(idx: number) {
+  if (idx === BASE_SELECTION) return baseLabel;
+  return extraInstances[idx]?.label ?? `Object ${idx + 1}`;
+}
+
+function objectMaterialId(idx: number) {
+  if (idx === BASE_SELECTION) return baseMaterialId;
+  return extraInstances[idx]?.materialId ?? '';
+}
+
+function setObjectMaterialId(idx: number, materialId: string) {
+  const material = ensureMaterialSlot(materialId);
+  if (idx === BASE_SELECTION) {
+    baseMaterialId = material.id;
+    baseSurface = cloneSurface(material.surface);
+    rendererND.setSurface(baseSurface);
+    rendererND.refreshSurface();
+    return true;
+  }
+
+  const inst = extraInstances[idx];
+  if (!inst) return false;
+  inst.materialId = material.id;
+  inst.surface = cloneSurface(material.surface);
+  inst.renderer.setSurface(inst.surface);
+  inst.renderer.refreshSurface();
+  return true;
+}
+
+function materialUsageRows(materialId: string) {
+  const rows: { idx: number; label: string }[] = [];
+  if (M > 0 && baseMaterialId === materialId) rows.push({ idx: BASE_SELECTION, label: baseLabel });
+  extraInstances.forEach((inst, idx) => {
+    if (inst.materialId === materialId) rows.push({ idx, label: inst.label });
+  });
+  return rows;
+}
+
+function referencedMaterialIds() {
+  const ids = new Set<string>();
+  if (M > 0) ids.add(baseMaterialId);
+  extraInstances.forEach(inst => ids.add(inst.materialId));
+  return ids;
+}
+
+function reconcileSceneMaterials() {
+  if (!materialSlots.length) setSceneMaterials([createSceneMaterial(DEFAULT_SURFACE, 'Material 1')]);
+
+  if (M > 0 && !materialSlotById(baseMaterialId)) {
+    const matched = materialSlots.find(material => surfacesEqual(material.surface, baseSurface));
+    baseMaterialId = matched?.id ?? ensureMaterialSlot(undefined, baseSurface, 'Material 1').id;
+  }
+
+  extraInstances.forEach((inst, idx) => {
+    if (materialSlotById(inst.materialId)) return;
+    const matched = materialSlots.find(material => surfacesEqual(material.surface, inst.surface));
+    inst.materialId = matched?.id ?? ensureMaterialSlot(undefined, inst.surface, `Material ${idx + 2}`).id;
+  });
+
+  const used = referencedMaterialIds();
+  materialSlots = materialSlots.filter(material => used.has(material.id));
+  if (!materialSlots.length) {
+    const material = createSceneMaterial(DEFAULT_SURFACE, 'Material 1');
+    materialSlots = [material];
+    if (M > 0) baseMaterialId = material.id;
+  }
+}
+
+function sceneMaterialEntriesForTexture() {
+  reconcileSceneMaterials();
+  return materialSlots.map(material => {
+    const usage = materialUsageRows(material.id);
+    return {
+      id: material.id,
+      name: material.name,
+      surface: cloneSurface(material.surface),
+      objectLabels: usage.map(row => row.label),
+    };
   });
 }
 
@@ -906,12 +1063,29 @@ function unpackAnimationKeyframeState(state: PackedAnimationKeyframeState): Anim
   };
 }
 
+function packRenderQuality(quality: RenderQuality) {
+  switch (quality) {
+    case 'low': return 0;
+    case 'high': return 2;
+    case 'medium': return 3;
+    case 'full':
+    default: return 1;
+  }
+}
+
+function unpackRenderQuality(value: unknown): RenderQuality {
+  if (value === 0) return 'low';
+  if (value === 2) return 'high';
+  if (value === 3) return 'medium';
+  return 'full';
+}
+
 function packTimelineState(state: AnimationTimelineState): PackedAnimationTimelineState {
   return {
     s: [
       state.settings.fps,
       state.settings.frameCount,
-      state.settings.fullResolution ? 1 : 0,
+      packRenderQuality(state.settings.renderQuality),
       state.settings.cameraWidth,
       state.settings.cameraHeight,
     ],
@@ -927,7 +1101,7 @@ function unpackTimelineState(state: PackedAnimationTimelineState): AnimationTime
     settings: {
       fps: finiteInteger(state.s[0], 60),
       frameCount: finiteInteger(state.s[1], 180),
-      fullResolution: state.s[2] === 1,
+      renderQuality: unpackRenderQuality(state.s[2]),
       cameraWidth: finiteInteger(state.s[3], window.innerWidth),
       cameraHeight: finiteInteger(state.s[4], window.innerHeight),
     },
@@ -956,6 +1130,7 @@ function packInstanceState(instance: InstanceSnapshot): PackedInstanceState {
     n: instance.originalN,
     a: [...instance.axisMap],
     v: instance.visible ? 1 : 0,
+    mi: instance.materialId,
     s: packSurfaceState(normalizeSurface(instance.surface)),
   };
 }
@@ -975,6 +1150,7 @@ function unpackInstanceState(instance: PackedInstanceState): InstanceSnapshot {
     originalN: Math.max(1, Math.min(MAX_N, finiteInteger(instance.n, MAX_N))),
     axisMap: Array.isArray(instance.a) ? instance.a.map((dim, idx) => normalizedAxisDim(dim, idx)) : [],
     visible: instance.v === 1,
+    materialId: typeof instance.mi === 'string' ? instance.mi : '',
     surface: unpackSurfaceState(instance.s),
   };
 }
@@ -1005,6 +1181,8 @@ function captureSceneUrlState(): PackedSceneUrlState {
     bo: packF32(snap.baseOrigin ? new Float32Array(snap.baseOrigin) : new Float32Array(MAX_N)),
     bn: snap.baseOrigN,
     bv: snap.baseVisible ? 1 : 0,
+    ma: snap.materials?.map(packMaterialState),
+    bm: snap.baseMaterialId,
     bs: packSurfaceState(normalizeSurface(snap.baseSurface)),
     si: snap.selectedInstance,
     ss: [...(snap.selectedInstances ?? [])],
@@ -1043,6 +1221,10 @@ function unpackSceneUrlSnapshot(state: PackedSceneUrlState): SceneSnapshot<Primi
     baseOrigin: unpackF32(state.bo),
     baseOrigN: Math.max(1, Math.min(MAX_N, finiteInteger(state.bn, MAX_N))),
     baseVisible: state.bv === 1,
+    materials: Array.isArray(state.ma)
+      ? state.ma.map((material, idx) => unpackMaterialState(material, idx)).filter((material): material is SceneMaterialState => !!material)
+      : undefined,
+    baseMaterialId: typeof state.bm === 'string' ? state.bm : '',
     baseSurface: unpackSurfaceState(state.bs),
     selectedInstance: finiteInteger(state.si, NO_SELECTION),
     selectedInstances: Array.isArray(state.ss) ? state.ss.map(idx => finiteInteger(idx, NO_SELECTION)) : [],
@@ -1193,6 +1375,7 @@ async function copyTextToClipboard(text: string) {
 }
 
 function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
+  reconcileSceneMaterials();
   return {
     N,
     X: new Float32Array(X),
@@ -1213,6 +1396,12 @@ function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
     baseOrigin: new Float32Array(baseOrigin),
     baseOrigN: baseOriginalN,
     baseVisible,
+    materials: materialSlots.map(material => ({
+      id: material.id,
+      name: material.name,
+      surface: cloneSurface(material.surface),
+    })),
+    baseMaterialId,
     baseSurface: cloneSurface(baseSurface),
     selectedInstance,
     selectedInstances: [...selectedInstances],
@@ -1230,6 +1419,7 @@ function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
       originalN: inst.originalN,
       axisMap: [...inst.axisMap],
       visible: inst.visible,
+      materialId: inst.materialId,
       surface: cloneSurface(inst.surface),
     })),
   };
@@ -1252,6 +1442,30 @@ function applySnapshot(snap: SceneSnapshot<PrimitiveMode>) {
   PARAMS.N = snap.paramsN;
   PARAMS.primitive = snap.primitive;
   rebuildState(snap.N, snap.X, snap.E, snap.source, snap.baseOrigN, snap.baseAxisMap, snap.surfaceTopology, snap.cellTopology);
+  if (snap.materials?.length) {
+    setSceneMaterials(snap.materials);
+  } else {
+    const derivedMaterials: SceneMaterialState[] = [];
+    const addDerivedMaterial = (surface: SurfaceState | undefined, name: string, id?: string) => {
+      const normalized = normalizeSurface(surface);
+      const existing = id
+        ? derivedMaterials.find(material => material.id === id)
+        : derivedMaterials.find(material => surfacesEqual(material.surface, normalized));
+      if (existing) return existing.id;
+      const material = {
+        id: id || `mat_${derivedMaterials.length + 1}`,
+        name,
+        surface: normalized,
+      };
+      derivedMaterials.push(material);
+      return material.id;
+    };
+    snap.baseMaterialId = addDerivedMaterial(snap.baseSurface, 'Material 1', snap.baseMaterialId);
+    snap.instances.forEach((instance, idx) => {
+      instance.materialId = addDerivedMaterial(instance.surface, `Material ${idx + 2}`, instance.materialId);
+    });
+    setSceneMaterials(derivedMaterials);
+  }
   if (snap.rotMatrix.length === rot.matrix.length) rot.matrix.set(snap.rotMatrix);
   baseLabel = snap.label;
   PARAMS.axesX = snap.axes.x; PARAMS.axesY = snap.axes.y; PARAMS.axesZ = snap.axes.z;
@@ -1262,9 +1476,13 @@ function applySnapshot(snap: SceneSnapshot<PrimitiveMode>) {
   baseTransform.scale.copy(snap.baseTransform.scale);
   baseOrigin = cloneObjectOrigin(snap.baseOrigin, X, M, MAX_N);
   baseVisible = snap.baseVisible;
-  baseSurface = normalizeSurface(snap.baseSurface);
+  baseMaterialId = snap.baseMaterialId || materialSlots[0]?.id || baseMaterialId;
+  baseSurface = cloneSurface(materialSlotById(baseMaterialId)?.surface ?? normalizeSurface(snap.baseSurface));
   rendererND.setSurface(baseSurface);
   extraInstances.push(...snap.instances.map(restoreInstanceSnapshot));
+  reconcileSceneMaterials();
+  if (M > 0) setObjectMaterialId(BASE_SELECTION, baseMaterialId);
+  extraInstances.forEach((inst, idx) => setObjectMaterialId(idx, inst.materialId));
   selectedInstance = snap.selectedInstance === BASE_SELECTION && M > 0
     ? BASE_SELECTION
     : (snap.selectedInstance >= 0 && snap.selectedInstance < extraInstances.length ? snap.selectedInstance : NO_SELECTION);
@@ -1360,6 +1578,7 @@ function renameObject(idx: number, value: string) {
     extraInstances[idx].label = label;
   }
   updateObjectList();
+  textureEditor.updatePanel();
   requestSceneUrlUpdate();
 }
 
@@ -1367,34 +1586,90 @@ function updateObjectList() {
   objectListController.update();
 }
 
-function getSurfaceTarget(idx: number): { surface: SurfaceState; renderer: HypercubeRenderer; } | null {
-  if (idx === BASE_SELECTION) return M > 0 ? { surface: baseSurface, renderer: rendererND } : null;
-  const inst = extraInstances[idx];
-  return inst ? { surface: inst.surface, renderer: inst.renderer } : null;
+function getTextureMaterialTarget() {
+  if (!isSelectableObject(selectedInstance)) return null;
+  reconcileSceneMaterials();
+  const materialId = objectMaterialId(selectedInstance);
+  const material = ensureMaterialSlot(materialId);
+  const usage = materialUsageRows(material.id);
+  return {
+    materialId: material.id,
+    material: {
+      id: material.id,
+      name: material.name,
+      surface: cloneSurface(material.surface),
+      objectLabels: usage.map(row => row.label),
+    },
+    materials: sceneMaterialEntriesForTexture(),
+    canSplit: usage.length > 1,
+  };
 }
 
-function applySurfaceToSelection(surface: SurfaceState, recordUndo: boolean) {
-  const target = getSurfaceTarget(selectedInstance);
-  if (!target) return false;
+function assignMaterialToSelection(materialId: string, recordUndo: boolean) {
+  if (!isSelectableObject(selectedInstance)) return false;
+  const material = materialSlotById(materialId);
+  if (!material || objectMaterialId(selectedInstance) === material.id) return false;
+  if (recordUndo) pushUndoSnapshot();
+  const changed = setObjectMaterialId(selectedInstance, material.id);
+  if (!changed) return false;
+  reconcileSceneMaterials();
+  updateObjectList();
+  textureEditor.updatePanel();
+  requestSceneUrlUpdate();
+  return true;
+}
+
+function renameSceneMaterial(materialId: string, name: string, recordUndo: boolean) {
+  const material = materialSlotById(materialId);
+  const clean = name.trim();
+  if (!material || !clean || material.name === clean) {
+    textureEditor.updatePanel();
+    return false;
+  }
+  if (recordUndo) pushUndoSnapshot();
+  material.name = clean;
+  textureEditor.updatePanel();
+  requestSceneUrlUpdate();
+  return true;
+}
+
+function splitSelectedMaterial(recordUndo: boolean) {
+  if (!isSelectableObject(selectedInstance)) return false;
+  const current = materialSlotById(objectMaterialId(selectedInstance));
+  if (!current) return false;
+  const usage = materialUsageRows(current.id);
+  if (usage.length <= 1) return false;
+  if (recordUndo) pushUndoSnapshot();
+  const label = objectLabelForMaterialList(selectedInstance);
+  const material = createSceneMaterial(current.surface, `${label} material`);
+  materialSlots.push(material);
+  const changed = setObjectMaterialId(selectedInstance, material.id);
+  if (!changed) return false;
+  reconcileSceneMaterials();
+  updateObjectList();
+  textureEditor.updatePanel();
+  requestSceneUrlUpdate();
+  return true;
+}
+
+function applySurfaceToSelectionMaterial(surface: SurfaceState, recordUndo: boolean) {
+  if (!isSelectableObject(selectedInstance)) return false;
+  const material = ensureMaterialSlot(objectMaterialId(selectedInstance));
   const nextSurface = normalizeSurface(surface);
-  const changed = !surfacesEqual(target.surface, nextSurface);
+  const changed = !surfacesEqual(material.surface, nextSurface);
   if (changed && recordUndo) pushUndoSnapshot();
 
   if (changed) {
-    if (selectedInstance === BASE_SELECTION) {
-      baseSurface = nextSurface;
-      rendererND.setSurface(baseSurface);
-      rendererND.refreshSurface();
-    } else {
-      const inst = extraInstances[selectedInstance];
-      if (!inst) return false;
-      inst.surface = nextSurface;
-      inst.renderer.setSurface(inst.surface);
-      inst.renderer.refreshSurface();
-    }
+    material.surface = cloneSurface(nextSurface);
+    if (M > 0 && baseMaterialId === material.id) setObjectMaterialId(BASE_SELECTION, material.id);
+    extraInstances.forEach((inst, idx) => {
+      if (inst.materialId === material.id) setObjectMaterialId(idx, material.id);
+    });
   }
 
-  if (changed) requestSceneUrlUpdate();
+  if (changed) {
+    requestSceneUrlUpdate();
+  }
   return changed;
 }
 
@@ -1404,8 +1679,11 @@ const textureEditor = new TextureEditorController({
   light,
   ambient,
   hemi,
-  getSurfaceTarget: () => getSurfaceTarget(selectedInstance),
-  applySurfaceToTarget: applySurfaceToSelection,
+  getSurfaceTarget: getTextureMaterialTarget,
+  applySurfaceToTarget: applySurfaceToSelectionMaterial,
+  assignMaterialToTarget: assignMaterialToSelection,
+  renameMaterial: renameSceneMaterial,
+  splitMaterialForTarget: () => splitSelectedMaterial(true),
 });
 
 function removeSelectionOutlines() {
@@ -1628,7 +1906,7 @@ function addProductMeshFromSelection() {
   const verts = embedToMax(product.verts, product.dimension, axisMap);
   const origin = new Float32Array(MAX_N);
   const parentIdx = selected[0];
-  const parentSurface = getObjectSurface(parentIdx);
+  const parentMaterialId = objectMaterialId(parentIdx) || materialSlots[0]?.id || ensureMaterialSlot(undefined).id;
   const parentTransform = getObjectTransform(parentIdx);
   const label = `Product #${extraInstances.length + 1}`;
 
@@ -1644,7 +1922,7 @@ function addProductMeshFromSelection() {
     axisMap,
     originalN: product.dimension,
     origin,
-  }, new THREE.Vector3(0, 0, 0), label, cloneSurface(parentSurface ?? DEFAULT_SURFACE));
+  }, new THREE.Vector3(0, 0, 0), label, parentMaterialId);
 
   if (parentTransform) {
     inst.transform.scale.copy(parentTransform.scale);
@@ -1687,6 +1965,7 @@ function deleteSelected() {
   }
   selectedInstance = keepBaseSelected ? BASE_SELECTION : NO_SELECTION;
   selectedInstances = keepBaseSelected ? [BASE_SELECTION] : [];
+  reconcileSceneMaterials();
   projectAndRenderAll();
   updateObjectList();
   selectObject(selectedInstance);
@@ -1747,6 +2026,7 @@ function deleteSelectedEditCell() {
   }
 
   reconcileSelection();
+  reconcileSceneMaterials();
   projectAndRenderAll();
   applyObjectVisibility();
   updateObjectList();
@@ -1786,7 +2066,8 @@ function restoreInstanceSnapshot(snap: InstanceSnapshot): Instance {
     snap.cellTopology,
   );
   instanceRenderer.build(snap.M, snap.E, snap.surfaceTopology, cellTopology);
-  const surface = normalizeSurface(snap.surface);
+  const material = ensureMaterialSlot(snap.materialId, normalizeSurface(snap.surface), snap.label);
+  const surface = cloneSurface(material.surface);
   instanceRenderer.setSurface(surface);
   instanceRenderer.setMode(PARAMS.renderMode);
 
@@ -1806,6 +2087,7 @@ function restoreInstanceSnapshot(snap: InstanceSnapshot): Instance {
     originalN: snap.originalN,
     axisMap: normalizeAxisMap(snap.axisMap, snap.originalN),
     visible: snap.visible,
+    materialId: material.id,
     surface,
   };
 }
@@ -2447,14 +2729,16 @@ function createPrimitiveData(kind: PrimitiveKind, dimension: number): InstanceGe
   };
 }
 
-function insertInstance(data: InstanceGeometryData, offset: THREE.Vector3, label: string, surface: SurfaceState, syncMode = true) {
+function insertInstance(data: InstanceGeometryData, offset: THREE.Vector3, label: string, materialId: string, syncMode = true) {
+  const material = ensureMaterialSlot(materialId);
   const inst = createSceneInstance({
     scene,
     projector,
     data,
     offset,
     label,
-    surface,
+    materialId: material.id,
+    surface: material.surface,
     renderMode: PARAMS.renderMode,
     projectionN: MAX_N,
   });
@@ -2467,7 +2751,8 @@ function insertInstance(data: InstanceGeometryData, offset: THREE.Vector3, label
 }
 
 function addPrimitiveInstanceAt(kind: PrimitiveKind, label: string, offset: THREE.Vector3, syncMode = true) {
-  insertInstance(createPrimitiveData(kind, PARAMS.N), offset, label, cloneSurface(DEFAULT_SURFACE), syncMode);
+  const materialId = materialSlots[0]?.id ?? ensureMaterialSlot(undefined, DEFAULT_SURFACE, 'Material 1').id;
+  insertInstance(createPrimitiveData(kind, PARAMS.N), offset, label, materialId, syncMode);
 }
 
 function clearExtraInstances() {
@@ -2496,9 +2781,11 @@ function addInstanceAt(offset: THREE.Vector3, recordUndo = true) {
   } else {
     data = createPrimitiveData(PARAMS.primitive, PARAMS.N);
   }
-  const surface = M > 0 && baseVisible ? cloneSurface(baseSurface) : cloneSurface(DEFAULT_SURFACE);
+  const materialId = M > 0 && baseVisible
+    ? baseMaterialId
+    : (materialSlots[0]?.id ?? ensureMaterialSlot(undefined, DEFAULT_SURFACE, 'Material 1').id);
   const label = `${data.kind} #${extraInstances.length + 1}`;
-  insertInstance(data, offset, label, surface);
+  insertInstance(data, offset, label, materialId);
 }
 
 function rebuildState(
@@ -2539,7 +2826,13 @@ function rebuildState(
   baseOrigin = computeObjectOrigin(X, M, MAX_N, baseOrigin);
   baseOriginalN = localN ?? visibleDims();
   baseAxisMap = normalizeAxisMap(axisMap, baseOriginalN);
-  baseSurface = cloneSurface(DEFAULT_SURFACE);
+  setSceneMaterials([{
+    id: 'mat_1',
+    name: 'Material 1',
+    surface: cloneSurface(DEFAULT_SURFACE),
+  }]);
+  baseMaterialId = materialSlots[0]?.id ?? 'mat_1';
+  baseSurface = cloneSurface(materialSlotById(baseMaterialId)?.surface ?? DEFAULT_SURFACE);
   baseCellTopology = deriveCellTopologyForGeometry(PARAMS.primitive, baseOriginalN, M, E, surfaceTopology, cellTopology);
   baseSurfaceTopology = clonePrimitiveSurfaceTopology(surfaceTopology)
     ?? surfaceTopologyFromCellTopology(baseCellTopology);
@@ -2622,14 +2915,14 @@ animationTimeline = new KeyframeTimelineController({
     viewportCapture.setRecordingSettings(
       settings.fps,
       settings.frameCount,
-      settings.fullResolution,
+      settings.renderQuality,
       settings.cameraWidth,
       settings.cameraHeight,
     );
-    if (!settings.fullResolution) {
+    if (settings.renderQuality !== 'full') {
       backgroundController.setHdrQuality('sd');
     }
-    setCaptureResolutionMode(settings.fullResolution);
+    setCaptureResolutionMode(settings.renderQuality);
   },
   onBeforeKeyframeChange: () => pushUndoSnapshot(),
   onStateChange: () => requestSceneUrlUpdate(),

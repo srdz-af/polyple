@@ -1,17 +1,24 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import type { HypercubeRenderer } from '../rendering/HypercubeRenderer';
 import {
   DEFAULT_SURFACE,
-  cloneSurface,
   normalizeSurface,
-  surfacesEqual,
   toColorHex,
   type SurfaceState,
 } from '../scene/surface';
-import { TexturePresetStore, texturePresetLabel } from './texturePresets';
 
-type SurfaceTarget = { surface: SurfaceState; renderer: HypercubeRenderer };
+export type TextureMaterialEntry = {
+  id: string;
+  name: string;
+  surface: SurfaceState;
+  objectLabels: string[];
+};
+type SurfaceTarget = {
+  materialId: string;
+  material: TextureMaterialEntry;
+  materials: TextureMaterialEntry[];
+  canSplit: boolean;
+};
 const OPAQUE_ALPHA_THRESHOLD = 0.999;
 
 type TextureEditorControllerOptions = {
@@ -22,10 +29,14 @@ type TextureEditorControllerOptions = {
   hemi: THREE.HemisphereLight;
   getSurfaceTarget: () => SurfaceTarget | null;
   applySurfaceToTarget: (surface: SurfaceState, recordUndo: boolean) => boolean;
+  assignMaterialToTarget: (materialId: string, recordUndo: boolean) => boolean;
+  renameMaterial: (materialId: string, name: string, recordUndo: boolean) => boolean;
+  splitMaterialForTarget: () => boolean;
 };
 
 export class TextureEditorController {
   private readonly panel = document.getElementById('texture-panel') as HTMLDivElement | null;
+  private readonly materialScopedRows = Array.from(document.querySelectorAll<HTMLElement>('#texture-controls .texture-row[data-material-scope]'));
   private readonly previewCanvas = document.getElementById('texture-preview') as HTMLCanvasElement | null;
   private readonly materialTypeSelect = document.getElementById('texture-material-type') as HTMLSelectElement | null;
   private readonly materialTypeValue = document.getElementById('texture-material-type-value') as HTMLOutputElement | null;
@@ -53,14 +64,12 @@ export class TextureEditorController {
   private readonly clearcoatRoughnessValue = document.getElementById('texture-clearcoat-roughness-value') as HTMLOutputElement | null;
   private readonly specularIntensityInput = document.getElementById('texture-specular-intensity') as HTMLInputElement | null;
   private readonly specularIntensityValue = document.getElementById('texture-specular-intensity-value') as HTMLOutputElement | null;
-  private readonly presetSelect = document.getElementById('texture-preset-select') as HTMLSelectElement | null;
-  private readonly presetSaveButton = document.getElementById('texture-preset-save') as HTMLButtonElement | null;
-  private readonly presetStore = new TexturePresetStore<SurfaceState>({
-    normalizeSurface: surface => normalizeSurface(surface),
-    surfacesEqual: (a, b) => surfacesEqual(a, b),
-  });
+  private readonly materialSelect = document.getElementById('texture-material-select') as HTMLSelectElement | null;
+  private readonly materialNameInput = document.getElementById('texture-material-name') as HTMLInputElement | null;
+  private readonly materialCount = document.getElementById('texture-material-count') as HTMLOutputElement | null;
+  private readonly materialSplitButton = document.getElementById('texture-material-split') as HTMLButtonElement | null;
   private syncingTextureUI = false;
-  private syncingTexturePresetUI = false;
+  private syncingMaterialUI = false;
   private previewRenderer: THREE.WebGLRenderer | null = null;
   private previewScene: THREE.Scene | null = null;
   private previewCamera: THREE.PerspectiveCamera | null = null;
@@ -68,12 +77,11 @@ export class TextureEditorController {
   private previewStandardMaterial: THREE.MeshStandardMaterial | null = null;
   private previewGlassMaterial: THREE.MeshPhysicalMaterial | null = null;
   private previewEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
+  private textureControlsEnabled = false;
 
   constructor(private readonly options: TextureEditorControllerOptions) {}
 
   initialize() {
-    this.presetStore.load();
-    this.updateTexturePresetSelect();
     this.bindControls();
     window.addEventListener('scene-control-tab-change', ev => {
       if (!(ev instanceof CustomEvent) || ev.detail?.tab !== 'texture') return;
@@ -87,53 +95,60 @@ export class TextureEditorController {
 
     const target = this.options.getSurfaceTarget();
     const editable = !!target;
+    this.textureControlsEnabled = editable;
     this.panel.classList.toggle('empty', !target);
     this.panel.classList.toggle('disabled', !editable);
-    this.setTextureInputsEnabled(editable);
 
     if (target) {
-      this.syncTextureControls(target.surface);
-      this.renderTexturePreview(target.surface);
-      this.syncTexturePresetSelection(target.surface);
+      this.syncMaterialControls(target);
+      this.syncTextureControls(target.material.surface);
+      this.setTextureInputsEnabled(editable, target.material.surface.materialType);
+      this.renderTexturePreview(target.material.surface);
     } else {
+      this.syncMaterialControls(null);
       this.syncTextureControls(DEFAULT_SURFACE);
+      this.setTextureInputsEnabled(editable, DEFAULT_SURFACE.materialType);
       this.renderTexturePreview(DEFAULT_SURFACE);
-      this.syncTexturePresetSelection(null);
     }
   }
 
-  private updateTexturePresetSelect(selectedId = '') {
-    if (!this.presetSelect) return;
-    const previous = selectedId || this.presetSelect.value;
-    this.syncingTexturePresetUI = true;
-    this.presetSelect.replaceChildren();
+  private syncMaterialControls(target: SurfaceTarget | null) {
+    this.syncingMaterialUI = true;
+    if (this.materialSelect) {
+      this.materialSelect.replaceChildren();
+      if (target) {
+        target.materials.forEach(material => {
+          const option = document.createElement('option');
+          option.value = material.id;
+          option.textContent = material.name;
+          this.materialSelect?.appendChild(option);
+        });
+        this.materialSelect.value = target.materialId;
+      } else {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = 'No material';
+        this.materialSelect.appendChild(option);
+      }
+    }
 
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = 'Select preset...';
-    this.presetSelect.appendChild(placeholder);
-
-    this.presetStore.all.forEach((preset, idx) => {
-      const option = document.createElement('option');
-      option.value = preset.id;
-      option.textContent = texturePresetLabel(preset.name, idx);
-      this.presetSelect?.appendChild(option);
-    });
-
-    this.presetSelect.value = this.presetStore.findById(previous) ? previous : '';
-    this.syncingTexturePresetUI = false;
+    const labels = target?.material.objectLabels ?? [];
+    const count = labels.length;
+    if (this.materialNameInput) this.materialNameInput.value = target?.material.name ?? '';
+    if (this.materialCount) {
+      this.materialCount.textContent = `${count}`;
+      this.materialCount.title = labels.join(', ');
+    }
+    if (this.materialSplitButton) {
+      this.materialSplitButton.disabled = !target || !target.canSplit || !this.textureControlsEnabled;
+      this.materialSplitButton.title = target?.canSplit
+        ? 'Make selected object use an independent material'
+        : 'Selected object already has an independent material';
+    }
+    this.syncingMaterialUI = false;
   }
 
-  private syncTexturePresetSelection(surface: SurfaceState | null) {
-    if (!this.presetSelect) return;
-    const matchingId = this.presetStore.findMatchingId(surface);
-    if (this.presetSelect.value === matchingId) return;
-    this.syncingTexturePresetUI = true;
-    this.presetSelect.value = matchingId;
-    this.syncingTexturePresetUI = false;
-  }
-
-  private setTextureInputsEnabled(enabled: boolean) {
+  private setTextureInputsEnabled(enabled: boolean, materialType = this.currentMaterialType()) {
     if (this.materialTypeSelect) this.materialTypeSelect.disabled = !enabled;
     if (this.baseColorInput) this.baseColorInput.disabled = !enabled;
     if (this.metallicInput) this.metallicInput.disabled = !enabled;
@@ -147,8 +162,24 @@ export class TextureEditorController {
     if (this.clearcoatInput) this.clearcoatInput.disabled = !enabled;
     if (this.clearcoatRoughnessInput) this.clearcoatRoughnessInput.disabled = !enabled;
     if (this.specularIntensityInput) this.specularIntensityInput.disabled = !enabled;
-    if (this.presetSaveButton) this.presetSaveButton.disabled = !enabled;
-    if (this.presetSelect) this.presetSelect.disabled = !enabled || this.presetStore.size === 0;
+    if (this.materialSelect) this.materialSelect.disabled = !enabled;
+    if (this.materialNameInput) this.materialNameInput.disabled = !enabled;
+    if (this.materialSplitButton) this.materialSplitButton.disabled = !enabled || this.materialSplitButton.disabled;
+    this.updateMaterialScopedRows(materialType, enabled);
+  }
+
+  private currentMaterialType(): SurfaceState['materialType'] {
+    return this.materialTypeSelect?.value === 'glass' ? 'glass' : 'standard';
+  }
+
+  private updateMaterialScopedRows(materialType: SurfaceState['materialType'], enabled = this.textureControlsEnabled) {
+    this.materialScopedRows.forEach(row => {
+      const visible = row.dataset.materialScope === materialType;
+      row.hidden = !visible;
+      row.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('input, select, button').forEach(control => {
+        control.disabled = !enabled || !visible;
+      });
+    });
   }
 
   private syncTextureControls(surface: SurfaceState) {
@@ -179,6 +210,7 @@ export class TextureEditorController {
     if (this.clearcoatValue) this.clearcoatValue.textContent = surface.clearcoat.toFixed(3);
     if (this.clearcoatRoughnessValue) this.clearcoatRoughnessValue.textContent = surface.clearcoatRoughness.toFixed(3);
     if (this.specularIntensityValue) this.specularIntensityValue.textContent = surface.specularIntensity.toFixed(3);
+    this.updateMaterialScopedRows(surface.materialType);
     this.syncingTextureUI = false;
   }
 
@@ -350,25 +382,6 @@ export class TextureEditorController {
     this.options.applySurfaceToTarget(nextSurface, recordUndo);
     this.syncTextureControls(nextSurface);
     this.renderTexturePreview(nextSurface);
-    this.syncTexturePresetSelection(nextSurface);
-  }
-
-  private saveTexturePreset() {
-    const target = this.options.getSurfaceTarget();
-    if (!target) return;
-
-    const fallbackName = `Texture ${this.presetStore.size + 1}`;
-    const rawName = window.prompt('Texture preset name', fallbackName);
-    if (rawName == null) return;
-    const name = rawName.trim();
-    if (!name) return;
-
-    const surface = cloneSurface(target.surface);
-    const preset = this.presetStore.upsert(name, surface);
-    if (!preset) return;
-    this.updateTexturePresetSelect(preset.id);
-    this.setTextureInputsEnabled(true);
-    this.syncTexturePresetSelection(surface);
   }
 
   private bindControls() {
@@ -378,6 +391,7 @@ export class TextureEditorController {
       if (this.materialTypeValue && this.materialTypeSelect) {
         this.materialTypeValue.textContent = this.materialTypeSelect.value === 'glass' ? 'Glass' : 'Standard';
       }
+      this.updateMaterialScopedRows(this.currentMaterialType());
       this.applyTextureFromInputs(true);
     });
     this.baseColorInput?.addEventListener('input', () => {
@@ -412,14 +426,23 @@ export class TextureEditorController {
     this.bindRangeInput(this.clearcoatRoughnessInput, this.clearcoatRoughnessValue, 3, true);
     this.bindRangeInput(this.specularIntensityInput, this.specularIntensityValue, 3, true);
 
-    this.presetSaveButton?.addEventListener('click', () => this.saveTexturePreset());
-    this.presetSelect?.addEventListener('change', () => {
-      if (this.syncingTexturePresetUI || !this.presetSelect) return;
-      const presetId = this.presetSelect.value;
-      if (!presetId) return;
-      const preset = this.presetStore.findById(presetId);
-      if (!preset) return;
-      this.applySurface(preset.surface, true);
+    this.materialSelect?.addEventListener('change', () => {
+      if (this.syncingMaterialUI || !this.materialSelect) return;
+      if (!this.materialSelect.value) return;
+      this.options.assignMaterialToTarget(this.materialSelect.value, true);
+      this.updatePanel();
+    });
+    this.materialNameInput?.addEventListener('change', () => {
+      if (this.syncingMaterialUI || !this.materialNameInput) return;
+      const target = this.options.getSurfaceTarget();
+      if (!target) return;
+      this.options.renameMaterial(target.materialId, this.materialNameInput.value, true);
+      this.updatePanel();
+    });
+    this.materialSplitButton?.addEventListener('click', () => {
+      if (this.syncingMaterialUI) return;
+      this.options.splitMaterialForTarget();
+      this.updatePanel();
     });
   }
 

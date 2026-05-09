@@ -27,6 +27,7 @@ type InstanceFactoryOptions = {
   data: InstanceGeometryData;
   offset: THREE.Vector3;
   label: string;
+  materialId: string;
   surface: SurfaceState;
   renderMode: ViewMode;
   projectionN: number;
@@ -66,6 +67,7 @@ export function createSceneInstance(options: InstanceFactoryOptions): Instance {
     originalN: options.data.originalN,
     axisMap: [...options.data.axisMap],
     visible: true,
+    materialId: options.materialId,
     surface,
   };
 }

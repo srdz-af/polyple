@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { RenderQuality } from '../animation/KeyframeTimelineController';
 
 type ViewportCaptureControllerOptions = {
   renderer: THREE.WebGLRenderer;
@@ -11,7 +12,7 @@ type ViewportCaptureControllerOptions = {
   recordButton: HTMLButtonElement | null;
   captureButton: HTMLButtonElement | null;
   timerEl: HTMLSpanElement | null;
-  setCaptureResolutionMode?: (fullResolution: boolean) => void;
+  setCaptureResolutionMode?: (quality: RenderQuality) => void;
   renderFrame?: () => void;
   renderAnimationFrame?: (frame: number) => void;
   onAnimationRenderStart?: () => void;
@@ -112,7 +113,7 @@ export class ViewportCaptureController {
   private animationRenderTimeoutId: number | null = null;
   private recordingFps = DEFAULT_VIDEO_RECORDER_FPS;
   private recordingFrameCount = 180;
-  private fullResolutionCapture = true;
+  private renderQuality: RenderQuality = 'full';
   private cameraCaptureWidth = clampCaptureDimension(window.innerWidth, 1280);
   private cameraCaptureHeight = clampCaptureDimension(window.innerHeight, 720);
   private recordingMode: RecordingMode | null = null;
@@ -129,13 +130,13 @@ export class ViewportCaptureController {
   setRecordingSettings(
     fps: number,
     frameCount: number,
-    fullResolution = this.fullResolutionCapture,
+    renderQuality: RenderQuality = this.renderQuality,
     cameraWidth = this.cameraCaptureWidth,
     cameraHeight = this.cameraCaptureHeight,
   ) {
     this.recordingFps = Math.max(1, Math.min(120, Math.round(Number.isFinite(fps) ? fps : DEFAULT_VIDEO_RECORDER_FPS)));
     this.recordingFrameCount = Math.max(1, Math.min(12000, Math.round(Number.isFinite(frameCount) ? frameCount : 180)));
-    this.fullResolutionCapture = !!fullResolution;
+    this.renderQuality = renderQuality;
     this.cameraCaptureWidth = clampCaptureDimension(cameraWidth, this.cameraCaptureWidth);
     this.cameraCaptureHeight = clampCaptureDimension(cameraHeight, this.cameraCaptureHeight);
     this.updateCameraViewOverlay();
@@ -611,14 +612,14 @@ export class ViewportCaptureController {
   }
 
   private applyCaptureResolution() {
-    if (this.captureResolutionAdjusted || this.fullResolutionCapture) return;
-    this.options.setCaptureResolutionMode?.(false);
+    if (this.captureResolutionAdjusted || this.renderQuality === 'full') return;
+    this.options.setCaptureResolutionMode?.(this.renderQuality);
     this.captureResolutionAdjusted = true;
   }
 
   private restoreCaptureResolution() {
     if (!this.captureResolutionAdjusted) return;
-    this.options.setCaptureResolutionMode?.(this.fullResolutionCapture);
+    this.options.setCaptureResolutionMode?.(this.renderQuality);
     this.captureResolutionAdjusted = false;
   }
 }

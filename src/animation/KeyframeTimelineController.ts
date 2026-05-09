@@ -19,10 +19,12 @@ export type AnimationKeyframeState = {
 export type AnimationSettings = {
   fps: number;
   frameCount: number;
-  fullResolution: boolean;
+  renderQuality: RenderQuality;
   cameraWidth: number;
   cameraHeight: number;
 };
+
+export type RenderQuality = 'full' | 'high' | 'medium' | 'low';
 
 type Keyframe = {
   frame: number;
@@ -48,7 +50,8 @@ type KeyframeTimelineControllerOptions = {
 
 const DEFAULT_FPS = 60;
 const DEFAULT_FRAME_COUNT = 180;
-const DEFAULT_FULL_RESOLUTION = true;
+const DEFAULT_RENDER_QUALITY: RenderQuality = 'full';
+const RENDER_QUALITIES: RenderQuality[] = ['full', 'high', 'medium', 'low'];
 const MIN_FPS = 1;
 const MAX_FPS = 120;
 const MIN_FRAME_COUNT = 1;
@@ -82,6 +85,10 @@ function finiteNumber(value: unknown, fallback: number) {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
+export function normalizeRenderQuality(value: unknown): RenderQuality {
+  return RENDER_QUALITIES.includes(value as RenderQuality) ? value as RenderQuality : DEFAULT_RENDER_QUALITY;
+}
+
 function cloneKeyframeState(state: AnimationKeyframeState): AnimationKeyframeState {
   return {
     dimension: state.dimension,
@@ -107,7 +114,7 @@ export class KeyframeTimelineController {
   private readonly frameCountInput = document.getElementById('animation-frame-count') as HTMLInputElement | null;
   private readonly cameraWidthInput = document.getElementById('camera-width') as HTMLInputElement | null;
   private readonly cameraHeightInput = document.getElementById('camera-height') as HTMLInputElement | null;
-  private readonly fullResolutionToggleButton = document.getElementById('full-resolution-capture-toggle') as HTMLButtonElement | null;
+  private readonly renderQualitySelect = document.getElementById('render-quality') as HTMLSelectElement | null;
   private readonly addKeyframeButton = document.getElementById('add-keyframe-button') as HTMLButtonElement | null;
   private readonly removeKeyframeButton = document.getElementById('remove-keyframe-button') as HTMLButtonElement | null;
   private readonly keyframeMenuEl = document.getElementById('animation-keyframe-menu') as HTMLDivElement | null;
@@ -123,7 +130,7 @@ export class KeyframeTimelineController {
   private settings: AnimationSettings = {
     fps: DEFAULT_FPS,
     frameCount: DEFAULT_FRAME_COUNT,
-    fullResolution: DEFAULT_FULL_RESOLUTION,
+    renderQuality: DEFAULT_RENDER_QUALITY,
     cameraWidth: viewportDimensions().width,
     cameraHeight: viewportDimensions().height,
   };
@@ -155,7 +162,7 @@ export class KeyframeTimelineController {
     this.frameCountInput?.addEventListener('change', () => this.syncSettingsFromInputs());
     this.cameraWidthInput?.addEventListener('change', () => this.handleCameraDimensionsInput());
     this.cameraHeightInput?.addEventListener('change', () => this.handleCameraDimensionsInput());
-    this.fullResolutionToggleButton?.addEventListener('click', () => this.toggleFullResolutionCapture());
+    this.renderQualitySelect?.addEventListener('change', () => this.handleRenderQualityChange());
     this.addKeyframeButton?.addEventListener('click', () => {
       this.addKeyframeAtCurrentFrame();
       this.closeKeyframeMenu();
@@ -169,7 +176,7 @@ export class KeyframeTimelineController {
     this.playheadEl?.addEventListener('pointerdown', ev => this.startPlayheadDrag(ev));
     window.addEventListener('resize', this.handleWindowResize);
 
-    this.syncFullResolutionButton();
+    this.syncRenderQualitySelect();
     this.syncSettingsFromInputs();
     this.render();
   }
@@ -208,7 +215,7 @@ export class KeyframeTimelineController {
     this.settings = {
       fps: clamp(Math.round(finiteNumber(settings.fps, this.settings.fps)), MIN_FPS, MAX_FPS),
       frameCount: clamp(Math.round(finiteNumber(settings.frameCount, this.settings.frameCount)), MIN_FRAME_COUNT, MAX_FRAME_COUNT),
-      fullResolution: Boolean(settings.fullResolution),
+      renderQuality: normalizeRenderQuality(settings.renderQuality),
       cameraWidth: viewportDimension(settings.cameraWidth, fallbackViewport.width),
       cameraHeight: viewportDimension(settings.cameraHeight, fallbackViewport.height),
     };
@@ -223,7 +230,7 @@ export class KeyframeTimelineController {
     if (this.frameCountInput) this.frameCountInput.value = String(this.settings.frameCount);
     if (this.cameraWidthInput) this.cameraWidthInput.value = this.cameraDimensionsFollowViewport ? '' : String(this.settings.cameraWidth);
     if (this.cameraHeightInput) this.cameraHeightInput.value = this.cameraDimensionsFollowViewport ? '' : String(this.settings.cameraHeight);
-    this.syncFullResolutionButton();
+    this.syncRenderQualitySelect();
     this.options.onSettingsChange?.(this.getSettings());
     this.setCurrentFrame(finiteNumber(state.currentFrame, 0), applyCurrentFrameState);
     this.setPlaying(Boolean(state.playing));
@@ -347,7 +354,7 @@ export class KeyframeTimelineController {
     this.settings = {
       fps,
       frameCount,
-      fullResolution: this.settings.fullResolution,
+      renderQuality: this.settings.renderQuality,
       cameraWidth,
       cameraHeight,
     };
@@ -392,21 +399,19 @@ export class KeyframeTimelineController {
     this.options.onStateChange?.();
   };
 
-  private toggleFullResolutionCapture() {
-    this.settings.fullResolution = !this.settings.fullResolution;
-    this.syncFullResolutionButton();
+  private handleRenderQualityChange() {
+    this.settings.renderQuality = normalizeRenderQuality(this.renderQualitySelect?.value);
+    this.syncRenderQualitySelect();
     this.options.onSettingsChange?.(this.getSettings());
     this.options.onStateChange?.();
   }
 
-  private syncFullResolutionButton() {
-    if (!this.fullResolutionToggleButton) return;
-    this.fullResolutionToggleButton.classList.toggle('active', this.settings.fullResolution);
-    this.fullResolutionToggleButton.setAttribute('aria-pressed', String(this.settings.fullResolution));
-    const state = this.settings.fullResolution ? 'on' : 'off';
-    const label = `Full-resolution capture ${state}`;
-    this.fullResolutionToggleButton.title = label;
-    this.fullResolutionToggleButton.setAttribute('aria-label', label);
+  private syncRenderQualitySelect() {
+    if (!this.renderQualitySelect) return;
+    this.renderQualitySelect.value = this.settings.renderQuality;
+    const label = `Render quality: ${this.renderQualitySelect.selectedOptions[0]?.textContent ?? this.settings.renderQuality}`;
+    this.renderQualitySelect.title = label;
+    this.renderQualitySelect.setAttribute('aria-label', label);
   }
 
   private removeKeyframeAtCurrentFrame() {

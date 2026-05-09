@@ -5,7 +5,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/x-icon" href="./favicon.ico" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=1k,2k,add,chevron_left,chevron_right,delete,deployed_code,diagonal_line,download,edit,ev_shadow,filter_4,filter_5,filter_6,filter_7,filter_8,filter_b_and_w,fullscreen,fullscreen_exit,grid_on,help,high_quality,imagesmode,keyboard_arrow_down,keyboard_arrow_up,line_end_circle,open_with,pause,photo_camera_back,play_arrow,public,recenter,redo,refresh,reset_focus,screen_record,screenshot_frame_2,settings,skip_next,skip_previous,speed_1_5x,speed_2x,square,stop,sync_alt,undo,upload,visibility,visibility_off,vr180_create2d,vrpano,zoom_out_map&display=block" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=1k,2k,add,call_split,chevron_left,chevron_right,delete,deployed_code,diagonal_line,download,edit,ev_shadow,filter_4,filter_5,filter_6,filter_7,filter_8,filter_b_and_w,fullscreen,fullscreen_exit,grid_on,help,high_quality,imagesmode,keyboard_arrow_down,keyboard_arrow_up,line_end_circle,open_with,pause,photo_camera_back,play_arrow,public,recenter,redo,refresh,reset_focus,screen_record,screenshot_frame_2,settings,skip_next,skip_previous,speed_1_5x,speed_2x,square,stop,sync_alt,undo,upload,visibility,visibility_off,vr180_create2d,vrpano,zoom_out_map&display=block" />
     <title>BleND</title>
     <style>
       :root {
@@ -81,8 +81,9 @@
       #background-controls input[type="color"],
       #texture-preview-wrap,
       #texture-controls input[type="color"],
-      #texture-preset-select,
-      #texture-preset-save,
+      #texture-material-select,
+      #texture-material-name,
+      #texture-material-split,
       #help-close,
       #mobile-onboarding-open,
       #mobile-onboarding-close,
@@ -449,6 +450,17 @@
         letter-spacing: 0.2px;
       }
       .render-setting-row input {
+        box-sizing: border-box;
+        width: 100%;
+        height: 28px;
+        padding: 0 8px;
+        border: 0;
+        border-radius: 4px;
+        background: var(--ui-bg-soft);
+        color: var(--ui-text-strong);
+        font: 12px/1 var(--ui-font);
+      }
+      .render-setting-row select {
         box-sizing: border-box;
         width: 100%;
         height: 28px;
@@ -1155,9 +1167,11 @@
       #texture-panel h4,
       #texture-controls label,
       #texture-controls output,
-      #texture-preset-controls label,
-      #texture-preset-select,
-      #texture-preset-save,
+      #texture-material-controls label,
+      #texture-material-select,
+      #texture-material-name,
+      #texture-material-count,
+      #texture-material-split,
       #animation-timeline,
       #animation-current-frame,
       #record-viewport-timer {
@@ -1598,6 +1612,9 @@
         align-items: center;
         gap: 14px;
       }
+      #texture-controls .texture-row[hidden] {
+        display: none;
+      }
       #texture-controls label {
         color: var(--ui-text);
         font-size: 11px;
@@ -1661,26 +1678,31 @@
         font-family: var(--ui-font);
         font-size: 11px;
       }
-      #texture-preset-controls {
+      #texture-material-controls {
         margin-top: 0;
         margin-bottom: 14px;
         display: grid;
         gap: 10px;
       }
-      #texture-preset-controls label {
+      #texture-material-controls label {
         color: var(--ui-text);
         font-size: 11px;
         font-weight: 600;
         letter-spacing: 0.2px;
         line-height: 1.45;
       }
-      #texture-preset-controls .texture-preset-row {
+      #texture-material-controls .texture-material-row {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-columns: var(--scene-control-label-width) minmax(0, 1fr) var(--scene-control-value-width);
         align-items: center;
         gap: 14px;
       }
-      #texture-preset-select {
+      #texture-material-select,
+      #texture-material-name {
+        grid-column: 1 / 3;
+      }
+      #texture-material-select,
+      #texture-material-name {
         width: 100%;
         min-width: 0;
         height: 28px;
@@ -1691,23 +1713,44 @@
         color: var(--ui-text-strong);
         font: inherit;
       }
-      #texture-preset-save {
+      #texture-material-count {
+        grid-column: 3;
+        grid-row: 1;
+        justify-self: start;
+        min-width: 0;
+        color: var(--ui-muted);
+        font-size: 11px;
+        line-height: 1.45;
+        text-align: left;
+        white-space: nowrap;
+      }
+      #texture-material-split {
+        grid-column: 3;
+        grid-row: 1;
+        justify-self: end;
+        display: inline-grid;
+        place-items: center;
+        width: 28px;
         height: 28px;
-        padding: 0 10px;
+        padding: 0;
         border: 1px solid var(--ui-border-soft);
         border-radius: 4px;
         background: var(--ui-bg-soft);
         color: var(--ui-text-strong);
-        font: 600 11px/1.2 var(--ui-font);
         cursor: pointer;
         transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
       }
-      #texture-preset-save:hover:not(:disabled) {
+      #texture-material-split .material-symbols-rounded {
+        font-size: 17px;
+        line-height: 1;
+      }
+      #texture-material-split:hover:not(:disabled) {
         background: var(--ui-bg-hover);
         border-color: var(--ui-border);
       }
-      #texture-preset-select:disabled,
-      #texture-preset-save:disabled {
+      #texture-material-select:disabled,
+      #texture-material-name:disabled,
+      #texture-material-split:disabled {
         opacity: 0.5;
         cursor: default;
       }
@@ -2748,6 +2791,15 @@
                     <input id="camera-height" type="number" min="16" max="16384" step="1" value="0" inputmode="numeric" placeholder="Height" aria-label="Camera height in pixels" title="Camera height in pixels" />
                   </div>
                 </div>
+                <div class="render-setting-row">
+                  <label for="render-quality">Quality</label>
+                  <select id="render-quality" aria-label="Render quality">
+                    <option value="full">Full</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                  </select>
+                </div>
                 <div class="render-setting-row render-actions-row">
                   <label>Capture</label>
                 <div id="render-actions" aria-label="Render capture actions">
@@ -2763,17 +2815,6 @@
                   <button id="capture-frame-button" type="button" aria-label="Download current frame (Shift+S)" title="Download current frame (Shift+S)">
                     <span class="material-symbols-rounded" aria-hidden="true">screenshot_frame_2</span>
                     <span class="button-label">Shot</span>
-                  </button>
-                  <button
-                    id="full-resolution-capture-toggle"
-                    type="button"
-                    class="active"
-                    aria-label="Full-resolution capture on"
-                    aria-pressed="true"
-                    title="Full-resolution capture on"
-                  >
-                    <span class="material-symbols-rounded" aria-hidden="true">high_quality</span>
-                    <span class="button-label">Quality</span>
                   </button>
                 </div>
               </div>
@@ -2800,12 +2841,18 @@
           <div id="texture-preview-wrap">
             <canvas id="texture-preview" aria-label="Texture preview"></canvas>
           </div>
-          <div id="texture-preset-controls">
-            <div class="texture-preset-row">
-              <select id="texture-preset-select" aria-label="Saved texture preset">
-                <option value="">Select preset…</option>
+          <div id="texture-material-controls">
+            <div class="texture-material-row">
+              <select id="texture-material-select" aria-label="Scene material">
+                <option value="">No material</option>
               </select>
-              <button id="texture-preset-save" type="button">Save</button>
+              <output id="texture-material-count" aria-live="polite">0</output>
+              <button id="texture-material-split" type="button" aria-label="Make selected object use an independent material" title="Make selected object use an independent material">
+                <span class="material-symbols-rounded" aria-hidden="true">call_split</span>
+              </button>
+            </div>
+            <div class="texture-material-row texture-material-name-row">
+              <input id="texture-material-name" type="text" value="" aria-label="Material name" />
             </div>
           </div>
           <div id="texture-controls">
@@ -2822,7 +2869,7 @@
               <input id="texture-base-color" type="color" value="#bfc7d5" />
               <output id="texture-base-color-value">#bfc7d5</output>
             </div>
-            <div class="texture-row">
+            <div class="texture-row" data-material-scope="standard">
               <label for="texture-metallic">Metallic</label>
               <input id="texture-metallic" type="range" min="0" max="1" step="0.001" value="1" />
               <output id="texture-metallic-value">1.000</output>
@@ -2837,42 +2884,42 @@
               <input id="texture-alpha" type="range" min="0" max="1" step="0.001" value="1" />
               <output id="texture-alpha-value">1.000</output>
             </div>
-            <div class="texture-row">
+            <div class="texture-row" data-material-scope="glass">
               <label for="texture-transmission">Transmission</label>
               <input id="texture-transmission" type="range" min="0" max="1" step="0.001" value="1" />
               <output id="texture-transmission-value">1.000</output>
             </div>
-            <div class="texture-row">
+            <div class="texture-row" data-material-scope="glass">
               <label for="texture-ior">IOR</label>
               <input id="texture-ior" type="range" min="1" max="2.333" step="0.001" value="1.45" />
               <output id="texture-ior-value">1.450</output>
             </div>
-            <div class="texture-row">
+            <div class="texture-row" data-material-scope="glass">
               <label for="texture-thickness">Thickness</label>
               <input id="texture-thickness" type="range" min="0" max="20" step="0.001" value="0.75" />
               <output id="texture-thickness-value">0.750</output>
             </div>
-            <div class="texture-row">
+            <div class="texture-row" data-material-scope="glass">
               <label for="texture-attenuation-color">Attenuation</label>
               <input id="texture-attenuation-color" type="color" value="#ffffff" />
               <output id="texture-attenuation-color-value">#ffffff</output>
             </div>
-            <div class="texture-row">
+            <div class="texture-row" data-material-scope="glass">
               <label for="texture-attenuation-distance">Atten dist</label>
               <input id="texture-attenuation-distance" type="range" min="0.001" max="100" step="0.01" value="5" />
               <output id="texture-attenuation-distance-value">5.00</output>
             </div>
-            <div class="texture-row">
+            <div class="texture-row" data-material-scope="glass">
               <label for="texture-clearcoat">Clearcoat</label>
               <input id="texture-clearcoat" type="range" min="0" max="1" step="0.001" value="1" />
               <output id="texture-clearcoat-value">1.000</output>
             </div>
-            <div class="texture-row">
+            <div class="texture-row" data-material-scope="glass">
               <label for="texture-clearcoat-roughness">Coat rough</label>
               <input id="texture-clearcoat-roughness" type="range" min="0" max="1" step="0.001" value="0.02" />
               <output id="texture-clearcoat-roughness-value">0.020</output>
             </div>
-            <div class="texture-row">
+            <div class="texture-row" data-material-scope="glass">
               <label for="texture-specular-intensity">Specular</label>
               <input id="texture-specular-intensity" type="range" min="0" max="2" step="0.001" value="1" />
               <output id="texture-specular-intensity-value">1.000</output>
