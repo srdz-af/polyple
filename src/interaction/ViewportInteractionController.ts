@@ -6,7 +6,7 @@ import type { HypercubeRenderer } from '../rendering/HypercubeRenderer';
 import type { Instance, SceneLightKind, TransformMode } from '../scene/types';
 import type { KeyboardCameraController } from '../controls/KeyboardCameraController';
 import type { TransformController } from './TransformController';
-import { ViewportOperationManager } from './ViewportOperationManager';
+import { ViewportOperationManager, type ViewportOperation } from './ViewportOperationManager';
 
 type ViewportParams = {
   editMode: boolean;
@@ -340,6 +340,26 @@ export class ViewportInteractionController {
 
   isDuplicatePlacementActive() {
     return this.operationManager.isKind('duplicate-placement');
+  }
+
+  isOperationActive() {
+    return this.operationManager.isActive();
+  }
+
+  isOperationKind(kind: string) {
+    return this.operationManager.isKind(kind);
+  }
+
+  startOperation(operation: ViewportOperation) {
+    return this.operationManager.start(operation);
+  }
+
+  updateActiveOperationPointer(ev: PointerEvent) {
+    return this.operationManager.updatePointer(ev, ev);
+  }
+
+  finishOperation(commit: boolean) {
+    return this.operationManager.finish(commit);
   }
 
   handleTransformConstraintKey(key: string) {

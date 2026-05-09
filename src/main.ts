@@ -1703,7 +1703,7 @@ function pickSceneLightHandle(ev: PointerEvent) {
 }
 
 function handleSceneLightPointerDown(ev: PointerEvent) {
-  if (viewportInteraction?.isDuplicatePlacementActive()) return;
+  if (viewportInteraction?.isOperationActive()) return;
   if (ev.button !== 0 || PARAMS.editMode || transformController.isActive() || transformController.isGizmoDragging()) return;
   const hit = pickSceneLightHandle(ev);
   if (!hit) return;
@@ -1736,6 +1736,23 @@ function startSceneLightDrag(runtime: SceneLightRuntime, handle: SceneLightDragH
     renderer.domElement.setPointerCapture(ev.pointerId);
   } catch {
     // Window handlers still keep the drag alive if pointer capture is unavailable.
+  }
+  if (!viewportInteraction?.startOperation({
+    kind: 'scene-light-drag',
+    scope: 'light',
+    blocksCamera: true,
+    blocksSelection: true,
+    blocksContextMenu: true,
+    usesPointerCapture: true,
+    updatePointer: (_point, pointerEvent) => (pointerEvent ? updateSceneLightDrag(pointerEvent) : false),
+    commit: () => {
+      endSceneLightDrag(null, true);
+    },
+    cancel: () => {
+      endSceneLightDrag(null, false);
+    },
+  })) {
+    cancelSceneLightDrag();
   }
 }
 
@@ -1772,10 +1789,12 @@ function updateSceneLightDrag(ev: PointerEvent) {
   return true;
 }
 
-function endSceneLightDrag(ev: PointerEvent, commit: boolean) {
-  if (!sceneLightDrag.active || ev.pointerId !== sceneLightDrag.pointerId) return false;
+function endSceneLightDrag(ev: PointerEvent | null, commit: boolean) {
+  if (!sceneLightDrag.active || (ev && ev.pointerId !== sceneLightDrag.pointerId)) return false;
   try {
-    if (renderer.domElement.hasPointerCapture(ev.pointerId)) renderer.domElement.releasePointerCapture(ev.pointerId);
+    if (renderer.domElement.hasPointerCapture(sceneLightDrag.pointerId)) {
+      renderer.domElement.releasePointerCapture(sceneLightDrag.pointerId);
+    }
   } catch {
     // Pointer capture release is best-effort.
   }
@@ -1794,7 +1813,7 @@ function endSceneLightDrag(ev: PointerEvent, commit: boolean) {
   sceneLightDrag.moved = false;
   syncSceneLightControls();
   if (commit) requestSceneUrlUpdate();
-  ev.preventDefault();
+  ev?.preventDefault();
   return true;
 }
 
@@ -5932,16 +5951,22 @@ paneController.syncToViewport(true);
 modalOverlayController.initializeMobileOnboarding();
 renderer.domElement.addEventListener('pointerdown', handleSceneLightPointerDown, { capture: true });
 window.addEventListener('pointermove', ev => {
-  updateSceneLightDrag(ev);
+  if (viewportInteraction.isOperationKind('scene-light-drag')) viewportInteraction.updateActiveOperationPointer(ev);
 });
 window.addEventListener('pointerup', ev => {
-  endSceneLightDrag(ev, true);
+  if (viewportInteraction.isOperationKind('scene-light-drag')) {
+    viewportInteraction.finishOperation(true);
+    ev.preventDefault();
+  }
 });
 window.addEventListener('pointercancel', ev => {
-  endSceneLightDrag(ev, false);
+  if (viewportInteraction.isOperationKind('scene-light-drag')) {
+    viewportInteraction.finishOperation(false);
+    ev.preventDefault();
+  }
 });
 window.addEventListener('blur', () => {
-  cancelSceneLightDrag();
+  if (viewportInteraction.isOperationKind('scene-light-drag')) viewportInteraction.finishOperation(false);
 });
 viewportInteraction.bind();
 void backgroundSelectorReady
