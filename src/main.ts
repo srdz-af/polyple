@@ -3258,10 +3258,11 @@ function buildBeveledVertexData(
 
   const t = Math.max(0, Math.min(0.49, amount));
   for (const cut of bevel.cuts) {
+    const cutT = t * cut.weight;
     for (let dim = 0; dim < dimension; dim++) {
       const selectedValue = data[(dim * oldVertexCount) + selectedVertex] ?? 0;
       const neighborValue = data[(dim * oldVertexCount) + cut.neighbor] ?? selectedValue;
-      next[(dim * bevel.vertexCount) + cut.vertex] = selectedValue + ((neighborValue - selectedValue) * t);
+      next[(dim * bevel.vertexCount) + cut.vertex] = selectedValue + ((neighborValue - selectedValue) * cutT);
     }
   }
   return next;
@@ -3533,7 +3534,7 @@ function applyEditBevelPreview(token: EditBevelToken) {
   const oldX = targetIsBase ? X : target?.X;
   if (!oldX || oldVertexCount <= 0) return;
 
-  const bevel = bevelVertex(topology, token.cellId, oldVertexCount);
+  const bevel = bevelVertex(topology, token.cellId, oldVertexCount, token.smoothness);
   if (!bevel) return;
   const nextX = buildBeveledVertexData(oldX, oldVertexCount, token.cellId, bevel, token.amount);
 

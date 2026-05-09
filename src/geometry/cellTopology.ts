@@ -45,6 +45,9 @@ export type ExtrudeCellResult = {
 export type BevelVertexCut = {
   neighbor: number;
   vertex: number;
+  layer: number;
+  layers: number;
+  weight: number;
 };
 
 export type BevelVertexResult = {
@@ -505,6 +508,7 @@ export function bevelVertex(
   topology: CellTopology | undefined,
   vertexId: number,
   vertexCount: number,
+  smoothness = 1,
 ): BevelVertexResult | undefined {
   if (!topology || vertexId < 0 || vertexId >= vertexCount) return undefined;
 
@@ -527,12 +531,23 @@ export function bevelVertex(
     vertexMap[vertex] = nextVertex++;
   }
 
-  const cutByNeighbor = new Map<number, number>();
+  const layerCount = Math.max(1, Math.min(32, Math.floor(smoothness)));
+  const cutLayersByNeighbor = new Map<number, number[]>();
   const cuts: BevelVertexCut[] = [];
   incidentNeighbors.forEach(neighbor => {
-    const cutVertex = nextVertex++;
-    cutByNeighbor.set(neighbor, cutVertex);
-    cuts.push({ neighbor, vertex: cutVertex });
+    const layers: number[] = [];
+    for (let layer = 0; layer < layerCount; layer++) {
+      const cutVertex = nextVertex++;
+      layers.push(cutVertex);
+      cuts.push({
+        neighbor,
+        vertex: cutVertex,
+        layer,
+        layers: layerCount,
+        weight: (layer + 1) / layerCount,
+      });
+    }
+    cutLayersByNeighbor.set(neighbor, layers);
   });
 
   const highestSourceDimension = maxCellDimension(topology);
@@ -549,10 +564,12 @@ export function bevelVertex(
   const replacementForFaceVertex = (face: number[], selectedIndex: number) => {
     const prev = face[(selectedIndex - 1 + face.length) % face.length];
     const next = face[(selectedIndex + 1) % face.length];
+    const prevLayers = cutLayersByNeighbor.get(prev) ?? [];
+    const nextLayers = cutLayersByNeighbor.get(next) ?? [];
     return [
-      cutByNeighbor.get(prev),
-      cutByNeighbor.get(next),
-    ].filter((vertex): vertex is number => typeof vertex === 'number');
+      ...prevLayers.slice().reverse(),
+      ...nextLayers,
+    ];
   };
 
   for (let dim = 1; dim <= highestSourceDimension; dim++) {
@@ -568,9 +585,13 @@ export function bevelVertex(
 
       if (dim === 1) {
         const neighbor = cell[0] === vertexId ? cell[1] : cell[0];
-        const cut = cutByNeighbor.get(neighbor);
+        const layers = cutLayersByNeighbor.get(neighbor) ?? [];
         const remappedNeighbor = vertexMap[neighbor];
-        if (typeof cut === 'number' && remappedNeighbor >= 0) pushUniqueCell(targetCells, [cut, remappedNeighbor], signatures);
+        for (let layer = 0; layer < layers.length - 1; layer++) {
+          pushUniqueCell(targetCells, [layers[layer], layers[layer + 1]], signatures);
+        }
+        const outer = layers[layers.length - 1];
+        if (typeof outer === 'number' && remappedNeighbor >= 0) pushUniqueCell(targetCells, [outer, remappedNeighbor], signatures);
         continue;
       }
 
@@ -597,21 +618,24 @@ export function bevelVertex(
         .filter(vertex => vertex >= 0);
       for (const neighbor of incidentNeighbors) {
         if (!selected.has(neighbor)) continue;
-        const cut = cutByNeighbor.get(neighbor);
-        if (typeof cut === 'number') nextCell.push(cut);
+        nextCell.push(...(cutLayersByNeighbor.get(neighbor) ?? []));
       }
       pushUniqueCell(targetCells, nextCell, signatures);
     }
   }
 
   let capCellId = -1;
-  const cutVertices = cuts.map(cut => cut.vertex);
-  for (let dim = 1; dim <= highestCapDimension; dim++) {
-    const targetCells = cellsByDim[dim];
-    const signatures = new Set(targetCells.map(sortedCellSignature));
-    for (const cell of combinations(cutVertices.length, dim + 1).map(combo => combo.map(index => cutVertices[index]))) {
-      const nextId = pushUniqueCell(targetCells, cell, signatures);
-      if (dim === highestCapDimension && capCellId < 0 && nextId >= 0) capCellId = nextId;
+  for (let layer = 0; layer < layerCount; layer++) {
+    const layerVertices = incidentNeighbors
+      .map(neighbor => cutLayersByNeighbor.get(neighbor)?.[layer] ?? -1)
+      .filter(vertex => vertex >= 0);
+    for (let dim = 1; dim <= highestCapDimension; dim++) {
+      const targetCells = cellsByDim[dim];
+      const signatures = new Set(targetCells.map(sortedCellSignature));
+      for (const cell of combinations(layerVertices.length, dim + 1).map(combo => combo.map(index => layerVertices[index]))) {
+        const nextId = pushUniqueCell(targetCells, cell, signatures);
+        if (layer === 0 && dim === highestCapDimension && capCellId < 0 && nextId >= 0) capCellId = nextId;
+      }
     }
   }
 

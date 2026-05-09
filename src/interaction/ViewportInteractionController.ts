@@ -133,6 +133,7 @@ export class ViewportInteractionController {
     startX: number;
     startY: number;
   } | null = null;
+  private suppressNextContextMenu = false;
 
   constructor(private readonly options: ViewportInteractionControllerOptions) {}
 
@@ -145,6 +146,7 @@ export class ViewportInteractionController {
     canvas.addEventListener('wheel', ev => this.handleWheel(ev), { passive: false, capture: true });
 
     window.addEventListener('click', ev => this.hideContextMenuIfIdle(ev));
+    window.addEventListener('pointerdown', ev => this.handleWindowPointerDown(ev), { capture: true });
     window.addEventListener('pointermove', ev => this.handleWindowPointerMove(ev));
     window.addEventListener('pointerup', ev => this.handleWindowPointerUp(ev));
     window.addEventListener('pointercancel', ev => this.handleWindowPointerCancel(ev));
@@ -203,7 +205,6 @@ export class ViewportInteractionController {
       startX: this.lastPointer.x,
       startY: this.lastPointer.y,
     };
-    this.showBevelStatus();
   }
 
   startDuplicateFromLastPointer() {
@@ -287,6 +288,13 @@ export class ViewportInteractionController {
   }
 
   private handleContextMenu(ev: MouseEvent) {
+    if (this.suppressNextContextMenu) {
+      this.suppressNextContextMenu = false;
+      ev.preventDefault();
+      ev.stopPropagation();
+      return;
+    }
+
     if (this.editBevel) {
       ev.preventDefault();
       this.finishEditBevel(false);
@@ -445,14 +453,6 @@ export class ViewportInteractionController {
     if (this.axisDrag.active) return;
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
 
-    if (this.editBevel) {
-      if (ev.button === 0) this.finishEditBevel(true);
-      else if (ev.button === 2) this.finishEditBevel(false);
-      ev.preventDefault();
-      ev.stopPropagation();
-      return;
-    }
-
     if (this.duplicatePlacement) {
       if (ev.button === 0) this.finishDuplicatePlacement(true);
       else if (ev.button === 2) this.finishDuplicatePlacement(false);
@@ -501,6 +501,22 @@ export class ViewportInteractionController {
     } else {
       this.recordObjectClick(ev, selected);
     }
+  }
+
+  private handleWindowPointerDown(ev: PointerEvent) {
+    if (!this.editBevel) return;
+    this.lastPointer = { x: ev.clientX, y: ev.clientY };
+    if (ev.button === 0) {
+      this.finishEditBevel(true);
+    } else if (ev.button === 2) {
+      this.suppressNextContextMenu = true;
+      this.finishEditBevel(false);
+    } else {
+      return;
+    }
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
   }
 
   private handleWindowPointerMove(ev: PointerEvent) {
@@ -623,7 +639,6 @@ export class ViewportInteractionController {
 
     this.editBevel.smoothness = smoothness;
     this.options.updateEditBevel(this.editBevel.token, this.editBevel.amount, smoothness);
-    this.showBevelStatus();
   }
 
   private updateEditBevel(point: { clientX: number; clientY: number }) {
@@ -635,7 +650,6 @@ export class ViewportInteractionController {
     if (Math.abs(amount - this.editBevel.amount) < 0.0005) return true;
     this.editBevel.amount = amount;
     this.options.updateEditBevel(this.editBevel.token, amount, this.editBevel.smoothness);
-    this.showBevelStatus();
     return true;
   }
 
@@ -646,29 +660,6 @@ export class ViewportInteractionController {
     if (this.options.contextMenuEl) this.options.contextMenuEl.style.display = 'none';
     if (commit) this.options.commitEditBevel(bevel.token);
     else this.options.cancelEditBevel(bevel.token);
-  }
-
-  private showBevelStatus() {
-    const menu = this.options.contextMenuEl;
-    const bevel = this.editBevel;
-    if (!menu || !bevel) return;
-
-    menu.replaceChildren();
-    menu.classList.remove('primitive-menu', 'submenu-left');
-    const wrap = document.createElement('div');
-    wrap.className = 'context-menu-status';
-
-    const title = document.createElement('strong');
-    title.textContent = 'Bevel';
-    const value = document.createElement('span');
-    value.textContent = `Width ${bevel.amount.toFixed(3)} · Smoothness ${bevel.smoothness}`;
-    const hint = document.createElement('small');
-    hint.textContent = 'Wheel adjusts, left click commits, right click cancels';
-    wrap.append(title, value, hint);
-    menu.appendChild(wrap);
-
-    this.placeMenu(menu, this.lastPointer.x, this.lastPointer.y, 220, 0, 92);
-    menu.style.display = 'block';
   }
 
   private selectObjectFromPointer(ev: PointerEvent) {
