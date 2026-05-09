@@ -1385,17 +1385,6 @@ export function bevelFaceBoundary(
       edge.externalFaces.push({ faceId, sideA, sideB });
     }
   }
-  if (!boundaryEdges.every(edge => edge.externalFaces.length === 1)) return undefined;
-  for (let idx = 0; idx < selectedFace.length; idx++) {
-    const endpoint = selectedFace[idx];
-    const prevEdge = boundaryEdges[(idx - 1 + boundaryEdges.length) % boundaryEdges.length];
-    const nextEdge = boundaryEdges[idx];
-    const prevExternal = prevEdge.externalFaces[0];
-    const nextExternal = nextEdge.externalFaces[0];
-    const prevSide = prevEdge.b === endpoint ? prevExternal.sideB : prevExternal.sideA;
-    const nextSide = nextEdge.a === endpoint ? nextExternal.sideA : nextExternal.sideB;
-    if (prevSide !== nextSide) return undefined;
-  }
 
   for (let idx = 0; idx < selectedFace.length; idx++) {
     const endpoint = selectedFace[idx];
