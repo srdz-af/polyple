@@ -22,6 +22,7 @@ type LightMenuOption = {
 };
 
 type DuplicatePlacementToken = unknown;
+type EditExtrusionToken = unknown;
 
 const OBJECT_FOCUS_DOUBLE_CLICK_MS = 220;
 const OBJECT_FOCUS_DOUBLE_CLICK_MAX_DIST = 8;
@@ -67,6 +68,9 @@ type ViewportInteractionControllerOptions = {
   moveDuplicatePlacement: (token: DuplicatePlacementToken, position: THREE.Vector3) => void;
   commitDuplicatePlacement: (token: DuplicatePlacementToken) => void;
   cancelDuplicatePlacement: (token: DuplicatePlacementToken) => void;
+  extrudeSelectedEditCell: () => EditExtrusionToken | null;
+  commitEditExtrusion: (token: EditExtrusionToken) => void;
+  cancelEditExtrusion: (token: EditExtrusionToken) => void;
   insertKeyframe: () => void;
   removeLastKeyframe: () => void;
   deleteSelected: () => void;
@@ -112,6 +116,9 @@ export class ViewportInteractionController {
     token: DuplicatePlacementToken;
     prevControlsEnabled: boolean;
   } | null = null;
+  private editExtrusion: {
+    token: EditExtrusionToken;
+  } | null = null;
 
   constructor(private readonly options: ViewportInteractionControllerOptions) {}
 
@@ -151,6 +158,20 @@ export class ViewportInteractionController {
 
   startTransformFromLastPointer(mode: TransformMode) {
     this.options.transformController.startFromPointer(mode, this.lastPointer);
+  }
+
+  startEditExtrusionFromLastPointer() {
+    if (this.editExtrusion || this.duplicatePlacement) return;
+    if (!this.options.getParams().editMode) return;
+    if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
+    const token = this.options.extrudeSelectedEditCell();
+    if (!token) return;
+    this.options.transformController.startFromPointer('move', this.lastPointer);
+    if (!this.options.transformController.isActive()) {
+      this.options.cancelEditExtrusion(token);
+      return;
+    }
+    this.editExtrusion = { token };
   }
 
   startDuplicateFromLastPointer() {
@@ -396,10 +417,19 @@ export class ViewportInteractionController {
 
     if (this.options.transformController.isActive()) {
       if (ev.button === 0) {
-        this.options.pushUndoSnapshot();
+        if (this.editExtrusion) {
+          this.options.commitEditExtrusion(this.editExtrusion.token);
+          this.editExtrusion = null;
+        } else {
+          this.options.pushUndoSnapshot();
+        }
         this.options.transformController.finish(true);
       } else if (ev.button === 2) {
         this.options.transformController.finish(false);
+        if (this.editExtrusion) {
+          this.options.cancelEditExtrusion(this.editExtrusion.token);
+          this.editExtrusion = null;
+        }
       }
       ev.preventDefault();
       return;
@@ -470,6 +500,12 @@ export class ViewportInteractionController {
       this.options.controls.enabled = this.transformGizmoPrevControlsEnabled;
       return;
     }
+    if (this.editExtrusion && this.options.transformController.isActive()) {
+      this.options.transformController.finish(false);
+      this.options.cancelEditExtrusion(this.editExtrusion.token);
+      this.editExtrusion = null;
+      return;
+    }
     if (this.axisDrag.active) this.endAxisShiftDrag();
   }
 
@@ -477,6 +513,11 @@ export class ViewportInteractionController {
     if (this.duplicatePlacement) this.finishDuplicatePlacement(false);
     if (this.options.transformController.cancelGizmoDrag()) {
       this.options.controls.enabled = this.transformGizmoPrevControlsEnabled;
+    }
+    if (this.editExtrusion && this.options.transformController.isActive()) {
+      this.options.transformController.finish(false);
+      this.options.cancelEditExtrusion(this.editExtrusion.token);
+      this.editExtrusion = null;
     }
     if (this.axisDrag.active) this.endAxisShiftDrag();
     this.options.keyboardCamera.clearKeys();

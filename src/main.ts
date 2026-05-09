@@ -29,6 +29,7 @@ import {
   cellCount,
   cloneCellTopology,
   deleteCellAndPrune,
+  extrudeCell,
   maxCellDimension,
   surfaceTopologyFromCellTopology,
   type CellTopology,
@@ -212,6 +213,9 @@ type DuplicatePlacement = {
   originalSelectedInstances: number[];
   instance?: Instance;
   lightRuntime?: SceneLightRuntime;
+};
+type EditExtrusionToken = {
+  undoSnapshot: PackedSceneUrlState;
 };
 
 const DEFAULT_BLOOM_INTENSITY = 0;
@@ -3195,6 +3199,26 @@ function compactDimensionMajorVertices(
   return compacted;
 }
 
+function appendDimensionMajorDuplicateVertices(
+  data: Float32Array,
+  oldVertexCount: number,
+  sourceVertices: number[],
+) {
+  if (oldVertexCount <= 0 || !sourceVertices.length) return new Float32Array(data);
+  const dimension = Math.floor(data.length / oldVertexCount);
+  const newVertexCount = oldVertexCount + sourceVertices.length;
+  const expanded = new Float32Array(dimension * newVertexCount);
+  for (let dim = 0; dim < dimension; dim++) {
+    const oldOffset = dim * oldVertexCount;
+    const newOffset = dim * newVertexCount;
+    expanded.set(data.subarray(oldOffset, oldOffset + oldVertexCount), newOffset);
+    sourceVertices.forEach((sourceVertex, duplicateIndex) => {
+      expanded[newOffset + oldVertexCount + duplicateIndex] = data[oldOffset + sourceVertex] ?? 0;
+    });
+  }
+  return expanded;
+}
+
 function deleteSelected() {
   const deleteIndices = selectedInstances.filter(idx => idx >= 0).sort((a, b) => b - a);
   const deleteLightIndices = selectedInstances
@@ -3290,6 +3314,76 @@ function deleteSelectedEditCell() {
   updateTransformActionButtons();
   if (PARAMS.editMode && getObjectVisible(selectedInstance)) updateVertexCloud(selectedInstance);
   requestSceneUrlUpdate();
+}
+
+function selectedGeometryDimension() {
+  if (!isGeometrySelectionIndex(selectedInstance)) return 0;
+  if (selectedInstance === BASE_SELECTION) return baseOriginalN || PARAMS.N;
+  return extraInstances[selectedInstance]?.originalN ?? 0;
+}
+
+function extrudeSelectedEditCell(): EditExtrusionToken | null {
+  if (!PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return null;
+  const selection = transformController.getEditSelection();
+  if (!selection || selection.cellId < 0) return null;
+
+  const objectDimension = selectedGeometryDimension();
+  if (selection.dimension + 1 > objectDimension) return null;
+
+  const targetIsBase = selectedInstance === BASE_SELECTION;
+  const target = targetIsBase ? null : extraInstances[selectedInstance];
+  const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
+  const vertexCount = targetIsBase ? M : (target?.M ?? 0);
+  const extrusion = extrudeCell(topology, selection.dimension, selection.cellId, vertexCount);
+  if (!extrusion) return null;
+
+  const undoSnapshot = captureSceneUrlState();
+  transformController.clearEditSelection();
+
+  if (targetIsBase) {
+    X = appendDimensionMajorDuplicateVertices(X, M, extrusion.sourceVertices);
+    M = extrusion.vertexCount;
+    Y = new Float32Array(3 * M);
+    E = new Uint32Array(extrusion.edges);
+    baseCellTopology = extrusion.topology;
+    baseSurfaceTopology = surfaceTopologyForEditedCellTopology(baseCellTopology);
+    rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
+    rendererND.setSurface(baseSurface);
+    rendererND.setMode(PARAMS.renderMode);
+  } else if (target) {
+    target.X = appendDimensionMajorDuplicateVertices(target.X, target.M, extrusion.sourceVertices);
+    target.M = extrusion.vertexCount;
+    target.Y = new Float32Array(3 * target.M);
+    target.E = new Uint32Array(extrusion.edges);
+    target.cellTopology = extrusion.topology;
+    target.surfaceTopology = surfaceTopologyForEditedCellTopology(target.cellTopology);
+    target.renderer.build(target.M, target.E, target.surfaceTopology, target.cellTopology);
+    target.renderer.setSurface(target.surface);
+    target.renderer.setMode(PARAMS.renderMode);
+  }
+
+  projectAndRenderAll();
+  transformController.setSelectedEditElement(selection.dimension, extrusion.capVertices, extrusion.capCellId);
+  transformController.updateVertexCloud(selectedInstance);
+  updateSelectionOutline();
+  updateTransformActionButtons();
+  return { undoSnapshot };
+}
+
+function isEditExtrusionToken(token: unknown): token is EditExtrusionToken {
+  return typeof token === 'object' && token !== null && 'undoSnapshot' in token;
+}
+
+function commitEditExtrusion(token: unknown) {
+  if (!isEditExtrusionToken(token)) return;
+  if (sceneUrlApplying) return;
+  sceneHistory.push(token.undoSnapshot);
+  requestSceneUrlUpdate();
+}
+
+function cancelEditExtrusion(token: unknown) {
+  if (!isEditExtrusionToken(token)) return;
+  void applySceneUrlState(token.undoSnapshot);
 }
 
 const extraInstances: Instance[] = [];
@@ -4129,6 +4223,9 @@ viewportInteraction = new ViewportInteractionController({
   moveDuplicatePlacement,
   commitDuplicatePlacement,
   cancelDuplicatePlacement,
+  extrudeSelectedEditCell,
+  commitEditExtrusion,
+  cancelEditExtrusion,
   insertKeyframe: () => animationTimeline?.addKeyframeAtCurrentFrame(),
   removeLastKeyframe: () => animationTimeline?.removeLastKeyframe(),
   deleteSelected,
@@ -4421,6 +4518,7 @@ new KeyboardShortcutController({
   removeLastKeyframe: () => animationTimeline?.removeLastKeyframe(),
   toggleEditMode: () => setEditMode(!PARAMS.editMode),
   startTransformFromPointer: mode => viewportInteraction.startTransformFromLastPointer(mode),
+  extrudeEditSelectionFromPointer: () => viewportInteraction.startEditExtrusionFromLastPointer(),
   showAddObjectMenuAtPointer: () => viewportInteraction.showAddObjectMenuAtLastPointer(),
   duplicateSelectionFromPointer: () => viewportInteraction.startDuplicateFromLastPointer(),
   deleteOrConfirmSelection: () => viewportInteraction.deleteOrConfirmSelection(),
