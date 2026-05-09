@@ -3,7 +3,7 @@ import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js
 import { cellCount, getCellBoundaryFaceIds, getCellVertices, type CellTopology } from '../geometry/cellTopology';
 import type { PrimitiveKind } from '../geometry/primitives';
 import type { HypercubeRenderer } from '../rendering/HypercubeRenderer';
-import type { Instance, TransformMode } from '../scene/types';
+import type { Instance, SceneLightKind, TransformMode } from '../scene/types';
 import type { KeyboardCameraController } from '../controls/KeyboardCameraController';
 import type { TransformController } from './TransformController';
 
@@ -15,6 +15,14 @@ type PrimitiveMenuOption = {
   label: string;
   kind: PrimitiveKind;
 };
+
+type LightMenuOption = {
+  label: string;
+  kind: SceneLightKind;
+};
+
+type DuplicatePlacementToken = unknown;
+type EditExtrusionToken = unknown;
 
 const OBJECT_FOCUS_DOUBLE_CLICK_MS = 220;
 const OBJECT_FOCUS_DOUBLE_CLICK_MAX_DIST = 8;
@@ -41,6 +49,7 @@ type ViewportInteractionControllerOptions = {
   keyboardCamera: KeyboardCameraController;
   transformController: TransformController;
   primitiveMenuOptions: PrimitiveMenuOption[];
+  lightMenuOptions: LightMenuOption[];
   baseSelection: number;
   noSelection: number;
   getParams: () => ViewportParams;
@@ -54,6 +63,14 @@ type ViewportInteractionControllerOptions = {
   selectObject: (idx: number, additive?: boolean) => void;
   pushUndoSnapshot: () => void;
   addPrimitiveInstanceAt: (kind: PrimitiveKind, label: string, offset: THREE.Vector3, syncMode?: boolean) => void;
+  addSceneLightAt: (kind: SceneLightKind, position: THREE.Vector3) => void;
+  startDuplicatePlacement: (position: THREE.Vector3) => DuplicatePlacementToken | null;
+  moveDuplicatePlacement: (token: DuplicatePlacementToken, position: THREE.Vector3) => void;
+  commitDuplicatePlacement: (token: DuplicatePlacementToken) => void;
+  cancelDuplicatePlacement: (token: DuplicatePlacementToken) => void;
+  extrudeSelectedEditCell: () => EditExtrusionToken | null;
+  commitEditExtrusion: (token: EditExtrusionToken) => void;
+  cancelEditExtrusion: (token: EditExtrusionToken) => void;
   insertKeyframe: () => void;
   removeLastKeyframe: () => void;
   deleteSelected: () => void;
@@ -95,6 +112,13 @@ export class ViewportInteractionController {
     prevPan: true,
   };
   private transformGizmoPrevControlsEnabled = true;
+  private duplicatePlacement: {
+    token: DuplicatePlacementToken;
+    prevControlsEnabled: boolean;
+  } | null = null;
+  private editExtrusion: {
+    token: EditExtrusionToken;
+  } | null = null;
 
   constructor(private readonly options: ViewportInteractionControllerOptions) {}
 
@@ -126,12 +150,46 @@ export class ViewportInteractionController {
     this.appendKeyframeActions(menu);
     this.appendMenuSeparator(menu);
     this.appendPrimitiveButtons(menu, spawnPoint, false);
-    this.placeMenu(menu, this.lastPointer.x, this.lastPointer.y, 196, 0, 320);
+    this.appendMenuSeparator(menu);
+    this.appendLightButtons(menu, spawnPoint);
+    this.placeMenu(menu, this.lastPointer.x, this.lastPointer.y, 196, 0, 380);
     menu.style.display = 'grid';
   }
 
   startTransformFromLastPointer(mode: TransformMode) {
     this.options.transformController.startFromPointer(mode, this.lastPointer);
+  }
+
+  startEditExtrusionFromLastPointer() {
+    if (this.editExtrusion || this.duplicatePlacement) return;
+    if (!this.options.getParams().editMode) return;
+    if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
+    const token = this.options.extrudeSelectedEditCell();
+    if (!token) return;
+    this.options.transformController.startFromPointer('move', this.lastPointer);
+    if (!this.options.transformController.isActive()) {
+      this.options.cancelEditExtrusion(token);
+      return;
+    }
+    this.editExtrusion = { token };
+  }
+
+  startDuplicateFromLastPointer() {
+    if (this.duplicatePlacement || this.options.getParams().editMode) return;
+    if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
+    const point = this.pickPointOnTargetPlane({ clientX: this.lastPointer.x, clientY: this.lastPointer.y });
+    const token = this.options.startDuplicatePlacement(point);
+    if (!token) return;
+    if (this.options.contextMenuEl) this.options.contextMenuEl.style.display = 'none';
+    this.duplicatePlacement = {
+      token,
+      prevControlsEnabled: this.options.controls.enabled,
+    };
+    this.options.controls.enabled = false;
+  }
+
+  isDuplicatePlacementActive() {
+    return this.duplicatePlacement !== null;
   }
 
   handleTransformConstraintKey(key: string) {
@@ -188,6 +246,7 @@ export class ViewportInteractionController {
 
   private handleTransformPointerMove(ev: PointerEvent) {
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
+    if (this.updateDuplicatePlacement(ev)) return;
     if (this.options.transformController.isGizmoDragging()) return;
     if (!this.options.transformController.isActive()) return;
     ev.preventDefault();
@@ -195,6 +254,12 @@ export class ViewportInteractionController {
   }
 
   private handleContextMenu(ev: MouseEvent) {
+    if (this.duplicatePlacement) {
+      ev.preventDefault();
+      this.finishDuplicatePlacement(false);
+      return;
+    }
+
     const menu = this.options.contextMenuEl;
     if (!menu) return;
 
@@ -216,6 +281,8 @@ export class ViewportInteractionController {
       this.appendKeyframeActions(menu);
       this.appendMenuSeparator(menu);
       this.appendPrimitiveButtons(menu, spawnPoint);
+      this.appendMenuSeparator(menu);
+      this.appendLightButtons(menu, spawnPoint);
     } else {
       this.appendTransformAction(menu, 'Move', 'move', ev);
       this.appendTransformAction(menu, 'Rotate', 'rotate', ev);
@@ -246,7 +313,7 @@ export class ViewportInteractionController {
     }
 
     const primitiveMenu = menu.classList.contains('primitive-menu');
-    this.placeMenu(menu, ev.clientX, ev.clientY, primitiveMenu ? 196 : 180, 0, primitiveMenu ? 320 : 150);
+    this.placeMenu(menu, ev.clientX, ev.clientY, primitiveMenu ? 196 : 180, 0, primitiveMenu ? 380 : 150);
     menu.style.display = menu.childElementCount ? (primitiveMenu ? 'grid' : 'block') : 'none';
   }
 
@@ -303,6 +370,20 @@ export class ViewportInteractionController {
     }
   }
 
+  private appendLightButtons(container: HTMLElement, spawnPoint: THREE.Vector3) {
+    const menu = this.options.contextMenuEl;
+    for (const opt of this.options.lightMenuOptions) {
+      const btn = document.createElement('button');
+      btn.textContent = opt.label;
+      btn.onclick = () => {
+        if (menu) menu.style.display = 'none';
+        this.options.pushUndoSnapshot();
+        this.options.addSceneLightAt(opt.kind, spawnPoint);
+      };
+      container.appendChild(btn);
+    }
+  }
+
   private handleMiddleMouseDown(ev: MouseEvent) {
     if (ev.button !== 1) return;
     ev.preventDefault();
@@ -320,6 +401,14 @@ export class ViewportInteractionController {
     if (this.axisDrag.active) return;
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
 
+    if (this.duplicatePlacement) {
+      if (ev.button === 0) this.finishDuplicatePlacement(true);
+      else if (ev.button === 2) this.finishDuplicatePlacement(false);
+      ev.preventDefault();
+      ev.stopPropagation();
+      return;
+    }
+
     if (ev.button === 0 && this.options.transformController.handleGizmoPointerDown(ev)) {
       this.transformGizmoPrevControlsEnabled = this.options.controls.enabled;
       this.options.controls.enabled = false;
@@ -328,10 +417,19 @@ export class ViewportInteractionController {
 
     if (this.options.transformController.isActive()) {
       if (ev.button === 0) {
-        this.options.pushUndoSnapshot();
+        if (this.editExtrusion) {
+          this.options.commitEditExtrusion(this.editExtrusion.token);
+          this.editExtrusion = null;
+        } else {
+          this.options.pushUndoSnapshot();
+        }
         this.options.transformController.finish(true);
       } else if (ev.button === 2) {
         this.options.transformController.finish(false);
+        if (this.editExtrusion) {
+          this.options.cancelEditExtrusion(this.editExtrusion.token);
+          this.editExtrusion = null;
+        }
       }
       ev.preventDefault();
       return;
@@ -354,6 +452,7 @@ export class ViewportInteractionController {
   }
 
   private handleWindowPointerMove(ev: PointerEvent) {
+    if (this.updateDuplicatePlacement(ev)) return;
     if (this.options.transformController.handleGizmoPointerMove(ev, point => { this.lastPointer = point; })) return;
     if (!this.axisDrag.active) return;
     if ((ev.buttons & 4) === 0) {
@@ -379,6 +478,11 @@ export class ViewportInteractionController {
   }
 
   private handleWindowPointerUp(ev: PointerEvent) {
+    if (this.duplicatePlacement && ev.button === 0) {
+      this.finishDuplicatePlacement(true);
+      ev.preventDefault();
+      return;
+    }
     if (this.options.transformController.handleGizmoPointerEnd(ev, true)) {
       this.options.controls.enabled = this.transformGizmoPrevControlsEnabled;
       return;
@@ -387,16 +491,33 @@ export class ViewportInteractionController {
   }
 
   private handleWindowPointerCancel(ev: PointerEvent) {
+    if (this.duplicatePlacement) {
+      this.finishDuplicatePlacement(false);
+      ev.preventDefault();
+      return;
+    }
     if (this.options.transformController.handleGizmoPointerEnd(ev, false)) {
       this.options.controls.enabled = this.transformGizmoPrevControlsEnabled;
+      return;
+    }
+    if (this.editExtrusion && this.options.transformController.isActive()) {
+      this.options.transformController.finish(false);
+      this.options.cancelEditExtrusion(this.editExtrusion.token);
+      this.editExtrusion = null;
       return;
     }
     if (this.axisDrag.active) this.endAxisShiftDrag();
   }
 
   private handleWindowBlur() {
+    if (this.duplicatePlacement) this.finishDuplicatePlacement(false);
     if (this.options.transformController.cancelGizmoDrag()) {
       this.options.controls.enabled = this.transformGizmoPrevControlsEnabled;
+    }
+    if (this.editExtrusion && this.options.transformController.isActive()) {
+      this.options.transformController.finish(false);
+      this.options.cancelEditExtrusion(this.editExtrusion.token);
+      this.editExtrusion = null;
     }
     if (this.axisDrag.active) this.endAxisShiftDrag();
     this.options.keyboardCamera.clearKeys();
@@ -408,6 +529,22 @@ export class ViewportInteractionController {
     if (this.deletePending && target instanceof Node && menu?.contains(target)) return;
     if (menu) menu.style.display = 'none';
     this.deletePending = false;
+  }
+
+  private updateDuplicatePlacement(point: { clientX: number; clientY: number }) {
+    if (!this.duplicatePlacement) return false;
+    this.lastPointer = { x: point.clientX, y: point.clientY };
+    this.options.moveDuplicatePlacement(this.duplicatePlacement.token, this.pickPointOnTargetPlane(point));
+    return true;
+  }
+
+  private finishDuplicatePlacement(commit: boolean) {
+    const placement = this.duplicatePlacement;
+    if (!placement) return;
+    this.duplicatePlacement = null;
+    this.options.controls.enabled = placement.prevControlsEnabled;
+    if (commit) this.options.commitDuplicatePlacement(placement.token);
+    else this.options.cancelDuplicatePlacement(placement.token);
   }
 
   private selectObjectFromPointer(ev: PointerEvent) {

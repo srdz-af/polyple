@@ -14,6 +14,7 @@ import {
 } from './cellTopology';
 
 export type PrimitiveKind =
+  | 'plane'
   | 'hypercube'
   | 'spikedHypercube'
   | 'cross'
@@ -392,6 +393,28 @@ export function hypercubeEdges(N: number): PrimitiveGeometry {
   };
 }
 
+export function planeEdges(N: number): PrimitiveGeometry {
+  const V = 4;
+  const verts = new Float32Array(N * V);
+  const x = [-0.5, 0.5, 0.5, -0.5];
+  const y = [-0.5, -0.5, 0.5, 0.5];
+
+  for (let v = 0; v < V; v++) {
+    verts[v] = x[v];
+    if (N > 1) verts[V + v] = y[v];
+  }
+
+  const cellTopology = buildPolygonCellTopology(V);
+  return {
+    verts,
+    edges: new Uint32Array([0, 1, 1, 2, 2, 3, 3, 0]),
+    cellTopology,
+    surfaceTopology: surfaceTopologyFromCellTopology(cellTopology)
+      ?? makeSurfaceTopology([0, 1, 2, 0, 2, 3], [0, 0]),
+    V,
+  };
+}
+
 export function spikedHypercubeEdges(N: number): PrimitiveGeometry {
   const base = hypercubeEdges(N);
   const verts = new Float32Array(base.verts);
@@ -716,6 +739,8 @@ function polygonRingEdges(N: number, segments: number): PrimitiveGeometry {
 
 export function buildPrimitive(kind: PrimitiveKind, N: number): PrimitiveGeometry {
   switch (kind) {
+    case 'plane':
+      return planeEdges(N);
     case 'hypercube':
       return hypercubeEdges(N);
     case 'spikedHypercube':

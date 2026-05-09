@@ -7,8 +7,10 @@ const HDR_BACKGROUND_BLUR_KEY = 'blend.hdriBlur.v1';
 const HDR_BACKGROUND_LIGHTNESS_KEY = 'blend.hdriLightness.v2';
 const HDR_BACKGROUND_QUALITY_KEY = 'blend.hdriQuality.v1';
 const PLAIN_BACKGROUND_COLOR_KEY = 'blend.plainBackgroundColor.v1';
+const ENVIRONMENT_LIGHTING_KEY = 'blend.environmentLighting.v1';
 const HDR_BACKGROUND_BLUR_DEFAULT = 0;
 const HDR_BACKGROUND_LIGHTNESS_DEFAULT = 0.15;
+const ENVIRONMENT_LIGHTING_DEFAULT = false;
 const PLAIN_BACKGROUND_KEY = 'plain' as const;
 const DEFAULT_SOLID_BACKGROUND_KEY = 'ferndale' as const;
 const DEFAULT_HDR_QUALITY = 'sd' as const;
@@ -93,6 +95,7 @@ type BackgroundControllerOptions = {
   lightnessValue: HTMLOutputElement | null;
   colorInput: HTMLInputElement | null;
   colorValue: HTMLOutputElement | null;
+  environmentLightButton: HTMLButtonElement | null;
   qualityButtons: HTMLButtonElement[];
   controlsEl: HTMLDivElement | null;
   getRenderMode: () => ViewMode;
@@ -106,6 +109,7 @@ export type BackgroundUrlState = {
   blur: number;
   lightness: number;
   color: number;
+  environmentLighting: boolean;
 };
 
 const backgroundOptionByKey = new Map<BackgroundKey, BackgroundOption>([
@@ -140,6 +144,16 @@ function readStoredColor(key: string, fallback: number) {
     if (raw == null) return fallback;
     const parsed = Number.parseInt(raw, 10);
     return Number.isFinite(parsed) ? Math.max(0, Math.min(0xffffff, parsed >>> 0)) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function readStoredBoolean(key: string, fallback: boolean) {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw == null) return fallback;
+    return raw === '1' || raw === 'true';
   } catch {
     return fallback;
   }
@@ -197,6 +211,7 @@ export class BackgroundController {
   private readonly lightnessValue: HTMLOutputElement | null;
   private readonly colorInput: HTMLInputElement | null;
   private readonly colorValue: HTMLOutputElement | null;
+  private readonly environmentLightButton: HTMLButtonElement | null;
   private readonly qualityButtons: HTMLButtonElement[];
   private readonly controlsEl: HTMLDivElement | null;
   private readonly getRenderMode: () => ViewMode;
@@ -208,11 +223,13 @@ export class BackgroundController {
   private readonly sceneBackgroundColor = new THREE.Color();
   private readonly plainBackgroundColor = new THREE.Color();
   private hdrBackgroundTexture: THREE.Texture | null = null;
+  private hdrEnvironmentTexture: THREE.Texture | null = null;
   private activeBackgroundKey: BackgroundKey | null = null;
   private activeHdrQuality: HdriQuality | null = null;
   private hdrBackgroundLoadingKey: HdriBackgroundKey | null = null;
   private hdrBackgroundBlur = HDR_BACKGROUND_BLUR_DEFAULT;
   private hdrBackgroundLightness = HDR_BACKGROUND_LIGHTNESS_DEFAULT;
+  private environmentLightingEnabled = ENVIRONMENT_LIGHTING_DEFAULT;
   private hdrQuality: HdriQuality = DEFAULT_HDR_QUALITY;
 
   constructor(options: BackgroundControllerOptions) {
@@ -229,6 +246,7 @@ export class BackgroundController {
     this.lightnessValue = options.lightnessValue;
     this.colorInput = options.colorInput;
     this.colorValue = options.colorValue;
+    this.environmentLightButton = options.environmentLightButton;
     this.qualityButtons = options.qualityButtons;
     this.controlsEl = options.controlsEl;
     this.getRenderMode = options.getRenderMode;
@@ -239,6 +257,7 @@ export class BackgroundController {
       readStoredNumber(HDR_BACKGROUND_LIGHTNESS_KEY, this.hdrBackgroundLightness),
     );
     this.plainBackgroundColor.setHex(readStoredColor(PLAIN_BACKGROUND_COLOR_KEY, options.baseBackground.getHex()));
+    this.environmentLightingEnabled = readStoredBoolean(ENVIRONMENT_LIGHTING_KEY, this.environmentLightingEnabled);
     try {
       this.hdrQuality = normalizeHdrQuality(window.localStorage.getItem(HDR_BACKGROUND_QUALITY_KEY));
     } catch {
@@ -273,6 +292,14 @@ export class BackgroundController {
 
   initializeRenderControls() {
     this.syncRenderControls();
+    this.environmentLightButton?.addEventListener('click', () => {
+      this.environmentLightingEnabled = !this.environmentLightingEnabled;
+      this.syncSceneEnvironment();
+      this.storeRenderSettings();
+      this.syncRenderControls();
+      this.onStateChange?.();
+    });
+
     this.blurInput?.addEventListener('input', () => {
       if (!this.blurInput) return;
       const next = clamp01(Number.parseFloat(this.blurInput.value));
@@ -359,15 +386,7 @@ export class BackgroundController {
       return;
     }
 
-    const preferred = this.getStoredHdrBackgroundKey();
-    if (await this.setActiveBackground(preferred)) {
-      return;
-    }
-
-    for (const option of HDR_BACKGROUND_OPTIONS) {
-      if (option.key === preferred) continue;
-      if (await this.setActiveBackground(option.key)) return;
-    }
+    await this.setActiveBackground(PLAIN_BACKGROUND_KEY);
   }
 
   syncForRenderMode() {
@@ -381,8 +400,8 @@ export class BackgroundController {
       return;
     }
 
-    if (this.activeBackgroundKey == null || this.activeBackgroundKey === PLAIN_BACKGROUND_KEY) {
-      void this.setActiveBackground(this.getStoredHdrBackgroundKey());
+    if (this.activeBackgroundKey == null) {
+      void this.setActiveBackground(PLAIN_BACKGROUND_KEY);
       return;
     }
     this.updateSwatchUI();
@@ -408,6 +427,7 @@ export class BackgroundController {
       blur: this.hdrBackgroundBlur,
       lightness: this.hdrBackgroundLightness,
       color: this.plainBackgroundColor.getHex(),
+      environmentLighting: this.environmentLightingEnabled,
     };
   }
 
@@ -419,9 +439,13 @@ export class BackgroundController {
       finiteNumber(state.lightness, this.hdrBackgroundLightness),
     );
     this.plainBackgroundColor.setHex(Math.max(0, Math.min(0xffffff, finiteNumber(state.color, this.plainBackgroundColor.getHex()) >>> 0)));
+    if (typeof state.environmentLighting === 'boolean') {
+      this.environmentLightingEnabled = state.environmentLighting;
+    }
     this.storeRenderSettings();
     this.syncRenderControls();
     await this.setActiveBackground(normalizeBackgroundKey(state.key));
+    this.syncSceneEnvironment();
   }
 
   private syncRenderControls() {
@@ -431,6 +455,14 @@ export class BackgroundController {
     if (this.lightnessValue) this.lightnessValue.textContent = this.hdrBackgroundLightness.toFixed(2);
     if (this.colorInput) this.colorInput.value = colorToHex(this.plainBackgroundColor);
     if (this.colorValue) this.colorValue.textContent = colorToHex(this.plainBackgroundColor);
+    if (this.environmentLightButton) {
+      this.environmentLightButton.textContent = this.environmentLightingEnabled ? 'On' : 'Off';
+      this.environmentLightButton.classList.toggle('active', this.environmentLightingEnabled);
+      this.environmentLightButton.setAttribute('aria-pressed', String(this.environmentLightingEnabled));
+      this.environmentLightButton.title = this.environmentLightingEnabled
+        ? 'Disable environment lighting'
+        : 'Enable environment lighting';
+    }
     this.qualityButtons.forEach(button => {
       const quality = normalizeHdrQuality(button.dataset.hdriQuality);
       const active = quality === this.hdrQuality;
@@ -445,9 +477,16 @@ export class BackgroundController {
       window.localStorage.setItem(HDR_BACKGROUND_LIGHTNESS_KEY, String(this.hdrBackgroundLightness));
       window.localStorage.setItem(HDR_BACKGROUND_QUALITY_KEY, this.hdrQuality);
       window.localStorage.setItem(PLAIN_BACKGROUND_COLOR_KEY, String(this.plainBackgroundColor.getHex()));
+      window.localStorage.setItem(ENVIRONMENT_LIGHTING_KEY, this.environmentLightingEnabled ? '1' : '0');
     } catch {
       // Storage may be unavailable in private sessions.
     }
+  }
+
+  private syncSceneEnvironment() {
+    this.scene.environment = this.environmentLightingEnabled
+      ? this.hdrEnvironmentTexture ?? this.fallbackEnvironmentTarget.texture
+      : null;
   }
 
   private getStoredHdrBackgroundKey(): HdriBackgroundKey {
@@ -494,11 +533,16 @@ export class BackgroundController {
     if (!option) return false;
 
     if (!isHdriBackgroundKey(key)) {
-      if (this.activeBackgroundKey === PLAIN_BACKGROUND_KEY && !this.hdrBackgroundTexture) return true;
+      if (this.activeBackgroundKey === PLAIN_BACKGROUND_KEY && !this.hdrBackgroundTexture) {
+        this.hdrEnvironmentTexture = null;
+        this.syncSceneEnvironment();
+        return true;
+      }
       this.activeBackgroundKey = PLAIN_BACKGROUND_KEY;
       this.activeHdrQuality = null;
-      this.scene.environment = this.fallbackEnvironmentTarget.texture;
       this.hdrBackgroundTexture = null;
+      this.hdrEnvironmentTexture = null;
+      this.syncSceneEnvironment();
       this.applySceneBackground(this.getEditMode());
       this.updateSwatchUI();
       return true;
@@ -542,8 +586,9 @@ export class BackgroundController {
 
       this.activeBackgroundKey = key;
       this.activeHdrQuality = this.hdrQuality;
-      this.scene.environment = environmentTarget.texture;
       this.hdrBackgroundTexture = hdrTexture;
+      this.hdrEnvironmentTexture = environmentTarget.texture;
+      this.syncSceneEnvironment();
       this.applySceneBackground(this.getEditMode());
       this.storeHdrBackgroundKey(key);
       return true;

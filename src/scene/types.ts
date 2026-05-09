@@ -12,6 +12,18 @@ export type EditCellDimension = number;
 export type ProjectionAxes = { x: number; y: number; z: number };
 export type TransformState = { pos: THREE.Vector3; rot: THREE.Vector3; scale: THREE.Vector3 };
 export type SceneMaterialState = { id: string; name: string; surface: SurfaceState };
+export type SceneLightKind = 'point' | 'directional';
+export type SceneLightState = {
+  id: string;
+  kind: SceneLightKind;
+  label: string;
+  color: number;
+  intensity: number;
+  position: THREE.Vector3;
+  target: THREE.Vector3;
+  visible: boolean;
+  castShadow: boolean;
+};
 
 export type InstanceSnapshot = {
   X: Float32Array;
@@ -57,6 +69,7 @@ export type SceneSnapshot<TPrimitiveMode> = {
   selectedInstance: number;
   selectedInstances?: number[];
   instances: InstanceSnapshot[];
+  lights?: SceneLightState[];
 };
 
 export type Instance = {

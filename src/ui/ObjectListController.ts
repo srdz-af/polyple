@@ -1,7 +1,7 @@
 type ObjectListRow = {
   idx: number;
   label: string;
-  dimension: number;
+  dimension: number | string;
   visible: boolean;
 };
 

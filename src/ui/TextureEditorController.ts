@@ -24,10 +24,6 @@ const OPAQUE_ALPHA_THRESHOLD = 0.999;
 
 type TextureEditorControllerOptions = {
   renderer: THREE.WebGLRenderer;
-  scene: THREE.Scene;
-  light: THREE.DirectionalLight;
-  ambient: THREE.AmbientLight;
-  hemi: THREE.HemisphereLight;
   getSurfaceTarget: () => SurfaceTarget | null;
   applySurfaceToTarget: (surface: SurfaceState, recordUndo: boolean) => boolean;
   assignMaterialToTarget: (materialId: string, recordUndo: boolean) => boolean;
@@ -49,6 +45,10 @@ export class TextureEditorController {
   private readonly roughnessValue = document.getElementById('texture-roughness-value') as HTMLOutputElement | null;
   private readonly alphaInput = document.getElementById('texture-alpha') as HTMLInputElement | null;
   private readonly alphaValue = document.getElementById('texture-alpha-value') as HTMLOutputElement | null;
+  private readonly emissiveColorInput = document.getElementById('texture-emissive-color') as HTMLInputElement | null;
+  private readonly emissiveColorValue = document.getElementById('texture-emissive-color-value') as HTMLOutputElement | null;
+  private readonly emissiveIntensityInput = document.getElementById('texture-emissive-intensity') as HTMLInputElement | null;
+  private readonly emissiveIntensityValue = document.getElementById('texture-emissive-intensity-value') as HTMLOutputElement | null;
   private readonly transmissionInput = document.getElementById('texture-transmission') as HTMLInputElement | null;
   private readonly transmissionValue = document.getElementById('texture-transmission-value') as HTMLOutputElement | null;
   private readonly iorInput = document.getElementById('texture-ior') as HTMLInputElement | null;
@@ -158,6 +158,8 @@ export class TextureEditorController {
     if (this.metallicInput) this.metallicInput.disabled = !enabled;
     if (this.roughnessInput) this.roughnessInput.disabled = !enabled;
     if (this.alphaInput) this.alphaInput.disabled = !enabled;
+    if (this.emissiveColorInput) this.emissiveColorInput.disabled = !enabled;
+    if (this.emissiveIntensityInput) this.emissiveIntensityInput.disabled = !enabled;
     if (this.transmissionInput) this.transmissionInput.disabled = !enabled;
     if (this.iorInput) this.iorInput.disabled = !enabled;
     if (this.thicknessInput) this.thicknessInput.disabled = !enabled;
@@ -193,6 +195,8 @@ export class TextureEditorController {
     if (this.metallicInput) this.metallicInput.value = `${surface.metalness}`;
     if (this.roughnessInput) this.roughnessInput.value = `${surface.roughness}`;
     if (this.alphaInput) this.alphaInput.value = `${surface.alpha}`;
+    if (this.emissiveColorInput) this.emissiveColorInput.value = toColorHex(surface.emissiveColor);
+    if (this.emissiveIntensityInput) this.emissiveIntensityInput.value = `${surface.emissiveIntensity}`;
     if (this.transmissionInput) this.transmissionInput.value = `${surface.transmission}`;
     if (this.iorInput) this.iorInput.value = `${surface.ior}`;
     if (this.thicknessInput) this.thicknessInput.value = `${surface.thickness}`;
@@ -206,6 +210,8 @@ export class TextureEditorController {
     if (this.metallicValue) this.metallicValue.textContent = surface.metalness.toFixed(3);
     if (this.roughnessValue) this.roughnessValue.textContent = surface.roughness.toFixed(3);
     if (this.alphaValue) this.alphaValue.textContent = surface.alpha.toFixed(3);
+    if (this.emissiveColorValue && this.emissiveColorInput) this.emissiveColorValue.textContent = this.emissiveColorInput.value;
+    if (this.emissiveIntensityValue) this.emissiveIntensityValue.textContent = surface.emissiveIntensity.toFixed(2);
     if (this.transmissionValue) this.transmissionValue.textContent = surface.transmission.toFixed(3);
     if (this.iorValue) this.iorValue.textContent = surface.ior.toFixed(3);
     if (this.thicknessValue) this.thicknessValue.textContent = surface.thickness.toFixed(3);
@@ -250,6 +256,8 @@ export class TextureEditorController {
       roughness: DEFAULT_SURFACE.roughness,
       transparent: false,
       opacity: DEFAULT_SURFACE.alpha,
+      emissive: DEFAULT_SURFACE.emissiveColor,
+      emissiveIntensity: DEFAULT_SURFACE.emissiveIntensity,
       envMapIntensity: 1.8,
       side: THREE.DoubleSide,
     });
@@ -267,6 +275,8 @@ export class TextureEditorController {
       clearcoat: DEFAULT_SURFACE.clearcoat,
       clearcoatRoughness: DEFAULT_SURFACE.clearcoatRoughness,
       specularIntensity: DEFAULT_SURFACE.specularIntensity,
+      emissive: DEFAULT_SURFACE.emissiveColor,
+      emissiveIntensity: DEFAULT_SURFACE.emissiveIntensity,
       envMapIntensity: 1.8,
       side: THREE.DoubleSide,
       depthWrite: false,
@@ -275,17 +285,17 @@ export class TextureEditorController {
     cube.rotation.set(0.45, 0.68, 0);
     sceneRef.add(cube);
 
-    const previewLight = new THREE.DirectionalLight(0xffffff, Math.max(1.2, this.options.light.intensity * 1.25));
+    const previewLight = new THREE.DirectionalLight(0xffffff, 1.25);
     previewLight.position.set(2.4, 2.2, 2.8);
     const previewFill = new THREE.DirectionalLight(0xc6d8ff, 0.55);
     previewFill.position.set(-2.1, 1.0, 1.5);
     const previewRim = new THREE.DirectionalLight(0xffe6c4, 0.42);
     previewRim.position.set(0.7, 1.35, -2.6);
-    const previewAmbient = new THREE.AmbientLight(0xffffff, Math.max(0.42, this.options.ambient.intensity));
+    const previewAmbient = new THREE.AmbientLight(0xffffff, 0.42);
     const previewHemi = new THREE.HemisphereLight(
-      this.options.hemi.color.getHex(),
-      this.options.hemi.groundColor.getHex(),
-      Math.max(0.72, this.options.hemi.intensity),
+      0x88aaff,
+      0x090b12,
+      0.72,
     );
     sceneRef.add(previewAmbient, previewHemi, previewLight, previewFill, previewRim);
 
@@ -396,6 +406,8 @@ export class TextureEditorController {
       material.metalness = surface.metalness;
       material.roughness = surface.roughness;
       material.opacity = surface.alpha;
+      material.emissive.setHex(surface.emissiveColor);
+      material.emissiveIntensity = surface.emissiveIntensity;
       material.transparent = surface.alpha < OPAQUE_ALPHA_THRESHOLD;
       material.alphaHash = false;
       material.alphaToCoverage = false;
@@ -418,6 +430,8 @@ export class TextureEditorController {
       material.clearcoat = surface.clearcoat;
       material.clearcoatRoughness = surface.clearcoatRoughness;
       material.specularIntensity = surface.specularIntensity;
+      material.emissive.setHex(surface.emissiveColor);
+      material.emissiveIntensity = surface.emissiveIntensity;
       material.alphaHash = false;
       material.alphaToCoverage = false;
       material.depthWrite = false;
@@ -433,6 +447,8 @@ export class TextureEditorController {
       metalness: Number.parseFloat(this.metallicInput.value),
       roughness: Number.parseFloat(this.roughnessInput.value),
       alpha: Number.parseFloat(this.alphaInput.value),
+      emissiveColor: Number.parseInt((this.emissiveColorInput?.value ?? toColorHex(DEFAULT_SURFACE.emissiveColor)).replace('#', ''), 16),
+      emissiveIntensity: Number.parseFloat(this.emissiveIntensityInput?.value ?? `${DEFAULT_SURFACE.emissiveIntensity}`),
       transmission: Number.parseFloat(this.transmissionInput?.value ?? `${DEFAULT_SURFACE.transmission}`),
       ior: Number.parseFloat(this.iorInput?.value ?? `${DEFAULT_SURFACE.ior}`),
       thickness: Number.parseFloat(this.thicknessInput?.value ?? `${DEFAULT_SURFACE.thickness}`),
@@ -472,6 +488,10 @@ export class TextureEditorController {
       if (this.baseColorValue && this.baseColorInput) this.baseColorValue.textContent = this.baseColorInput.value;
       this.applyTextureFromInputs(false);
     });
+    this.emissiveColorInput?.addEventListener('input', () => {
+      if (this.emissiveColorValue && this.emissiveColorInput) this.emissiveColorValue.textContent = this.emissiveColorInput.value;
+      this.applyTextureFromInputs(false);
+    });
     this.attenuationColorInput?.addEventListener('input', () => {
       if (this.attenuationColorValue && this.attenuationColorInput) this.attenuationColorValue.textContent = this.attenuationColorInput.value;
       this.applyTextureFromInputs(false);
@@ -479,6 +499,7 @@ export class TextureEditorController {
     this.bindRangeInput(this.metallicInput, this.metallicValue, 3, false);
     this.bindRangeInput(this.roughnessInput, this.roughnessValue, 3, false);
     this.bindRangeInput(this.alphaInput, this.alphaValue, 3, false);
+    this.bindRangeInput(this.emissiveIntensityInput, this.emissiveIntensityValue, 2, false);
     this.bindRangeInput(this.transmissionInput, this.transmissionValue, 3, false);
     this.bindRangeInput(this.iorInput, this.iorValue, 3, false);
     this.bindRangeInput(this.thicknessInput, this.thicknessValue, 3, false);
@@ -488,10 +509,12 @@ export class TextureEditorController {
     this.bindRangeInput(this.specularIntensityInput, this.specularIntensityValue, 3, false);
 
     this.baseColorInput?.addEventListener('change', () => this.applyTextureFromInputs(true));
+    this.emissiveColorInput?.addEventListener('change', () => this.applyTextureFromInputs(true));
     this.attenuationColorInput?.addEventListener('change', () => this.applyTextureFromInputs(true));
     this.bindRangeInput(this.metallicInput, this.metallicValue, 3, true);
     this.bindRangeInput(this.roughnessInput, this.roughnessValue, 3, true);
     this.bindRangeInput(this.alphaInput, this.alphaValue, 3, true);
+    this.bindRangeInput(this.emissiveIntensityInput, this.emissiveIntensityValue, 2, true);
     this.bindRangeInput(this.transmissionInput, this.transmissionValue, 3, true);
     this.bindRangeInput(this.iorInput, this.iorValue, 3, true);
     this.bindRangeInput(this.thicknessInput, this.thicknessValue, 3, true);

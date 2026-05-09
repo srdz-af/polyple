@@ -23,6 +23,8 @@ export type SurfaceMaterial = {
   clearcoat: number;
   clearcoatRoughness: number;
   specularIntensity: number;
+  emissiveColor: number;
+  emissiveIntensity: number;
 };
 const DEFAULT_SURFACE: SurfaceMaterial = {
   materialType: 'standard',
@@ -38,6 +40,8 @@ const DEFAULT_SURFACE: SurfaceMaterial = {
   clearcoat: 1.0,
   clearcoatRoughness: 0.02,
   specularIntensity: 1.0,
+  emissiveColor: 0x000000,
+  emissiveIntensity: 0.0,
 };
 const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
@@ -98,6 +102,8 @@ export class HypercubeRenderer {
       transparent: false,
       opacity: this.surface.alpha,
       envMapIntensity: 1.8,
+      emissive: this.surface.emissiveColor,
+      emissiveIntensity: this.surface.emissiveIntensity,
       side: THREE.DoubleSide,
       depthWrite: true,
       vertexColors: false,
@@ -117,6 +123,8 @@ export class HypercubeRenderer {
       clearcoatRoughness: this.surface.clearcoatRoughness,
       specularIntensity: this.surface.specularIntensity,
       envMapIntensity: 1.8,
+      emissive: this.surface.emissiveColor,
+      emissiveIntensity: this.surface.emissiveIntensity,
       side: THREE.DoubleSide,
       depthWrite: false,
       vertexColors: false,
@@ -154,6 +162,8 @@ export class HypercubeRenderer {
     });
 
     this.mesh = new THREE.Mesh(new THREE.BufferGeometry(), this.currentSolidMaterial());
+    this.mesh.castShadow = true;
+    this.mesh.receiveShadow = true;
     this.mesh.visible = this.mode !== 'wireframe';
     this.group.add(this.mesh);
 
@@ -235,6 +245,8 @@ export class HypercubeRenderer {
       clearcoat: clamp01(surface.clearcoat),
       clearcoatRoughness: clamp01(surface.clearcoatRoughness),
       specularIntensity: Math.max(0, Math.min(2, surface.specularIntensity)),
+      emissiveColor: Math.max(0, Math.min(0xffffff, surface.emissiveColor >>> 0)),
+      emissiveIntensity: Math.max(0, Math.min(20, surface.emissiveIntensity)),
     };
     this.applySurfaceMaterial();
   }
@@ -298,6 +310,8 @@ export class HypercubeRenderer {
     material.metalness = this.surface.metalness;
     material.roughness = this.surface.roughness;
     material.opacity = this.surface.alpha;
+    material.emissive.setHex(this.surface.emissiveColor);
+    material.emissiveIntensity = this.surface.emissiveIntensity;
     material.transparent = this.surface.alpha < OPAQUE_ALPHA_THRESHOLD;
     material.alphaHash = false;
     material.alphaToCoverage = false;
@@ -320,6 +334,8 @@ export class HypercubeRenderer {
     material.clearcoat = this.surface.clearcoat;
     material.clearcoatRoughness = this.surface.clearcoatRoughness;
     material.specularIntensity = this.surface.specularIntensity;
+    material.emissive.setHex(this.surface.emissiveColor);
+    material.emissiveIntensity = this.surface.emissiveIntensity;
     material.alphaHash = false;
     material.alphaToCoverage = false;
     material.depthWrite = false;

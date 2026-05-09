@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { ViewMode } from '../constants';
+import type { SceneLightState } from '../scene/types';
 
 export type AnimationKeyframeState = {
   dimension: number;
@@ -20,6 +21,7 @@ export type AnimationKeyframeState = {
   cameraUp: THREE.Vector3;
   cameraFov: number;
   cameraZoom: number;
+  lights?: SceneLightState[];
 };
 
 export type AnimationSettings = {
@@ -122,6 +124,11 @@ function cloneKeyframeState(state: AnimationKeyframeState): AnimationKeyframeSta
     cameraUp: state.cameraUp.clone(),
     cameraFov: state.cameraFov,
     cameraZoom: state.cameraZoom,
+    lights: state.lights?.map(light => ({
+      ...light,
+      position: light.position.clone(),
+      target: light.target?.clone() ?? new THREE.Vector3(),
+    })),
   };
 }
 

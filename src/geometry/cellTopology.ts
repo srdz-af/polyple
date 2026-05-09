@@ -32,6 +32,16 @@ export type DeleteCellAndPruneResult = {
   edges: Uint32Array;
 };
 
+export type ExtrudeCellResult = {
+  topology: CellTopology;
+  vertexCount: number;
+  edges: Uint32Array;
+  sourceVertices: number[];
+  capVertices: number[];
+  capCellId: number;
+  extrudedCellId: number;
+};
+
 const DEFAULT_PRODUCT_TOPOLOGY_MAX_CELLS = 250000;
 const DEFAULT_PRODUCT_TOPOLOGY_MAX_VERTEX_REFS = 2000000;
 const boundaryFaceCache = new WeakMap<CellTopology, Map<number, Map<number, number[]>>>();
@@ -222,6 +232,21 @@ function isSubsetCell(cell: number[], parent: Set<number>) {
   return cell.every(vertex => parent.has(vertex));
 }
 
+function sortedCellSignature(cell: number[]) {
+  return [...cell].sort((a, b) => a - b).join(':');
+}
+
+function pushUniqueCell(cells: number[][], cell: number[], signatures?: Set<string>) {
+  if (!cell.length) return -1;
+  if (signatures) {
+    const signature = sortedCellSignature(cell);
+    if (signatures.has(signature)) return -1;
+    signatures.add(signature);
+  }
+  cells.push(cell);
+  return cells.length - 1;
+}
+
 function referencedByHigherCell(
   cell: number[],
   cellsByDim: number[][][],
@@ -359,6 +384,106 @@ export function deleteCellAndPrune(
     vertexCount: sortedVertices.length,
     removedVertexCount: vertexCount - sortedVertices.length,
     edges: edgeListFromCells(remappedCellsByDim[1]),
+  };
+}
+
+export function extrudeCell(
+  topology: CellTopology | undefined,
+  dimension: number,
+  cellId: number,
+  vertexCount: number,
+): ExtrudeCellResult | undefined {
+  if (!topology || vertexCount < 0 || dimension < 0 || cellId < 0) return undefined;
+  const targetCount = cellCount(topology, dimension);
+  if (cellId >= targetCount) return undefined;
+
+  const selectedCell = getCellVertices(topology, dimension, cellId);
+  const sourceVertices = selectedCell
+    .filter(vertex => Number.isInteger(vertex) && vertex >= 0 && vertex < vertexCount)
+    .filter((vertex, index, arr) => arr.indexOf(vertex) === index);
+  if (!sourceVertices.length) return undefined;
+
+  const highestSourceDimension = Math.max(maxCellDimension(topology), dimension);
+  const highestTargetDimension = Math.max(highestSourceDimension, dimension + 1);
+  const selectedSet = new Set(sourceVertices);
+  const duplicateOf = new Map<number, number>();
+  sourceVertices.forEach((vertex, index) => {
+    duplicateOf.set(vertex, vertexCount + index);
+  });
+
+  const cellsByDim = Array.from({ length: highestTargetDimension + 1 }, (_entry, dim) => {
+    if (dim === 0) return Array.from({ length: vertexCount }, (_vertex, vertex) => [vertex]);
+    return dim <= highestSourceDimension ? cellVerticesForMutation(topology, dim) : [];
+  });
+
+  const closureCells: number[][][] = Array.from({ length: dimension + 1 }, () => []);
+  closureCells[0] = sourceVertices.map(vertex => [vertex]);
+  for (let dim = 1; dim <= dimension; dim++) {
+    const cells = cellVerticesForMutation(topology, dim);
+    const selectedSignature = dim === dimension ? sortedCellSignature(selectedCell) : '';
+    let selectedPresent = false;
+    for (const cell of cells) {
+      if (!cell.length || !cell.every(vertex => selectedSet.has(vertex))) continue;
+      closureCells[dim].push(cell);
+      if (dim === dimension && sortedCellSignature(cell) === selectedSignature) selectedPresent = true;
+    }
+    if (dim === dimension && !selectedPresent) closureCells[dim].push(selectedCell);
+  }
+
+  sourceVertices.forEach(vertex => {
+    cellsByDim[0].push([duplicateOf.get(vertex) ?? vertex]);
+  });
+  let capCellId = dimension === 0 ? (duplicateOf.get(sourceVertices[0]) ?? -1) : -1;
+
+  for (let dim = 1; dim <= dimension; dim++) {
+    const topCells = closureCells[dim]
+      .map(cell => cell.map(vertex => duplicateOf.get(vertex) ?? -1))
+      .filter(cell => cell.every(vertex => vertex >= 0));
+    const targetCells = cellsByDim[dim];
+    for (const cell of topCells) {
+      const nextId = targetCells.length;
+      targetCells.push(cell);
+      if (dim === dimension && capCellId < 0) capCellId = nextId;
+    }
+  }
+
+  let extrudedCellId = -1;
+  for (let dim = 0; dim <= dimension; dim++) {
+    const targetDim = dim + 1;
+    const targetCells = cellsByDim[targetDim];
+    const signatures = new Set(targetCells.map(sortedCellSignature));
+    for (const cell of closureCells[dim]) {
+      const duplicates = cell.map(vertex => duplicateOf.get(vertex) ?? -1);
+      if (duplicates.some(vertex => vertex < 0)) continue;
+      const prism = cell.length === 1
+        ? [cell[0], duplicates[0]]
+        : [
+            ...cell,
+            ...duplicates.slice().reverse(),
+          ];
+      const nextId = pushUniqueCell(targetCells, prism, signatures);
+      if (dim === dimension && nextId >= 0) extrudedCellId = nextId;
+    }
+  }
+
+  const newCells = cellsByDim.map(cells => cells.length ? makeCellDim(cells) : undefined);
+  const capVertices = sourceVertices
+    .map(vertex => duplicateOf.get(vertex) ?? -1)
+    .filter(vertex => vertex >= 0);
+  if (capCellId < 0 || !capVertices.length || extrudedCellId < 0) return undefined;
+
+  return {
+    topology: {
+      cells: newCells,
+      generatedKind: 'edited',
+      sourceDimension: topology.sourceDimension,
+    },
+    vertexCount: vertexCount + sourceVertices.length,
+    edges: edgeListFromCells(cellsByDim[1]),
+    sourceVertices,
+    capVertices,
+    capCellId,
+    extrudedCellId,
   };
 }
 
@@ -603,6 +728,9 @@ export function buildGeneratedCellTopology(
   edges: Uint32Array,
   surfaceTopology?: PrimitiveSurfaceTopology,
 ): CellTopology {
+  if (kind === 'plane' && vertexCount === 4) {
+    return buildPolygonCellTopology(4);
+  }
   if (kind === 'hypercube' && isHypercubeGraph(vertexCount, dimension, edges)) {
     return buildHypercubeCellTopology(dimension);
   }

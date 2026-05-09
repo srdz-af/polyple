@@ -14,9 +14,9 @@ export class SceneHistory<TSnapshot> {
     this.maxEntries = options.maxEntries ?? 20;
   }
 
-  push() {
+  push(snapshot?: TSnapshot) {
     if (this.applying) return;
-    this.undoStack.push(this.options.capture());
+    this.undoStack.push(snapshot ?? this.options.capture());
     if (this.undoStack.length > this.maxEntries) this.undoStack.shift();
     this.redoStack.length = 0;
   }

@@ -19,7 +19,9 @@ type KeyboardShortcutControllerOptions = {
   removeLastKeyframe: () => void;
   toggleEditMode: () => void;
   startTransformFromPointer: (mode: TransformMode) => void;
+  extrudeEditSelectionFromPointer: () => void;
   showAddObjectMenuAtPointer: () => void;
+  duplicateSelectionFromPointer: () => void;
   deleteOrConfirmSelection: () => void;
   hasSelection: () => boolean;
   undo: () => void;
@@ -99,6 +101,12 @@ export class KeyboardShortcutController {
       return;
     }
 
+    if (!hasSystemMod && !ev.shiftKey && transformMode === 'none' && this.options.isEditMode() && key === 'e') {
+      ev.preventDefault();
+      this.options.extrudeEditSelectionFromPointer();
+      return;
+    }
+
     if (!hasSystemMod && !ev.shiftKey && transformMode === 'none' && ev.code === 'Space') {
       ev.preventDefault();
       this.options.toggleAnimationPlayback();
@@ -151,6 +159,12 @@ export class KeyboardShortcutController {
     if (key === 'a' && ev.shiftKey) {
       ev.preventDefault();
       this.options.showAddObjectMenuAtPointer();
+      return;
+    }
+    if (key === 'd' && ev.shiftKey) {
+      ev.preventDefault();
+      if (!this.options.hasSelection()) return;
+      this.options.duplicateSelectionFromPointer();
       return;
     }
     if (!ev.shiftKey && key === 'x') {
