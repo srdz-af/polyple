@@ -65,6 +65,7 @@ export type BevelEdgeCut = {
   sideNeighbor: number;
   sideNeighborB?: number;
   profileT?: number;
+  cornerMeet?: boolean;
 };
 
 export type BevelEdgeResult = {
@@ -1241,6 +1242,10 @@ export function bevelFaceBoundary(
   const profileByEndpointNeighbors = new Map<string, number[]>();
   const cutKey = (endpoint: number, sideNeighbor: number) => `${endpoint}:${sideNeighbor}`;
   const profileKey = (endpoint: number, sideA: number, sideB: number) => `${endpoint}:${sideA}:${sideB}`;
+  const cornerKey = (endpoint: number, sideA: number, sideB: number) => (
+    sideA < sideB ? `${endpoint}:${sideA}:${sideB}` : `${endpoint}:${sideB}:${sideA}`
+  );
+  const cornerMeetByEndpointNeighbors = new Map<string, number>();
   const cutFor = (endpoint: number, sideNeighbor: number) => (
     cutByEndpointNeighbor.get(cutKey(endpoint, sideNeighbor)) ?? -1
   );
@@ -1254,6 +1259,23 @@ export function bevelFaceBoundary(
     const vertex = nextVertex++;
     cutByEndpointNeighbor.set(key, vertex);
     cuts.push({ vertex, endpoint, faceId: sourceFaceId, sideNeighbor });
+    return vertex;
+  };
+  const ensureCornerMeet = (endpoint: number, sideA: number, sideB: number) => {
+    const key = cornerKey(endpoint, sideA, sideB);
+    const existing = cornerMeetByEndpointNeighbors.get(key);
+    if (typeof existing === 'number') return existing;
+    const vertex = nextVertex++;
+    cornerMeetByEndpointNeighbors.set(key, vertex);
+    cuts.push({
+      vertex,
+      endpoint,
+      faceId: faceCellId,
+      sideNeighbor: sideA,
+      sideNeighborB: sideB,
+      profileT: 0.5,
+      cornerMeet: true,
+    });
     return vertex;
   };
   const ensureProfile = (endpoint: number, sideA: number, sideB: number) => {
@@ -1282,6 +1304,39 @@ export function bevelFaceBoundary(
     sequence.push(end);
     profileByEndpointNeighbors.set(profileKey(endpoint, sideA, sideB), sequence);
     profileByEndpointNeighbors.set(profileKey(endpoint, sideB, sideA), [...sequence].reverse());
+    return sequence;
+  };
+  const selectedCornerMeet = (endpoint: number) => {
+    const idx = selectedFace.indexOf(endpoint);
+    if (idx < 0) return -1;
+    const prev = selectedFace[(idx - 1 + selectedFace.length) % selectedFace.length];
+    const next = selectedFace[(idx + 1) % selectedFace.length];
+    return ensureCornerMeet(endpoint, prev, next);
+  };
+  const ensureBoundaryProfile = (endpoint: number, selectedNeighbor: number, externalSide: number) => {
+    const inner = selectedCornerMeet(endpoint);
+    const outer = ensureCut(endpoint, externalSide, faceCellId);
+    if (inner < 0 || outer < 0) return undefined;
+    if (layerCount <= 1) return [inner, outer];
+    const key = profileKey(endpoint, selectedNeighbor, externalSide);
+    const existing = profileByEndpointNeighbors.get(key);
+    if (existing) return existing;
+    const sequence = [inner];
+    for (let step = 1; step < layerCount; step++) {
+      const vertex = nextVertex++;
+      cuts.push({
+        vertex,
+        endpoint,
+        faceId: -1,
+        sideNeighbor: selectedNeighbor,
+        sideNeighborB: externalSide,
+        profileT: step / layerCount,
+      });
+      sequence.push(vertex);
+    }
+    sequence.push(outer);
+    profileByEndpointNeighbors.set(key, sequence);
+    profileByEndpointNeighbors.set(profileKey(endpoint, externalSide, selectedNeighbor), [...sequence].reverse());
     return sequence;
   };
 
@@ -1326,7 +1381,7 @@ export function bevelFaceBoundary(
     const endpoint = selectedFace[idx];
     const prev = selectedFace[(idx - 1 + selectedFace.length) % selectedFace.length];
     const next = selectedFace[(idx + 1) % selectedFace.length];
-    ensureProfile(endpoint, prev, next);
+    ensureCornerMeet(endpoint, prev, next);
   }
 
   const dedupeSequence = (sequence: number[]) => {
@@ -1341,14 +1396,9 @@ export function bevelFaceBoundary(
   };
 
   const selectedFaceReplacement = () => {
-    const face: number[] = [];
-    for (let idx = 0; idx < selectedFace.length; idx++) {
-      const endpoint = selectedFace[idx];
-      const prev = selectedFace[(idx - 1 + selectedFace.length) % selectedFace.length];
-      const next = selectedFace[(idx + 1) % selectedFace.length];
-      face.push(...(ensureProfile(endpoint, prev, next) ?? []));
-    }
-    return dedupeSequence(face);
+    return selectedFace
+      .map(endpoint => selectedCornerMeet(endpoint))
+      .filter(vertex => vertex >= 0);
   };
 
   const edgeContainsSelectedBoundary = (edge: number[]) => (
@@ -1494,12 +1544,15 @@ export function bevelFaceBoundary(
   }
 
   const faceSignatures = new Set((nextCellsByDim[2] ?? []).map(sortedCellSignature));
-  const addFace = (face: number[]) => pushUniqueCell(nextCellsByDim[2], dedupeSequence(face), faceSignatures);
+  const addFace = (face: number[]) => {
+    const clean = dedupeSequence(face);
+    return clean.length >= 3 ? pushUniqueCell(nextCellsByDim[2], clean, faceSignatures) : -1;
+  };
 
   for (const edge of boundaryEdges) {
     for (const external of edge.externalFaces) {
-      const profileA = ensureProfile(edge.a, edge.b, external.sideA);
-      const profileB = ensureProfile(edge.b, edge.a, external.sideB);
+      const profileA = ensureBoundaryProfile(edge.a, edge.b, external.sideA);
+      const profileB = ensureBoundaryProfile(edge.b, edge.a, external.sideB);
       if (!profileA || !profileB || profileA.length !== profileB.length || profileA.length < 2) continue;
       for (let step = 0; step < profileA.length - 1; step++) {
         addFace([profileA[step], profileB[step], profileB[step + 1], profileA[step + 1]]);
@@ -1518,16 +1571,14 @@ export function bevelFaceBoundary(
     if (!prevExternal || !nextExternal) continue;
     const prevSide = prevEdge.b === endpoint ? prevExternal.sideB : prevExternal.sideA;
     const nextSide = nextEdge.a === endpoint ? nextExternal.sideA : nextExternal.sideB;
-    const faceArc = ensureProfile(endpoint, prevNeighbor, nextNeighbor);
-    const nextProfile = ensureProfile(endpoint, nextNeighbor, nextSide);
+    const nextProfile = ensureBoundaryProfile(endpoint, nextNeighbor, nextSide);
     const sideArc = ensureProfile(endpoint, nextSide, prevSide);
-    const prevProfile = ensureProfile(endpoint, prevNeighbor, prevSide);
-    if (!faceArc || !nextProfile || !sideArc || !prevProfile) continue;
+    const prevProfile = ensureBoundaryProfile(endpoint, prevNeighbor, prevSide);
+    if (!nextProfile || !sideArc || !prevProfile) continue;
     addFace([
-      ...faceArc,
-      ...nextProfile.slice(1),
+      ...nextProfile,
       ...sideArc.slice(1),
-      ...prevProfile.slice(0, -1).reverse(),
+      ...prevProfile.slice(1, -1).reverse(),
     ]);
   }
 

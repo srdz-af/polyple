@@ -3852,6 +3852,18 @@ function buildBeveledEdgeData(
     const second = unitDirection(endpoint, cut.sideNeighborB);
     if (!second) continue;
     const cutDistance = Math.min(distance, first.length * BEVEL_MAX_AMOUNT, second.length * BEVEL_MAX_AMOUNT);
+    if (cut.cornerMeet) {
+      let dot = 0;
+      for (let dim = 0; dim < dimension; dim++) dot += first.direction[dim] * second.direction[dim];
+      dot = Math.max(-0.999, Math.min(0.999, dot));
+      const sinAngle = Math.sqrt(Math.max(0, 1 - (dot * dot)));
+      const scale = sinAngle > 1e-6 ? cutDistance / sinAngle : cutDistance * 0.5;
+      for (let dim = 0; dim < dimension; dim++) {
+        const origin = data[(dim * oldVertexCount) + endpoint];
+        next[(dim * bevel.vertexCount) + cut.vertex] = origin + ((first.direction[dim] + second.direction[dim]) * scale);
+      }
+      continue;
+    }
     const t = Math.max(0, Math.min(1, cut.profileT ?? 0.5));
     let dot = 0;
     for (let dim = 0; dim < dimension; dim++) dot += first.direction[dim] * second.direction[dim];
