@@ -23,6 +23,7 @@ type LightMenuOption = {
 
 type DuplicatePlacementToken = unknown;
 type EditExtrusionToken = unknown;
+type EditInsetToken = unknown;
 type EditBevelToken = unknown;
 
 const OBJECT_FOCUS_DOUBLE_CLICK_MS = 220;
@@ -32,6 +33,8 @@ const CELL_CENTER_FALLBACK_RADIUS = 48;
 const CELL_CYCLE_MAX_DIST = 10;
 const BEVEL_MIN_SMOOTHNESS = 1;
 const BEVEL_MAX_SMOOTHNESS = 32;
+const INSET_MAX_AMOUNT = 0.85;
+const INSET_INITIAL_AMOUNT = 0.18;
 
 type CellPickCandidate = {
   cellId: number;
@@ -74,7 +77,11 @@ type ViewportInteractionControllerOptions = {
   extrudeSelectedEditCell: () => EditExtrusionToken | null;
   commitEditExtrusion: (token: EditExtrusionToken) => void;
   cancelEditExtrusion: (token: EditExtrusionToken) => void;
-  startEditBevel: (smoothness: number, kind?: 'vertex' | 'edge') => EditBevelToken | null;
+  startEditInset: () => EditInsetToken | null;
+  updateEditInset: (token: EditInsetToken, amount: number) => void;
+  commitEditInset: (token: EditInsetToken) => void;
+  cancelEditInset: (token: EditInsetToken) => void;
+  startEditBevel: (smoothness: number, kind?: 'vertex' | 'edge', inward?: boolean) => EditBevelToken | null;
   updateEditBevel: (token: EditBevelToken, amount: number, smoothness: number) => void;
   commitEditBevel: (token: EditBevelToken) => void;
   cancelEditBevel: (token: EditBevelToken) => void;
@@ -126,10 +133,17 @@ export class ViewportInteractionController {
   private editExtrusion: {
     token: EditExtrusionToken;
   } | null = null;
+  private editInset: {
+    token: EditInsetToken;
+    amount: number;
+    startX: number;
+    startY: number;
+  } | null = null;
   private editBevel: {
     token: EditBevelToken;
     smoothness: number;
     amount: number;
+    inward: boolean;
     startX: number;
     startY: number;
   } | null = null;
@@ -179,7 +193,7 @@ export class ViewportInteractionController {
   }
 
   startEditExtrusionFromLastPointer() {
-    if (this.editExtrusion || this.duplicatePlacement) return;
+    if (this.editExtrusion || this.editInset || this.duplicatePlacement) return;
     if (!this.options.getParams().editMode) return;
     if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
     const token = this.options.extrudeSelectedEditCell();
@@ -192,17 +206,33 @@ export class ViewportInteractionController {
     this.editExtrusion = { token };
   }
 
-  startEditBevelFromLastPointer(kind: 'vertex' | 'edge' = 'edge') {
-    if (this.editBevel || this.editExtrusion || this.duplicatePlacement) return;
+  startEditInsetFromLastPointer() {
+    if (this.editBevel || this.editExtrusion || this.editInset || this.duplicatePlacement) return;
+    if (!this.options.getParams().editMode) return;
+    if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
+    const token = this.options.startEditInset();
+    if (!token) return;
+    this.editInset = {
+      token,
+      amount: INSET_INITIAL_AMOUNT,
+      startX: this.lastPointer.x,
+      startY: this.lastPointer.y,
+    };
+    this.options.updateEditInset(token, INSET_INITIAL_AMOUNT);
+  }
+
+  startEditBevelFromLastPointer(kind: 'vertex' | 'edge' = 'edge', inward = false) {
+    if (this.editBevel || this.editExtrusion || this.editInset || this.duplicatePlacement) return;
     if (!this.options.getParams().editMode) return;
     if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
     const smoothness = this.lastBevelSmoothness;
-    const token = this.options.startEditBevel(smoothness, kind);
+    const token = this.options.startEditBevel(smoothness, kind, inward);
     if (!token) return;
     this.editBevel = {
       token,
       smoothness,
       amount: 0,
+      inward,
       startX: this.lastPointer.x,
       startY: this.lastPointer.y,
     };
@@ -280,6 +310,7 @@ export class ViewportInteractionController {
 
   private handleTransformPointerMove(ev: PointerEvent) {
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
+    if (this.updateEditInset(ev)) return;
     if (this.updateEditBevel(ev)) return;
     if (this.updateDuplicatePlacement(ev)) return;
     if (this.options.transformController.isGizmoDragging()) return;
@@ -299,6 +330,11 @@ export class ViewportInteractionController {
     if (this.editBevel) {
       ev.preventDefault();
       this.finishEditBevel(false);
+      return;
+    }
+    if (this.editInset) {
+      ev.preventDefault();
+      this.finishEditInset(false);
       return;
     }
 
@@ -505,13 +541,15 @@ export class ViewportInteractionController {
   }
 
   private handleWindowPointerDown(ev: PointerEvent) {
-    if (!this.editBevel) return;
+    if (!this.editBevel && !this.editInset) return;
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
     if (ev.button === 0) {
-      this.finishEditBevel(true);
+      if (this.editInset) this.finishEditInset(true);
+      else this.finishEditBevel(true);
     } else if (ev.button === 2) {
       this.suppressNextContextMenu = true;
-      this.finishEditBevel(false);
+      if (this.editInset) this.finishEditInset(false);
+      else this.finishEditBevel(false);
     } else {
       return;
     }
@@ -521,6 +559,7 @@ export class ViewportInteractionController {
   }
 
   private handleWindowPointerMove(ev: PointerEvent) {
+    if (this.updateEditInset(ev)) return;
     if (this.updateEditBevel(ev)) return;
     if (this.updateDuplicatePlacement(ev)) return;
     if (this.options.transformController.handleGizmoPointerMove(ev, point => { this.lastPointer = point; })) return;
@@ -566,6 +605,11 @@ export class ViewportInteractionController {
       ev.preventDefault();
       return;
     }
+    if (this.editInset) {
+      this.finishEditInset(false);
+      ev.preventDefault();
+      return;
+    }
 
     if (this.duplicatePlacement) {
       this.finishDuplicatePlacement(false);
@@ -587,6 +631,7 @@ export class ViewportInteractionController {
 
   private handleWindowBlur() {
     if (this.editBevel) this.finishEditBevel(false);
+    if (this.editInset) this.finishEditInset(false);
     if (this.duplicatePlacement) this.finishDuplicatePlacement(false);
     if (this.options.transformController.cancelGizmoDrag()) {
       this.options.controls.enabled = this.transformGizmoPrevControlsEnabled;
@@ -604,6 +649,7 @@ export class ViewportInteractionController {
     const menu = this.options.contextMenuEl;
     const target = ev.target;
     if (this.editBevel) return;
+    if (this.editInset) return;
     if (this.deletePending && target instanceof Node && menu?.contains(target)) return;
     if (menu) menu.style.display = 'none';
     this.deletePending = false;
@@ -614,6 +660,27 @@ export class ViewportInteractionController {
     this.lastPointer = { x: point.clientX, y: point.clientY };
     this.options.moveDuplicatePlacement(this.duplicatePlacement.token, this.pickPointOnTargetPlane(point));
     return true;
+  }
+
+  private updateEditInset(point: { clientX: number; clientY: number }) {
+    if (!this.editInset) return false;
+    this.lastPointer = { x: point.clientX, y: point.clientY };
+    const dx = point.clientX - this.editInset.startX;
+    const dy = this.editInset.startY - point.clientY;
+    const amount = Math.max(0, Math.min(INSET_MAX_AMOUNT, (dx + dy) * 0.0025));
+    if (Math.abs(amount - this.editInset.amount) < 0.0005) return true;
+    this.editInset.amount = amount;
+    this.options.updateEditInset(this.editInset.token, amount);
+    return true;
+  }
+
+  private finishEditInset(commit: boolean) {
+    const inset = this.editInset;
+    if (!inset) return;
+    this.editInset = null;
+    if (this.options.contextMenuEl) this.options.contextMenuEl.style.display = 'none';
+    if (commit) this.options.commitEditInset(inset.token);
+    else this.options.cancelEditInset(inset.token);
   }
 
   private finishDuplicatePlacement(commit: boolean) {

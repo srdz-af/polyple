@@ -20,7 +20,8 @@ type KeyboardShortcutControllerOptions = {
   toggleEditMode: () => void;
   startTransformFromPointer: (mode: TransformMode) => void;
   extrudeEditSelectionFromPointer: () => void;
-  startBevelEditSelection: (kind?: 'vertex' | 'edge') => void;
+  insetEditSelectionFromPointer: () => void;
+  startBevelEditSelection: (kind?: 'vertex' | 'edge', inward?: boolean) => void;
   selectAllEditCells: () => void;
   showAddObjectMenuAtPointer: () => void;
   duplicateSelectionFromPointer: () => void;
@@ -108,6 +109,11 @@ export class KeyboardShortcutController {
       this.options.extrudeEditSelectionFromPointer();
       return;
     }
+    if (!hasSystemMod && !ev.shiftKey && transformMode === 'none' && this.options.isEditMode() && key === 'i') {
+      ev.preventDefault();
+      this.options.insetEditSelectionFromPointer();
+      return;
+    }
     if (!hasSystemMod && !ev.shiftKey && transformMode === 'none' && this.options.isEditMode() && key === 'b') {
       ev.preventDefault();
       this.options.startBevelEditSelection('edge');
@@ -116,6 +122,16 @@ export class KeyboardShortcutController {
     if (!hasSystemMod && ev.shiftKey && transformMode === 'none' && this.options.isEditMode() && key === 'b') {
       ev.preventDefault();
       this.options.startBevelEditSelection('vertex');
+      return;
+    }
+    if (!ev.ctrlKey && !ev.metaKey && ev.altKey && !ev.shiftKey && transformMode === 'none' && this.options.isEditMode() && key === 'b') {
+      ev.preventDefault();
+      this.options.startBevelEditSelection('edge', true);
+      return;
+    }
+    if (!ev.ctrlKey && !ev.metaKey && ev.altKey && ev.shiftKey && transformMode === 'none' && this.options.isEditMode() && key === 'b') {
+      ev.preventDefault();
+      this.options.startBevelEditSelection('vertex', true);
       return;
     }
 

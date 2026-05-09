@@ -33,6 +33,7 @@ import {
   bevelVertices,
   deleteCellAndPrune,
   extrudeCell,
+  insetCell,
   getCellVertices,
   type BevelEdgeResult,
   type BevelFaceBoundaryResult,
@@ -226,6 +227,18 @@ type DuplicatePlacement = {
 type EditExtrusionToken = {
   undoSnapshot: PackedSceneUrlState;
 };
+type EditInsetToken = {
+  undoSnapshot: PackedSceneUrlState;
+  instIdx: number;
+  dimension: number;
+  cellId: number;
+  cellIds: number[];
+  vertices: number[];
+  sourceVertices: number[];
+  insetVertices: number[];
+  amount: number;
+  original: EditBevelGeometrySnapshot;
+};
 type EditBevelGeometrySnapshot = {
   X: Float32Array;
   E: Uint32Array;
@@ -236,6 +249,7 @@ type EditBevelGeometrySnapshot = {
 type EditBevelToken = {
   undoSnapshot: PackedSceneUrlState;
   kind: 'vertex' | 'edge';
+  inward: boolean;
   instIdx: number;
   dimension: number;
   cellId: number;
@@ -262,6 +276,7 @@ const MAX_VIEWPORT_PIXEL_RATIO = 2;
 const POSTPROCESSING_MSAA_SAMPLES = 4;
 const GRAIN_UPDATE_INTERVAL_FRAMES = 3;
 const GRAIN_TEXTURE_SCALE = 0.5;
+const INSET_MAX_AMOUNT = 0.85;
 const SCENE_LIGHT_MARKER_RADIUS = 0.025;
 const SCENE_LIGHT_MARKER_PIXEL_DIAMETER = 11;
 const SELECTED_SCENE_LIGHT_MARKER_PIXEL_DIAMETER = 15;
@@ -3787,8 +3802,18 @@ function blenderStyleBevelCapPoint(
   return point;
 }
 
-function writeDimensionMajorPoint(data: Float32Array, vertexCount: number, vertex: number, point: ArrayLike<number>) {
-  for (let dim = 0; dim < point.length; dim++) data[(dim * vertexCount) + vertex] = point[dim];
+function writeDimensionMajorBevelPoint(
+  data: Float32Array,
+  vertexCount: number,
+  vertex: number,
+  point: ArrayLike<number>,
+  origin: ArrayLike<number>,
+  inward: boolean,
+) {
+  for (let dim = 0; dim < point.length; dim++) {
+    const value = inward ? origin[dim] - (point[dim] - origin[dim]) : point[dim];
+    data[(dim * vertexCount) + vertex] = value;
+  }
 }
 
 function buildBeveledVertexData(
@@ -3797,6 +3822,7 @@ function buildBeveledVertexData(
   selectedVertex: number,
   bevel: BevelVertexResult,
   amount: number,
+  inward = false,
 ) {
   const dimension = oldVertexCount > 0 ? Math.floor(data.length / oldVertexCount) : 0;
   const next = new Float32Array(dimension * bevel.vertexCount);
@@ -3821,7 +3847,7 @@ function buildBeveledVertexData(
     if (!sphere) continue;
     if (cut.neighbors.length === 1) {
       const point = bevelEndpointPoint(sphere, cut.neighbors[0]);
-      if (point) writeDimensionMajorPoint(next, bevel.vertexCount, cut.vertex, point);
+      if (point) writeDimensionMajorBevelPoint(next, bevel.vertexCount, cut.vertex, point, sphere.origin, inward);
       continue;
     }
 
@@ -3840,9 +3866,7 @@ function buildBeveledVertexData(
     }
     if (!point) continue;
 
-    for (let dim = 0; dim < dimension; dim++) {
-      next[(dim * bevel.vertexCount) + cut.vertex] = point[dim];
-    }
+    writeDimensionMajorBevelPoint(next, bevel.vertexCount, cut.vertex, point, sphere.origin, inward);
   }
   return next;
 }
@@ -3853,6 +3877,7 @@ function buildBeveledEdgeData(
   bevel: BevelEdgeResult | BevelFaceBoundaryResult | BevelSelectedEdgesResult,
   amount: number,
   fixedDistance?: number,
+  inward = false,
 ) {
   const dimension = oldVertexCount > 0 ? Math.floor(data.length / oldVertexCount) : 0;
   const next = new Float32Array(dimension * bevel.vertexCount);
@@ -3894,6 +3919,30 @@ function buildBeveledEdgeData(
   };
 
   const distance = fixedDistance ?? (Math.max(0, Math.min(BEVEL_MAX_AMOUNT, amount)) * minLength);
+  const reflectPointAcrossChord = (
+    point: Float64Array,
+    start: Float64Array,
+    end: Float64Array,
+  ) => {
+    const chord = new Float64Array(dimension);
+    const rel = new Float64Array(dimension);
+    let chordLengthSq = 0;
+    let relDotChord = 0;
+    for (let dim = 0; dim < dimension; dim++) {
+      chord[dim] = end[dim] - start[dim];
+      rel[dim] = point[dim] - start[dim];
+      chordLengthSq += chord[dim] * chord[dim];
+      relDotChord += rel[dim] * chord[dim];
+    }
+    if (chordLengthSq <= 1e-8) return point;
+    const projectedT = relDotChord / chordLengthSq;
+    const reflected = new Float64Array(dimension);
+    for (let dim = 0; dim < dimension; dim++) {
+      const projection = start[dim] + (chord[dim] * projectedT);
+      reflected[dim] = (projection * 2) - point[dim];
+    }
+    return reflected;
+  };
   for (const cut of bevel.cuts) {
     const endpoint = cut.endpoint;
     const first = unitDirection(endpoint, cut.sideNeighbor);
@@ -3903,7 +3952,8 @@ function buildBeveledEdgeData(
       const cutDistance = Math.min(distance, first.length * BEVEL_MAX_AMOUNT);
       for (let dim = 0; dim < dimension; dim++) {
         const origin = data[(dim * oldVertexCount) + endpoint];
-        next[(dim * bevel.vertexCount) + cut.vertex] = origin + (first.direction[dim] * cutDistance);
+        const displacement = first.direction[dim] * cutDistance;
+        next[(dim * bevel.vertexCount) + cut.vertex] = origin + displacement;
       }
       continue;
     }
@@ -3927,16 +3977,21 @@ function buildBeveledEdgeData(
       const sinAngle = Math.sqrt(Math.max(0, 1 - (dot * dot)));
       const scale = sinAngle > 1e-6 ? cutDistance / sinAngle : cutDistance * 0.5;
       const oneMinusT = 1 - t;
+      const point = new Float64Array(dimension);
+      const innerPoint = new Float64Array(dimension);
+      const outerPoint = new Float64Array(dimension);
       for (let dim = 0; dim < dimension; dim++) {
         const origin = data[(dim * oldVertexCount) + endpoint];
-        const inner = origin + ((first.direction[dim] + second.direction[dim]) * scale);
-        const outerPoint = origin + (outer.direction[dim] * cutDistance);
-        next[(dim * bevel.vertexCount) + cut.vertex] = (
-          (inner * oneMinusT * oneMinusT)
+        innerPoint[dim] = origin + ((first.direction[dim] + second.direction[dim]) * scale);
+        outerPoint[dim] = origin + (outer.direction[dim] * cutDistance);
+        point[dim] = (
+          (innerPoint[dim] * oneMinusT * oneMinusT)
           + (origin * 2 * oneMinusT * t)
-          + (outerPoint * t * t)
+          + (outerPoint[dim] * t * t)
         );
       }
+      const finalPoint = inward ? reflectPointAcrossChord(point, innerPoint, outerPoint) : point;
+      for (let dim = 0; dim < dimension; dim++) next[(dim * bevel.vertexCount) + cut.vertex] = finalPoint[dim];
       continue;
     }
     if (cut.cornerMeet) {
@@ -3947,7 +4002,8 @@ function buildBeveledEdgeData(
       const scale = sinAngle > 1e-6 ? cutDistance / sinAngle : cutDistance * 0.5;
       for (let dim = 0; dim < dimension; dim++) {
         const origin = data[(dim * oldVertexCount) + endpoint];
-        next[(dim * bevel.vertexCount) + cut.vertex] = origin + ((first.direction[dim] + second.direction[dim]) * scale);
+        const displacement = (first.direction[dim] + second.direction[dim]) * scale;
+        next[(dim * bevel.vertexCount) + cut.vertex] = origin + displacement;
       }
       continue;
     }
@@ -3961,7 +4017,8 @@ function buildBeveledEdgeData(
         const origin = data[(dim * oldVertexCount) + endpoint];
         const a = first.direction[dim] * cutDistance;
         const b = second.direction[dim] * cutDistance;
-        next[(dim * bevel.vertexCount) + cut.vertex] = origin + (a * (1 - t)) + (b * t);
+        const displacement = (a * (1 - t)) + (b * t);
+        next[(dim * bevel.vertexCount) + cut.vertex] = origin + displacement;
       }
       continue;
     }
@@ -3990,14 +4047,22 @@ function buildBeveledEdgeData(
     profileDot = Math.max(-1, Math.min(1, profileDot));
     const angle = Math.acos(profileDot);
     const sinAngle = Math.sin(angle);
+    const arcPoint = new Float64Array(dimension);
+    const startPoint = new Float64Array(dimension);
+    const endPoint = new Float64Array(dimension);
     for (let dim = 0; dim < dimension; dim++) {
       const origin = data[(dim * oldVertexCount) + endpoint];
       const center = centerScale * (first.direction[dim] + second.direction[dim]);
       const arcDirection = Math.abs(sinAngle) > 1e-6
         ? ((Math.sin((1 - t) * angle) * start[dim]) + (Math.sin(t * angle) * end[dim])) / sinAngle
         : (start[dim] * (1 - t)) + (end[dim] * t);
-      next[(dim * bevel.vertexCount) + cut.vertex] = origin + center + (arcDirection * radius);
+      const displacement = center + (arcDirection * radius);
+      arcPoint[dim] = origin + displacement;
+      startPoint[dim] = origin + (first.direction[dim] * cutDistance);
+      endPoint[dim] = origin + (second.direction[dim] * cutDistance);
     }
+    const finalPoint = inward ? reflectPointAcrossChord(arcPoint, startPoint, endPoint) : arcPoint;
+    for (let dim = 0; dim < dimension; dim++) next[(dim * bevel.vertexCount) + cut.vertex] = finalPoint[dim];
   }
 
   return next;
@@ -4232,7 +4297,6 @@ function extrudeSelectedEditCell(): EditExtrusionToken | null {
 
   const undoSnapshot = captureSceneUrlState();
   transformController.clearEditSelection();
-
   if (targetIsBase) {
     X = appendDimensionMajorDuplicateVertices(X, M, extrusion.sourceVertices);
     M = extrusion.vertexCount;
@@ -4279,7 +4343,7 @@ function cancelEditExtrusion(token: unknown) {
   void applySceneUrlState(token.undoSnapshot);
 }
 
-function captureEditBevelTargetSnapshot(instIdx: number): EditBevelGeometrySnapshot | null {
+function captureEditGeometrySnapshot(instIdx: number): EditBevelGeometrySnapshot | null {
   if (instIdx === BASE_SELECTION) {
     if (M <= 0 || !baseVisible) return null;
     return {
@@ -4302,9 +4366,8 @@ function captureEditBevelTargetSnapshot(instIdx: number): EditBevelGeometrySnaps
   };
 }
 
-function restoreEditBevelTarget(token: EditBevelToken) {
-  const original = token.original;
-  if (token.instIdx === BASE_SELECTION) {
+function restoreEditGeometrySnapshot(instIdx: number, original: EditBevelGeometrySnapshot) {
+  if (instIdx === BASE_SELECTION) {
     X = new Float32Array(original.X);
     M = original.M;
     Y = new Float32Array(3 * M);
@@ -4318,7 +4381,7 @@ function restoreEditBevelTarget(token: EditBevelToken) {
       baseVisible = true;
     }
   } else {
-    const target = extraInstances[token.instIdx];
+    const target = extraInstances[instIdx];
     if (!target) return;
     target.X = new Float32Array(original.X);
     target.M = original.M;
@@ -4330,6 +4393,143 @@ function restoreEditBevelTarget(token: EditBevelToken) {
     target.renderer.setSurface(target.surface);
     target.renderer.setMode(PARAMS.renderMode);
   }
+}
+
+function captureEditBevelTargetSnapshot(instIdx: number): EditBevelGeometrySnapshot | null {
+  return captureEditGeometrySnapshot(instIdx);
+}
+
+function restoreEditBevelTarget(token: EditBevelToken) {
+  restoreEditGeometrySnapshot(token.instIdx, token.original);
+}
+
+function writeInsetVertices(
+  data: Float32Array,
+  original: Float32Array,
+  vertexCount: number,
+  originalVertexCount: number,
+  sourceVertices: number[],
+  insetVertices: number[],
+  amount: number,
+) {
+  if (vertexCount <= 0 || originalVertexCount <= 0 || !sourceVertices.length || sourceVertices.length !== insetVertices.length) return;
+  const dimension = Math.floor(data.length / vertexCount);
+  const originalDimension = Math.floor(original.length / originalVertexCount);
+  if (dimension <= 0 || originalDimension !== dimension) return;
+  const center = new Float64Array(dimension);
+  for (const sourceVertex of sourceVertices) {
+    for (let dim = 0; dim < dimension; dim++) {
+      center[dim] += original[(dim * originalVertexCount) + sourceVertex] ?? 0;
+    }
+  }
+  for (let dim = 0; dim < dimension; dim++) center[dim] /= sourceVertices.length;
+  const t = Math.max(0, Math.min(INSET_MAX_AMOUNT, amount));
+  sourceVertices.forEach((sourceVertex, idx) => {
+    const insetVertex = insetVertices[idx];
+    if (insetVertex < 0 || insetVertex >= vertexCount) return;
+    for (let dim = 0; dim < dimension; dim++) {
+      const source = original[(dim * originalVertexCount) + sourceVertex] ?? 0;
+      data[(dim * vertexCount) + insetVertex] = source + ((center[dim] - source) * t);
+    }
+  });
+}
+
+function startEditInset(): EditInsetToken | null {
+  if (!PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return null;
+  const selection = transformController.getEditSelection();
+  if (!selection || selection.cellId < 0 || selection.dimension < 1) return null;
+
+  const targetIsBase = selectedInstance === BASE_SELECTION;
+  const target = targetIsBase ? null : extraInstances[selectedInstance];
+  const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
+  const vertexCount = targetIsBase ? M : (target?.M ?? 0);
+  const inset = insetCell(topology, selection.dimension, selection.cellId, vertexCount);
+  if (!inset) return null;
+  const original = captureEditGeometrySnapshot(selectedInstance);
+  if (!original) return null;
+
+  const undoSnapshot = captureSceneUrlState();
+  transformController.clearEditSelection();
+  if (targetIsBase) {
+    X = appendDimensionMajorDuplicateVertices(X, M, inset.sourceVertices);
+    M = inset.vertexCount;
+    Y = new Float32Array(3 * M);
+    E = new Uint32Array(inset.edges);
+    baseCellTopology = inset.topology;
+    baseSurfaceTopology = surfaceTopologyForEditedCellTopology(baseCellTopology);
+    rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
+    rendererND.setSurface(baseSurface);
+    rendererND.setMode(PARAMS.renderMode);
+  } else if (target) {
+    target.X = appendDimensionMajorDuplicateVertices(target.X, target.M, inset.sourceVertices);
+    target.M = inset.vertexCount;
+    target.Y = new Float32Array(3 * target.M);
+    target.E = new Uint32Array(inset.edges);
+    target.cellTopology = inset.topology;
+    target.surfaceTopology = surfaceTopologyForEditedCellTopology(target.cellTopology);
+    target.renderer.build(target.M, target.E, target.surfaceTopology, target.cellTopology);
+    target.renderer.setSurface(target.surface);
+    target.renderer.setMode(PARAMS.renderMode);
+  }
+
+  projectAndRenderAll();
+  transformController.setSelectedEditElement(selection.dimension, inset.insetVertices, inset.insetCellId);
+  transformController.updateVertexCloud(selectedInstance);
+  updateSelectionOutline();
+  updateTransformActionButtons();
+
+  return {
+    undoSnapshot,
+    instIdx: selectedInstance,
+    dimension: selection.dimension,
+    cellId: inset.insetCellId,
+    cellIds: [...selection.cellIds],
+    vertices: [...selection.vertices],
+    sourceVertices: inset.sourceVertices,
+    insetVertices: inset.insetVertices,
+    amount: 0,
+    original,
+  };
+}
+
+function isEditInsetToken(token: unknown): token is EditInsetToken {
+  return typeof token === 'object'
+    && token !== null
+    && 'undoSnapshot' in token
+    && 'sourceVertices' in token
+    && 'insetVertices' in token
+    && 'original' in token;
+}
+
+function updateEditInset(token: unknown, amount: number) {
+  if (!isEditInsetToken(token)) return;
+  token.amount = Math.max(0, Math.min(INSET_MAX_AMOUNT, amount));
+  const targetIsBase = token.instIdx === BASE_SELECTION;
+  const target = targetIsBase ? null : extraInstances[token.instIdx];
+  const data = targetIsBase ? X : target?.X;
+  const vertexCount = targetIsBase ? M : (target?.M ?? 0);
+  if (!data || vertexCount <= 0) return;
+  writeInsetVertices(data, token.original.X, vertexCount, token.original.M, token.sourceVertices, token.insetVertices, token.amount);
+  if (targetIsBase) rendererND.refreshSurface();
+  else target?.renderer.refreshSurface();
+  projectAndRenderAll();
+  if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
+}
+
+function commitEditInset(token: unknown) {
+  if (!isEditInsetToken(token)) return;
+  if (sceneUrlApplying) return;
+  sceneHistory.push(token.undoSnapshot);
+  finalizeCommittedGeometryEdit();
+}
+
+function cancelEditInset(token: unknown) {
+  if (!isEditInsetToken(token)) return;
+  restoreEditGeometrySnapshot(token.instIdx, token.original);
+  projectAndRenderAll();
+  if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
+  updateSelectionOutline();
+  updateTransformActionButtons();
 }
 
 function collectEditBevelTargets(
@@ -4379,7 +4579,7 @@ function collectEditBevelTargets(
   return targetEdges.length ? { targetVertices: [] as number[], targetEdges, targetEdgeIds } : null;
 }
 
-function startEditBevel(smoothness: number, kind: 'vertex' | 'edge' = 'edge'): EditBevelToken | null {
+function startEditBevel(smoothness: number, kind: 'vertex' | 'edge' = 'edge', inward = false): EditBevelToken | null {
   if (!PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return null;
   const selection = transformController.getEditSelection();
   if (!selection || selection.cellId < 0 || !selection.vertices.length) return null;
@@ -4393,6 +4593,7 @@ function startEditBevel(smoothness: number, kind: 'vertex' | 'edge' = 'edge'): E
   return {
     undoSnapshot: captureSceneUrlState(),
     kind,
+    inward,
     instIdx: selectedInstance,
     dimension: selection.dimension,
     cellId: selection.cellId,
@@ -4412,6 +4613,7 @@ function isEditBevelToken(token: unknown): token is EditBevelToken {
   return typeof token === 'object'
     && token !== null
     && 'kind' in token
+    && 'inward' in token
     && 'instIdx' in token
     && 'dimension' in token
     && 'cellId' in token
@@ -4448,7 +4650,7 @@ function applyEditBevelPreview(token: EditBevelToken) {
     const bevel = bevelVertices(currentTopology, token.targetVertices, currentVertexCount, token.smoothness);
     if (!bevel) return;
     const sourceVertex = token.targetVertices[0] ?? -1;
-    const nextX = buildBeveledVertexData(currentX, currentVertexCount, sourceVertex, bevel, token.amount);
+    const nextX = buildBeveledVertexData(currentX, currentVertexCount, sourceVertex, bevel, token.amount, token.inward);
     currentOrigins = remapOriginsAfterVertexBevel(currentOrigins, sourceVertex, bevel);
     currentTopology = bevel.topology;
     currentX = nextX;
@@ -4457,7 +4659,7 @@ function applyEditBevelPreview(token: EditBevelToken) {
   } else if (token.targetEdgeIds.length > 1) {
     const bevel = bevelSelectedEdges(currentTopology, token.targetEdgeIds, currentVertexCount, token.smoothness);
     if (!bevel) return;
-    const nextX = buildBeveledEdgeData(currentX, currentVertexCount, bevel, token.amount, sharedEdgeDistance);
+    const nextX = buildBeveledEdgeData(currentX, currentVertexCount, bevel, token.amount, sharedEdgeDistance, token.inward);
     currentOrigins = remapOriginsAfterEdgeBevel(currentOrigins, bevel);
     currentTopology = bevel.topology;
     currentX = nextX;
@@ -4476,7 +4678,7 @@ function applyEditBevelPreview(token: EditBevelToken) {
       if (currentEdge < 0) continue;
       const bevel = bevelEdge(currentTopology, currentEdge, currentVertexCount, token.smoothness);
       if (!bevel) continue;
-      const nextX = buildBeveledEdgeData(currentX, currentVertexCount, bevel, token.amount, sharedEdgeDistance);
+      const nextX = buildBeveledEdgeData(currentX, currentVertexCount, bevel, token.amount, sharedEdgeDistance, token.inward);
       currentOrigins = remapOriginsAfterEdgeBevel(currentOrigins, bevel);
       currentTopology = bevel.topology;
       currentX = nextX;
@@ -5411,6 +5613,10 @@ viewportInteraction = new ViewportInteractionController({
   extrudeSelectedEditCell,
   commitEditExtrusion,
   cancelEditExtrusion,
+  startEditInset,
+  updateEditInset,
+  commitEditInset,
+  cancelEditInset,
   startEditBevel,
   updateEditBevel,
   commitEditBevel,
@@ -5708,7 +5914,8 @@ new KeyboardShortcutController({
   toggleEditMode: () => setEditMode(!PARAMS.editMode),
   startTransformFromPointer: mode => viewportInteraction.startTransformFromLastPointer(mode),
   extrudeEditSelectionFromPointer: () => viewportInteraction.startEditExtrusionFromLastPointer(),
-  startBevelEditSelection: kind => viewportInteraction.startEditBevelFromLastPointer(kind),
+  insetEditSelectionFromPointer: () => viewportInteraction.startEditInsetFromLastPointer(),
+  startBevelEditSelection: (kind, inward) => viewportInteraction.startEditBevelFromLastPointer(kind, inward),
   selectAllEditCells,
   showAddObjectMenuAtPointer: () => viewportInteraction.showAddObjectMenuAtLastPointer(),
   duplicateSelectionFromPointer: () => viewportInteraction.startDuplicateFromLastPointer(),

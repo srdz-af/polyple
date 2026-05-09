@@ -42,6 +42,15 @@ export type ExtrudeCellResult = {
   extrudedCellId: number;
 };
 
+export type InsetCellResult = {
+  topology: CellTopology;
+  vertexCount: number;
+  edges: Uint32Array;
+  sourceVertices: number[];
+  insetVertices: number[];
+  insetCellId: number;
+};
+
 export type BevelVertexCut = {
   vertex: number;
   sourceVertex?: number;
@@ -544,6 +553,106 @@ export function extrudeCell(
     capVertices,
     capCellId,
     extrudedCellId,
+  };
+}
+
+export function insetCell(
+  topology: CellTopology | undefined,
+  dimension: number,
+  cellId: number,
+  vertexCount: number,
+): InsetCellResult | undefined {
+  if (!topology || vertexCount < 0 || dimension < 1 || cellId < 0) return undefined;
+  const targetCount = cellCount(topology, dimension);
+  if (cellId >= targetCount) return undefined;
+
+  const selectedCell = getCellVertices(topology, dimension, cellId);
+  const sourceVertices = selectedCell
+    .filter(vertex => Number.isInteger(vertex) && vertex >= 0 && vertex < vertexCount)
+    .filter((vertex, index, arr) => arr.indexOf(vertex) === index);
+  if (sourceVertices.length < 2) return undefined;
+
+  const highestDimension = Math.max(maxCellDimension(topology), dimension);
+  const selectedSet = new Set(sourceVertices);
+  const duplicateOf = new Map<number, number>();
+  sourceVertices.forEach((vertex, index) => {
+    duplicateOf.set(vertex, vertexCount + index);
+  });
+
+  const cellsByDim = Array.from({ length: highestDimension + 1 }, (_entry, dim) => {
+    if (dim === 0) return Array.from({ length: vertexCount }, (_vertex, vertex) => [vertex]);
+    return dim <= highestDimension ? cellVerticesForMutation(topology, dim) : [];
+  });
+
+  const selectedSignature = sortedCellSignature(selectedCell);
+  cellsByDim[dimension] = cellsByDim[dimension].filter((cell, idx) => (
+    idx !== cellId && sortedCellSignature(cell) !== selectedSignature
+  ));
+
+  const closureCells: number[][][] = Array.from({ length: dimension + 1 }, () => []);
+  closureCells[0] = sourceVertices.map(vertex => [vertex]);
+  for (let dim = 1; dim <= dimension; dim++) {
+    const cells = cellVerticesForMutation(topology, dim);
+    let selectedPresent = false;
+    for (const cell of cells) {
+      if (!cell.length || !cell.every(vertex => selectedSet.has(vertex))) continue;
+      if (dim === dimension && sortedCellSignature(cell) !== selectedSignature) continue;
+      closureCells[dim].push(cell);
+      if (dim === dimension) selectedPresent = true;
+    }
+    if (dim === dimension && !selectedPresent) closureCells[dim].push(selectedCell);
+  }
+
+  sourceVertices.forEach(vertex => {
+    cellsByDim[0].push([duplicateOf.get(vertex) ?? vertex]);
+  });
+
+  let insetCellId = -1;
+  for (let dim = 1; dim <= dimension; dim++) {
+    const targetCells = cellsByDim[dim];
+    const signatures = new Set(targetCells.map(sortedCellSignature));
+    for (const cell of closureCells[dim]) {
+      const inset = cell.map(vertex => duplicateOf.get(vertex) ?? -1);
+      if (inset.some(vertex => vertex < 0)) continue;
+      const nextId = pushUniqueCell(targetCells, inset, signatures);
+      if (dim === dimension && insetCellId < 0) insetCellId = nextId;
+    }
+  }
+
+  for (let dim = 0; dim < dimension; dim++) {
+    const targetDim = dim + 1;
+    const targetCells = cellsByDim[targetDim];
+    const signatures = new Set(targetCells.map(sortedCellSignature));
+    for (const cell of closureCells[dim]) {
+      const duplicates = cell.map(vertex => duplicateOf.get(vertex) ?? -1);
+      if (duplicates.some(vertex => vertex < 0)) continue;
+      const wall = cell.length === 1
+        ? [cell[0], duplicates[0]]
+        : [
+            ...cell,
+            ...duplicates.slice().reverse(),
+          ];
+      pushUniqueCell(targetCells, wall, signatures);
+    }
+  }
+
+  const newCells = cellsByDim.map(cells => cells.length ? makeCellDim(cells) : undefined);
+  const insetVertices = sourceVertices
+    .map(vertex => duplicateOf.get(vertex) ?? -1)
+    .filter(vertex => vertex >= 0);
+  if (insetCellId < 0 || !insetVertices.length) return undefined;
+
+  return {
+    topology: {
+      cells: newCells,
+      generatedKind: 'edited',
+      sourceDimension: topology.sourceDimension,
+    },
+    vertexCount: vertexCount + sourceVertices.length,
+    edges: edgeListFromCells(cellsByDim[1]),
+    sourceVertices,
+    insetVertices,
+    insetCellId,
   };
 }
 
