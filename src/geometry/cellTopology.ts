@@ -1577,11 +1577,15 @@ export function bevelFaceBoundary(
     const sideArc = ensureProfile(endpoint, nextSide, prevSide);
     const prevProfile = ensureBoundaryProfile(endpoint, prevNeighbor, prevSide);
     if (!nextProfile || !sideArc || !prevProfile) continue;
-    addFace([
+    const cornerBoundary = dedupeSequence([
       ...nextProfile,
       ...sideArc.slice(1),
       ...prevProfile.slice(1, -1).reverse(),
     ]);
+    const anchor = cornerBoundary[0];
+    for (let vertexIdx = 1; vertexIdx < cornerBoundary.length - 1; vertexIdx++) {
+      addFace([anchor, cornerBoundary[vertexIdx], cornerBoundary[vertexIdx + 1]]);
+    }
   }
 
   const edgeSignatures = new Set((nextCellsByDim[1] ?? []).map(sortedCellSignature));
