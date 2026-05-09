@@ -28,8 +28,10 @@ import {
   buildGeneratedCellTopology,
   cellCount,
   cloneCellTopology,
+  bevelVertex,
   deleteCellAndPrune,
   extrudeCell,
+  type BevelVertexResult,
   maxCellDimension,
   surfaceTopologyFromCellTopology,
   type CellTopology,
@@ -217,12 +219,23 @@ type DuplicatePlacement = {
 type EditExtrusionToken = {
   undoSnapshot: PackedSceneUrlState;
 };
+type EditBevelGeometrySnapshot = {
+  X: Float32Array;
+  E: Uint32Array;
+  M: number;
+  cellTopology?: CellTopology;
+  surfaceTopology?: PrimitiveSurfaceTopology;
+};
 type EditBevelToken = {
+  undoSnapshot: PackedSceneUrlState;
   instIdx: number;
   dimension: number;
   cellId: number;
   vertices: number[];
+  amount: number;
   smoothness: number;
+  applied: boolean;
+  original: EditBevelGeometrySnapshot;
 };
 
 const DEFAULT_BLOOM_INTENSITY = 0;
@@ -3226,6 +3239,34 @@ function appendDimensionMajorDuplicateVertices(
   return expanded;
 }
 
+function buildBeveledVertexData(
+  data: Float32Array,
+  oldVertexCount: number,
+  selectedVertex: number,
+  bevel: BevelVertexResult,
+  amount: number,
+) {
+  const dimension = oldVertexCount > 0 ? Math.floor(data.length / oldVertexCount) : 0;
+  const next = new Float32Array(dimension * bevel.vertexCount);
+  for (let oldVertex = 0; oldVertex < oldVertexCount; oldVertex++) {
+    const mapped = bevel.vertexMap[oldVertex];
+    if (mapped < 0) continue;
+    for (let dim = 0; dim < dimension; dim++) {
+      next[(dim * bevel.vertexCount) + mapped] = data[(dim * oldVertexCount) + oldVertex];
+    }
+  }
+
+  const t = Math.max(0, Math.min(0.49, amount));
+  for (const cut of bevel.cuts) {
+    for (let dim = 0; dim < dimension; dim++) {
+      const selectedValue = data[(dim * oldVertexCount) + selectedVertex] ?? 0;
+      const neighborValue = data[(dim * oldVertexCount) + cut.neighbor] ?? selectedValue;
+      next[(dim * bevel.vertexCount) + cut.vertex] = selectedValue + ((neighborValue - selectedValue) * t);
+    }
+  }
+  return next;
+}
+
 function deleteSelected() {
   const deleteIndices = selectedInstances.filter(idx => idx >= 0).sort((a, b) => b - a);
   const deleteLightIndices = selectedInstances
@@ -3393,16 +3434,76 @@ function cancelEditExtrusion(token: unknown) {
   void applySceneUrlState(token.undoSnapshot);
 }
 
+function captureEditBevelTargetSnapshot(instIdx: number): EditBevelGeometrySnapshot | null {
+  if (instIdx === BASE_SELECTION) {
+    if (M <= 0 || !baseVisible) return null;
+    return {
+      X: new Float32Array(X),
+      E: new Uint32Array(E),
+      M,
+      cellTopology: cloneCellTopology(baseCellTopology),
+      surfaceTopology: clonePrimitiveSurfaceTopology(baseSurfaceTopology),
+    };
+  }
+
+  const target = extraInstances[instIdx];
+  if (!target || target.M <= 0 || !target.visible) return null;
+  return {
+    X: new Float32Array(target.X),
+    E: new Uint32Array(target.E),
+    M: target.M,
+    cellTopology: cloneCellTopology(target.cellTopology),
+    surfaceTopology: clonePrimitiveSurfaceTopology(target.surfaceTopology),
+  };
+}
+
+function restoreEditBevelTarget(token: EditBevelToken) {
+  const original = token.original;
+  if (token.instIdx === BASE_SELECTION) {
+    X = new Float32Array(original.X);
+    M = original.M;
+    Y = new Float32Array(3 * M);
+    E = new Uint32Array(original.E);
+    baseCellTopology = cloneCellTopology(original.cellTopology);
+    baseSurfaceTopology = clonePrimitiveSurfaceTopology(original.surfaceTopology);
+    if (M > 0) {
+      rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
+      rendererND.setSurface(baseSurface);
+      rendererND.setMode(PARAMS.renderMode);
+      baseVisible = true;
+    }
+  } else {
+    const target = extraInstances[token.instIdx];
+    if (!target) return;
+    target.X = new Float32Array(original.X);
+    target.M = original.M;
+    target.Y = new Float32Array(3 * target.M);
+    target.E = new Uint32Array(original.E);
+    target.cellTopology = cloneCellTopology(original.cellTopology);
+    target.surfaceTopology = clonePrimitiveSurfaceTopology(original.surfaceTopology);
+    target.renderer.build(target.M, target.E, target.surfaceTopology, target.cellTopology);
+    target.renderer.setSurface(target.surface);
+    target.renderer.setMode(PARAMS.renderMode);
+  }
+}
+
 function startEditBevel(smoothness: number): EditBevelToken | null {
   if (!PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return null;
   const selection = transformController.getEditSelection();
   if (!selection || selection.cellId < 0 || !selection.vertices.length) return null;
+  if (selection.dimension !== 0) return null;
+  const original = captureEditBevelTargetSnapshot(selectedInstance);
+  if (!original) return null;
   return {
+    undoSnapshot: captureSceneUrlState(),
     instIdx: selectedInstance,
     dimension: selection.dimension,
     cellId: selection.cellId,
     vertices: [...selection.vertices],
+    amount: 0,
     smoothness: Math.max(1, Math.floor(smoothness)),
+    applied: false,
+    original,
   };
 }
 
@@ -3412,21 +3513,91 @@ function isEditBevelToken(token: unknown): token is EditBevelToken {
     && 'instIdx' in token
     && 'dimension' in token
     && 'cellId' in token
+    && 'amount' in token
     && 'smoothness' in token;
 }
 
-function updateEditBevelSmoothness(token: unknown, smoothness: number) {
+function applyEditBevelPreview(token: EditBevelToken) {
+  restoreEditBevelTarget(token);
+  if (token.dimension !== 0 || token.cellId < 0 || token.amount <= 0) {
+    token.applied = false;
+    projectAndRenderAll();
+    if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
+    return;
+  }
+
+  const targetIsBase = token.instIdx === BASE_SELECTION;
+  const target = targetIsBase ? null : extraInstances[token.instIdx];
+  const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
+  const oldVertexCount = targetIsBase ? M : (target?.M ?? 0);
+  const oldX = targetIsBase ? X : target?.X;
+  if (!oldX || oldVertexCount <= 0) return;
+
+  const bevel = bevelVertex(topology, token.cellId, oldVertexCount);
+  if (!bevel) return;
+  const nextX = buildBeveledVertexData(oldX, oldVertexCount, token.cellId, bevel, token.amount);
+
+  transformController.clearEditSelection();
+  if (targetIsBase) {
+    X = nextX;
+    M = bevel.vertexCount;
+    Y = new Float32Array(3 * M);
+    E = new Uint32Array(bevel.edges);
+    baseCellTopology = bevel.topology;
+    baseSurfaceTopology = surfaceTopologyForEditedCellTopology(baseCellTopology);
+    rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
+    rendererND.setSurface(baseSurface);
+    rendererND.setMode(PARAMS.renderMode);
+  } else if (target) {
+    target.X = nextX;
+    target.M = bevel.vertexCount;
+    target.Y = new Float32Array(3 * target.M);
+    target.E = new Uint32Array(bevel.edges);
+    target.cellTopology = bevel.topology;
+    target.surfaceTopology = surfaceTopologyForEditedCellTopology(target.cellTopology);
+    target.renderer.build(target.M, target.E, target.surfaceTopology, target.cellTopology);
+    target.renderer.setSurface(target.surface);
+    target.renderer.setMode(PARAMS.renderMode);
+  }
+
+  token.applied = true;
+  projectAndRenderAll();
+  applyObjectVisibility();
+  updateObjectList();
+  updateSelectionOutline();
+  updateTransformActionButtons();
+  if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
+}
+
+function updateEditBevel(token: unknown, amount: number, smoothness: number) {
   if (!isEditBevelToken(token)) return;
+  token.amount = Math.max(0, Math.min(0.49, amount));
   token.smoothness = Math.max(1, Math.floor(smoothness));
+  applyEditBevelPreview(token);
 }
 
 function commitEditBevel(token: unknown) {
   if (!isEditBevelToken(token)) return;
-  // Geometry beveling will consume this token in the next pass.
+  if (token.applied) {
+    sceneHistory.push(token.undoSnapshot);
+    requestSceneUrlUpdate();
+  } else {
+    restoreEditBevelTarget(token);
+    projectAndRenderAll();
+    if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
+  }
 }
 
 function cancelEditBevel(token: unknown) {
   if (!isEditBevelToken(token)) return;
+  restoreEditBevelTarget(token);
+  transformController.setSelectedEditElement(token.dimension, token.vertices, token.cellId);
+  projectAndRenderAll();
+  applyObjectVisibility();
+  updateObjectList();
+  updateSelectionOutline();
+  updateTransformActionButtons();
+  if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
 }
 
 const extraInstances: Instance[] = [];
@@ -4270,7 +4441,7 @@ viewportInteraction = new ViewportInteractionController({
   commitEditExtrusion,
   cancelEditExtrusion,
   startEditBevel,
-  updateEditBevelSmoothness,
+  updateEditBevel,
   commitEditBevel,
   cancelEditBevel,
   insertKeyframe: () => animationTimeline?.addKeyframeAtCurrentFrame(),

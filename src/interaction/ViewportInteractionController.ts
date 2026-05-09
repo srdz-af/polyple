@@ -75,7 +75,7 @@ type ViewportInteractionControllerOptions = {
   commitEditExtrusion: (token: EditExtrusionToken) => void;
   cancelEditExtrusion: (token: EditExtrusionToken) => void;
   startEditBevel: (smoothness: number) => EditBevelToken | null;
-  updateEditBevelSmoothness: (token: EditBevelToken, smoothness: number) => void;
+  updateEditBevel: (token: EditBevelToken, amount: number, smoothness: number) => void;
   commitEditBevel: (token: EditBevelToken) => void;
   cancelEditBevel: (token: EditBevelToken) => void;
   insertKeyframe: () => void;
@@ -129,6 +129,9 @@ export class ViewportInteractionController {
   private editBevel: {
     token: EditBevelToken;
     smoothness: number;
+    amount: number;
+    startX: number;
+    startY: number;
   } | null = null;
 
   constructor(private readonly options: ViewportInteractionControllerOptions) {}
@@ -193,7 +196,13 @@ export class ViewportInteractionController {
     const smoothness = BEVEL_MIN_SMOOTHNESS;
     const token = this.options.startEditBevel(smoothness);
     if (!token) return;
-    this.editBevel = { token, smoothness };
+    this.editBevel = {
+      token,
+      smoothness,
+      amount: 0,
+      startX: this.lastPointer.x,
+      startY: this.lastPointer.y,
+    };
     this.showBevelStatus();
   }
 
@@ -269,6 +278,7 @@ export class ViewportInteractionController {
 
   private handleTransformPointerMove(ev: PointerEvent) {
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
+    if (this.updateEditBevel(ev)) return;
     if (this.updateDuplicatePlacement(ev)) return;
     if (this.options.transformController.isGizmoDragging()) return;
     if (!this.options.transformController.isActive()) return;
@@ -494,6 +504,7 @@ export class ViewportInteractionController {
   }
 
   private handleWindowPointerMove(ev: PointerEvent) {
+    if (this.updateEditBevel(ev)) return;
     if (this.updateDuplicatePlacement(ev)) return;
     if (this.options.transformController.handleGizmoPointerMove(ev, point => { this.lastPointer = point; })) return;
     if (!this.axisDrag.active) return;
@@ -611,8 +622,21 @@ export class ViewportInteractionController {
     if (smoothness === this.editBevel.smoothness) return;
 
     this.editBevel.smoothness = smoothness;
-    this.options.updateEditBevelSmoothness(this.editBevel.token, smoothness);
+    this.options.updateEditBevel(this.editBevel.token, this.editBevel.amount, smoothness);
     this.showBevelStatus();
+  }
+
+  private updateEditBevel(point: { clientX: number; clientY: number }) {
+    if (!this.editBevel) return false;
+    this.lastPointer = { x: point.clientX, y: point.clientY };
+    const dx = point.clientX - this.editBevel.startX;
+    const dy = this.editBevel.startY - point.clientY;
+    const amount = Math.max(0, Math.min(0.49, (dx + dy) * 0.004));
+    if (Math.abs(amount - this.editBevel.amount) < 0.0005) return true;
+    this.editBevel.amount = amount;
+    this.options.updateEditBevel(this.editBevel.token, amount, this.editBevel.smoothness);
+    this.showBevelStatus();
+    return true;
   }
 
   private finishEditBevel(commit: boolean) {
@@ -637,7 +661,7 @@ export class ViewportInteractionController {
     const title = document.createElement('strong');
     title.textContent = 'Bevel';
     const value = document.createElement('span');
-    value.textContent = `Smoothness ${bevel.smoothness}`;
+    value.textContent = `Width ${bevel.amount.toFixed(3)} · Smoothness ${bevel.smoothness}`;
     const hint = document.createElement('small');
     hint.textContent = 'Wheel adjusts, left click commits, right click cancels';
     wrap.append(title, value, hint);
