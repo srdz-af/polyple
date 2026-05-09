@@ -119,13 +119,6 @@ export class ViewportInteractionController {
     signature: '',
     index: -1,
   };
-  private readonly axisDrag = {
-    active: false,
-    lastX: 0,
-    accum: 0,
-    prevZoom: true,
-    prevPan: true,
-  };
   private readonly operationManager = new ViewportOperationManager();
   private transformGizmoPrevControlsEnabled = true;
   private lastBevelSmoothness = BEVEL_MIN_SMOOTHNESS;
@@ -150,7 +143,7 @@ export class ViewportInteractionController {
   }
 
   cancelAxisShiftDrag() {
-    this.endAxisShiftDrag();
+    if (this.operationManager.isKind('axis-shift')) this.operationManager.finish(false);
   }
 
   showAddObjectMenuAtLastPointer() {
@@ -574,19 +567,53 @@ export class ViewportInteractionController {
       ev.stopPropagation();
       return;
     }
+    if (this.operationManager.isActive()) return;
     ev.preventDefault();
     ev.stopPropagation();
-    this.axisDrag.active = true;
-    this.axisDrag.lastX = ev.clientX;
-    this.axisDrag.accum = 0;
-    this.axisDrag.prevZoom = this.options.controls.enableZoom;
-    this.axisDrag.prevPan = this.options.controls.enablePan;
+    let lastX = ev.clientX;
+    let accum = 0;
+    const prevZoom = this.options.controls.enableZoom;
+    const prevPan = this.options.controls.enablePan;
     this.options.controls.enableZoom = false;
     this.options.controls.enablePan = false;
+    this.operationManager.start({
+      kind: 'axis-shift',
+      scope: 'axis',
+      blocksCamera: true,
+      updatePointer: (_point, pointerEvent) => {
+        if (!pointerEvent) return false;
+        if ((pointerEvent.buttons & 4) === 0) {
+          this.operationManager.finish(true);
+          return true;
+        }
+
+        pointerEvent.preventDefault();
+        const dx = pointerEvent.clientX - lastX;
+        lastX = pointerEvent.clientX;
+        accum += dx;
+        const threshold = 35;
+        let steps = 0;
+        while (accum > threshold) {
+          steps++;
+          accum -= threshold;
+        }
+        while (accum < -threshold) {
+          steps--;
+          accum += threshold;
+        }
+        if (steps !== 0) this.options.cycleAxes(steps);
+        return true;
+      },
+      cleanup: () => {
+        accum = 0;
+        this.options.controls.enableZoom = prevZoom;
+        this.options.controls.enablePan = prevPan;
+      },
+    });
   }
 
   private handlePointerDown(ev: PointerEvent) {
-    if (this.axisDrag.active) return;
+    if (this.operationManager.isKind('axis-shift')) return;
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
 
     if (this.operationManager.isKind('duplicate-placement')) {
@@ -657,27 +684,6 @@ export class ViewportInteractionController {
   private handleWindowPointerMove(ev: PointerEvent) {
     if (this.operationManager.updatePointer(ev, ev)) return;
     if (this.options.transformController.handleGizmoPointerMove(ev, point => { this.lastPointer = point; })) return;
-    if (!this.axisDrag.active) return;
-    if ((ev.buttons & 4) === 0) {
-      this.endAxisShiftDrag();
-      return;
-    }
-
-    ev.preventDefault();
-    const dx = ev.clientX - this.axisDrag.lastX;
-    this.axisDrag.lastX = ev.clientX;
-    this.axisDrag.accum += dx;
-    const threshold = 35;
-    let steps = 0;
-    while (this.axisDrag.accum > threshold) {
-      steps++;
-      this.axisDrag.accum -= threshold;
-    }
-    while (this.axisDrag.accum < -threshold) {
-      steps--;
-      this.axisDrag.accum += threshold;
-    }
-    if (steps !== 0) this.options.cycleAxes(steps);
   }
 
   private handleWindowPointerUp(ev: PointerEvent) {
@@ -690,7 +696,7 @@ export class ViewportInteractionController {
       this.options.controls.enabled = this.transformGizmoPrevControlsEnabled;
       return;
     }
-    if (this.axisDrag.active) this.endAxisShiftDrag();
+    if (this.operationManager.isKind('axis-shift')) this.operationManager.finish(true);
   }
 
   private handleWindowPointerCancel(ev: PointerEvent) {
@@ -717,7 +723,7 @@ export class ViewportInteractionController {
       this.operationManager.finish(false);
       return;
     }
-    if (this.axisDrag.active) this.endAxisShiftDrag();
+    if (this.operationManager.isKind('axis-shift')) this.operationManager.finish(false);
   }
 
   private handleWindowBlur() {
@@ -727,7 +733,7 @@ export class ViewportInteractionController {
     if (this.options.transformController.cancelGizmoDrag()) {
       this.options.controls.enabled = this.transformGizmoPrevControlsEnabled;
     }
-    if (this.axisDrag.active) this.endAxisShiftDrag();
+    if (this.operationManager.isKind('axis-shift')) this.operationManager.finish(false);
     this.options.keyboardCamera.clearKeys();
   }
 
@@ -1174,14 +1180,6 @@ export class ViewportInteractionController {
       this.options.transformController.setTransformMode(mode);
     };
     menu.appendChild(btn);
-  }
-
-  private endAxisShiftDrag() {
-    if (!this.axisDrag.active) return;
-    this.axisDrag.active = false;
-    this.axisDrag.accum = 0;
-    this.options.controls.enableZoom = this.axisDrag.prevZoom;
-    this.options.controls.enablePan = this.axisDrag.prevPan;
   }
 
 }
