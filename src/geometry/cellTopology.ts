@@ -39,9 +39,7 @@ export type ExtrudeCellResult = {
   sourceVertices: number[];
   capVertices: number[];
   capCellId: number;
-  capCellIds?: number[];
   extrudedCellId: number;
-  extrudedCellIds?: number[];
 };
 
 export type InsetCellResult = {
@@ -51,7 +49,6 @@ export type InsetCellResult = {
   sourceVertices: number[];
   insetVertices: number[];
   insetCellId: number;
-  insetCellIds?: number[];
 };
 
 export type BevelVertexCut = {
@@ -465,78 +462,19 @@ export function extrudeCell(
   cellId: number,
   vertexCount: number,
 ): ExtrudeCellResult | undefined {
-  return extrudeCells(topology, dimension, [cellId], vertexCount);
-}
-
-function collectSelectedCellClosure(
-  topology: CellTopology,
-  dimension: number,
-  cellIds: number[],
-  vertexCount: number,
-) {
+  if (!topology || vertexCount < 0 || dimension < 0 || cellId < 0) return undefined;
   const targetCount = cellCount(topology, dimension);
-  const selectedCells: number[][] = [];
-  const selectedIds = cellIds
-    .filter((cellId, index, arr) => Number.isInteger(cellId) && cellId >= 0 && cellId < targetCount && arr.indexOf(cellId) === index);
-  for (const cellId of selectedIds) {
-    const cell = getCellVertices(topology, dimension, cellId)
-      .filter(vertex => Number.isInteger(vertex) && vertex >= 0 && vertex < vertexCount)
-      .filter((vertex, index, arr) => arr.indexOf(vertex) === index);
-    if (cell.length) selectedCells.push(cell);
-  }
-  if (!selectedCells.length) return undefined;
+  if (cellId >= targetCount) return undefined;
 
-  const sourceVertices: number[] = [];
-  for (const cell of selectedCells) {
-    for (const vertex of cell) {
-      if (!sourceVertices.includes(vertex)) sourceVertices.push(vertex);
-    }
-  }
+  const selectedCell = getCellVertices(topology, dimension, cellId);
+  const sourceVertices = selectedCell
+    .filter(vertex => Number.isInteger(vertex) && vertex >= 0 && vertex < vertexCount)
+    .filter((vertex, index, arr) => arr.indexOf(vertex) === index);
   if (!sourceVertices.length) return undefined;
-
-  const closureCells: number[][][] = Array.from({ length: dimension + 1 }, () => []);
-  const closureSignatures = Array.from({ length: dimension + 1 }, () => new Set<string>());
-  const pushClosure = (dim: number, cell: number[]) => {
-    const signature = sortedCellSignature(cell);
-    if (closureSignatures[dim].has(signature)) return;
-    closureSignatures[dim].add(signature);
-    closureCells[dim].push(cell);
-  };
-
-  for (const selectedCell of selectedCells) {
-    const selectedSet = new Set(selectedCell);
-    selectedCell.forEach(vertex => pushClosure(0, [vertex]));
-    for (let dim = 1; dim < dimension; dim++) {
-      for (const cell of cellVerticesForMutation(topology, dim)) {
-        if (cell.length && cell.every(vertex => selectedSet.has(vertex))) pushClosure(dim, cell);
-      }
-    }
-    pushClosure(dimension, selectedCell);
-  }
-
-  return {
-    selectedCells,
-    sourceVertices,
-    closureCells,
-  };
-}
-
-export function extrudeCells(
-  topology: CellTopology | undefined,
-  dimension: number,
-  cellIds: number[],
-  vertexCount: number,
-): ExtrudeCellResult | undefined {
-  if (!topology || vertexCount < 0 || dimension < 0 || !cellIds.length) return undefined;
-  const targetCount = cellCount(topology, dimension);
-  if (targetCount <= 0) return undefined;
-
-  const closure = collectSelectedCellClosure(topology, dimension, cellIds, vertexCount);
-  if (!closure) return undefined;
-  const { sourceVertices, closureCells } = closure;
 
   const highestSourceDimension = Math.max(maxCellDimension(topology), dimension);
   const highestTargetDimension = Math.max(highestSourceDimension, dimension + 1);
+  const selectedSet = new Set(sourceVertices);
   const duplicateOf = new Map<number, number>();
   sourceVertices.forEach((vertex, index) => {
     duplicateOf.set(vertex, vertexCount + index);
@@ -547,27 +485,38 @@ export function extrudeCells(
     return dim <= highestSourceDimension ? cellVerticesForMutation(topology, dim) : [];
   });
 
+  const closureCells: number[][][] = Array.from({ length: dimension + 1 }, () => []);
+  closureCells[0] = sourceVertices.map(vertex => [vertex]);
+  for (let dim = 1; dim <= dimension; dim++) {
+    const cells = cellVerticesForMutation(topology, dim);
+    const selectedSignature = dim === dimension ? sortedCellSignature(selectedCell) : '';
+    let selectedPresent = false;
+    for (const cell of cells) {
+      if (!cell.length || !cell.every(vertex => selectedSet.has(vertex))) continue;
+      closureCells[dim].push(cell);
+      if (dim === dimension && sortedCellSignature(cell) === selectedSignature) selectedPresent = true;
+    }
+    if (dim === dimension && !selectedPresent) closureCells[dim].push(selectedCell);
+  }
+
   sourceVertices.forEach(vertex => {
     cellsByDim[0].push([duplicateOf.get(vertex) ?? vertex]);
   });
   let capCellId = dimension === 0 ? (duplicateOf.get(sourceVertices[0]) ?? -1) : -1;
-  const capCellIds: number[] = [];
 
   for (let dim = 1; dim <= dimension; dim++) {
     const topCells = closureCells[dim]
       .map(cell => cell.map(vertex => duplicateOf.get(vertex) ?? -1))
       .filter(cell => cell.every(vertex => vertex >= 0));
     const targetCells = cellsByDim[dim];
-    const signatures = new Set(targetCells.map(sortedCellSignature));
     for (const cell of topCells) {
-      const nextId = pushUniqueCell(targetCells, cell, signatures);
+      const nextId = targetCells.length;
+      targetCells.push(cell);
       if (dim === dimension && capCellId < 0) capCellId = nextId;
-      if (dim === dimension && nextId >= 0 && !capCellIds.includes(nextId)) capCellIds.push(nextId);
     }
   }
 
   let extrudedCellId = -1;
-  const extrudedCellIds: number[] = [];
   for (let dim = 0; dim <= dimension; dim++) {
     const targetDim = dim + 1;
     const targetCells = cellsByDim[targetDim];
@@ -583,7 +532,6 @@ export function extrudeCells(
           ];
       const nextId = pushUniqueCell(targetCells, prism, signatures);
       if (dim === dimension && nextId >= 0) extrudedCellId = nextId;
-      if (dim === dimension && nextId >= 0 && !extrudedCellIds.includes(nextId)) extrudedCellIds.push(nextId);
     }
   }
 
@@ -604,9 +552,7 @@ export function extrudeCells(
     sourceVertices,
     capVertices,
     capCellId,
-    capCellIds,
     extrudedCellId,
-    extrudedCellIds,
   };
 }
 
@@ -616,26 +562,18 @@ export function insetCell(
   cellId: number,
   vertexCount: number,
 ): InsetCellResult | undefined {
-  return insetCells(topology, dimension, [cellId], vertexCount);
-}
-
-export function insetCells(
-  topology: CellTopology | undefined,
-  dimension: number,
-  cellIds: number[],
-  vertexCount: number,
-): InsetCellResult | undefined {
-  if (!topology || vertexCount < 0 || dimension < 1 || !cellIds.length) return undefined;
+  if (!topology || vertexCount < 0 || dimension < 1 || cellId < 0) return undefined;
   const targetCount = cellCount(topology, dimension);
-  if (targetCount <= 0) return undefined;
+  if (cellId >= targetCount) return undefined;
 
-  const validCellIds = cellIds
-    .filter((cellId, index, arr) => Number.isInteger(cellId) && cellId >= 0 && cellId < targetCount && arr.indexOf(cellId) === index);
-  const closure = collectSelectedCellClosure(topology, dimension, validCellIds, vertexCount);
-  if (!closure || closure.sourceVertices.length < 2) return undefined;
-  const { sourceVertices, closureCells } = closure;
+  const selectedCell = getCellVertices(topology, dimension, cellId);
+  const sourceVertices = selectedCell
+    .filter(vertex => Number.isInteger(vertex) && vertex >= 0 && vertex < vertexCount)
+    .filter((vertex, index, arr) => arr.indexOf(vertex) === index);
+  if (sourceVertices.length < 2) return undefined;
 
   const highestDimension = Math.max(maxCellDimension(topology), dimension);
+  const selectedSet = new Set(sourceVertices);
   const duplicateOf = new Map<number, number>();
   sourceVertices.forEach((vertex, index) => {
     duplicateOf.set(vertex, vertexCount + index);
@@ -646,18 +584,30 @@ export function insetCells(
     return dim <= highestDimension ? cellVerticesForMutation(topology, dim) : [];
   });
 
-  const selectedIdSet = new Set(validCellIds);
-  const selectedSignatures = new Set(validCellIds.map(cellId => sortedCellSignature(getCellVertices(topology, dimension, cellId))));
+  const selectedSignature = sortedCellSignature(selectedCell);
   cellsByDim[dimension] = cellsByDim[dimension].filter((cell, idx) => (
-    !selectedIdSet.has(idx) && !selectedSignatures.has(sortedCellSignature(cell))
+    idx !== cellId && sortedCellSignature(cell) !== selectedSignature
   ));
+
+  const closureCells: number[][][] = Array.from({ length: dimension + 1 }, () => []);
+  closureCells[0] = sourceVertices.map(vertex => [vertex]);
+  for (let dim = 1; dim <= dimension; dim++) {
+    const cells = cellVerticesForMutation(topology, dim);
+    let selectedPresent = false;
+    for (const cell of cells) {
+      if (!cell.length || !cell.every(vertex => selectedSet.has(vertex))) continue;
+      if (dim === dimension && sortedCellSignature(cell) !== selectedSignature) continue;
+      closureCells[dim].push(cell);
+      if (dim === dimension) selectedPresent = true;
+    }
+    if (dim === dimension && !selectedPresent) closureCells[dim].push(selectedCell);
+  }
 
   sourceVertices.forEach(vertex => {
     cellsByDim[0].push([duplicateOf.get(vertex) ?? vertex]);
   });
 
   let insetCellId = -1;
-  const insetCellIds: number[] = [];
   for (let dim = 1; dim <= dimension; dim++) {
     const targetCells = cellsByDim[dim];
     const signatures = new Set(targetCells.map(sortedCellSignature));
@@ -666,7 +616,6 @@ export function insetCells(
       if (inset.some(vertex => vertex < 0)) continue;
       const nextId = pushUniqueCell(targetCells, inset, signatures);
       if (dim === dimension && insetCellId < 0) insetCellId = nextId;
-      if (dim === dimension && nextId >= 0 && !insetCellIds.includes(nextId)) insetCellIds.push(nextId);
     }
   }
 
@@ -704,7 +653,6 @@ export function insetCells(
     sourceVertices,
     insetVertices,
     insetCellId,
-    insetCellIds,
   };
 }
 

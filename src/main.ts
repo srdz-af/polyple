@@ -32,8 +32,8 @@ import {
   bevelSelectedEdges,
   bevelVertices,
   deleteCellAndPrune,
-  extrudeCells,
-  insetCells,
+  extrudeCell,
+  insetCell,
   getCellVertices,
   type BevelEdgeResult,
   type BevelFaceBoundaryResult,
@@ -236,6 +236,10 @@ type EditInsetToken = {
   vertices: number[];
   sourceVertices: number[];
   insetVertices: number[];
+  insetGroups: Array<{
+    sourceVertices: number[];
+    insetVertices: number[];
+  }>;
   amount: number;
   original: EditBevelGeometrySnapshot;
 };
@@ -4316,6 +4320,18 @@ function finalizeCommittedGeometryEdit() {
   requestSceneUrlUpdate();
 }
 
+function cellVertexSignature(vertices: number[]) {
+  return vertices.slice().sort((a, b) => a - b).join(':');
+}
+
+function findCellIdByVertexSignature(topology: CellTopology | undefined, dimension: number, signature: string) {
+  const count = cellCount(topology, dimension);
+  for (let cellId = 0; cellId < count; cellId++) {
+    if (cellVertexSignature(getCellVertices(topology, dimension, cellId)) === signature) return cellId;
+  }
+  return -1;
+}
+
 function extrudeSelectedEditCell(): EditExtrusionToken | null {
   if (!PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return null;
   const selection = transformController.getEditSelection();
@@ -4327,30 +4343,51 @@ function extrudeSelectedEditCell(): EditExtrusionToken | null {
   const targetIsBase = selectedInstance === BASE_SELECTION;
   const target = targetIsBase ? null : extraInstances[selectedInstance];
   const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
-  const vertexCount = targetIsBase ? M : (target?.M ?? 0);
   const selectedCellIds = selection.cellIds.length ? selection.cellIds : [selection.cellId];
-  const extrusion = extrudeCells(topology, selection.dimension, selectedCellIds, vertexCount);
-  if (!extrusion) return null;
+  const selectedCellSignatures = selectedCellIds
+    .map(cellId => cellVertexSignature(getCellVertices(topology, selection.dimension, cellId)))
+    .filter(signature => signature.length > 0);
+  if (!selectedCellSignatures.length) return null;
 
   const undoSnapshot = captureSceneUrlState();
   transformController.clearEditSelection();
+  const capSignatures: string[] = [];
+  for (const signature of selectedCellSignatures) {
+    const currentTopology = targetIsBase ? baseCellTopology : target?.cellTopology;
+    const currentVertexCount = targetIsBase ? M : (target?.M ?? 0);
+    const cellId = findCellIdByVertexSignature(currentTopology, selection.dimension, signature);
+    if (cellId < 0) continue;
+    const extrusion = extrudeCell(currentTopology, selection.dimension, cellId, currentVertexCount);
+    if (!extrusion) continue;
+
+    if (targetIsBase) {
+      X = appendDimensionMajorDuplicateVertices(X, M, extrusion.sourceVertices);
+      M = extrusion.vertexCount;
+      Y = new Float32Array(3 * M);
+      E = new Uint32Array(extrusion.edges);
+      baseCellTopology = extrusion.topology;
+      baseSurfaceTopology = surfaceTopologyForEditedCellTopology(baseCellTopology);
+      capSignatures.push(cellVertexSignature(getCellVertices(baseCellTopology, selection.dimension, extrusion.capCellId)));
+    } else if (target) {
+      target.X = appendDimensionMajorDuplicateVertices(target.X, target.M, extrusion.sourceVertices);
+      target.M = extrusion.vertexCount;
+      target.Y = new Float32Array(3 * target.M);
+      target.E = new Uint32Array(extrusion.edges);
+      target.cellTopology = extrusion.topology;
+      target.surfaceTopology = surfaceTopologyForEditedCellTopology(target.cellTopology);
+      capSignatures.push(cellVertexSignature(getCellVertices(target.cellTopology, selection.dimension, extrusion.capCellId)));
+    }
+  }
+  if (!capSignatures.length) {
+    void applySceneUrlState(undoSnapshot);
+    return null;
+  }
+
   if (targetIsBase) {
-    X = appendDimensionMajorDuplicateVertices(X, M, extrusion.sourceVertices);
-    M = extrusion.vertexCount;
-    Y = new Float32Array(3 * M);
-    E = new Uint32Array(extrusion.edges);
-    baseCellTopology = extrusion.topology;
-    baseSurfaceTopology = surfaceTopologyForEditedCellTopology(baseCellTopology);
     rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
     rendererND.setSurface(baseSurface);
     rendererND.setMode(PARAMS.renderMode);
   } else if (target) {
-    target.X = appendDimensionMajorDuplicateVertices(target.X, target.M, extrusion.sourceVertices);
-    target.M = extrusion.vertexCount;
-    target.Y = new Float32Array(3 * target.M);
-    target.E = new Uint32Array(extrusion.edges);
-    target.cellTopology = extrusion.topology;
-    target.surfaceTopology = surfaceTopologyForEditedCellTopology(target.cellTopology);
     target.renderer.build(target.M, target.E, target.surfaceTopology, target.cellTopology);
     target.renderer.setSurface(target.surface);
     target.renderer.setMode(PARAMS.renderMode);
@@ -4358,7 +4395,11 @@ function extrudeSelectedEditCell(): EditExtrusionToken | null {
 
   projectAndRenderAll();
   const nextTopology = targetIsBase ? baseCellTopology : target?.cellTopology;
-  transformController.setSelectedEditCells(selection.dimension, extrusion.capCellIds?.length ? extrusion.capCellIds : [extrusion.capCellId], nextTopology);
+  transformController.setSelectedEditCells(
+    selection.dimension,
+    capSignatures.map(signature => findCellIdByVertexSignature(nextTopology, selection.dimension, signature)).filter(cellId => cellId >= 0),
+    nextTopology,
+  );
   transformController.updateVertexCloud(selectedInstance);
   updateSelectionOutline();
   updateTransformActionButtons();
@@ -4480,32 +4521,62 @@ function startEditInset(): EditInsetToken | null {
   const targetIsBase = selectedInstance === BASE_SELECTION;
   const target = targetIsBase ? null : extraInstances[selectedInstance];
   const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
-  const vertexCount = targetIsBase ? M : (target?.M ?? 0);
   const selectedCellIds = selection.cellIds.length ? selection.cellIds : [selection.cellId];
-  const inset = insetCells(topology, selection.dimension, selectedCellIds, vertexCount);
-  if (!inset) return null;
+  const selectedCellSignatures = selectedCellIds
+    .map(cellId => cellVertexSignature(getCellVertices(topology, selection.dimension, cellId)))
+    .filter(signature => signature.length > 0);
+  if (!selectedCellSignatures.length) return null;
   const original = captureEditGeometrySnapshot(selectedInstance);
   if (!original) return null;
 
   const undoSnapshot = captureSceneUrlState();
   transformController.clearEditSelection();
+  const insetGroups: EditInsetToken['insetGroups'] = [];
+  const insetSignatures: string[] = [];
+  const allSourceVertices: number[] = [];
+  const allInsetVertices: number[] = [];
+  for (const signature of selectedCellSignatures) {
+    const currentTopology = targetIsBase ? baseCellTopology : target?.cellTopology;
+    const currentVertexCount = targetIsBase ? M : (target?.M ?? 0);
+    const cellId = findCellIdByVertexSignature(currentTopology, selection.dimension, signature);
+    if (cellId < 0) continue;
+    const inset = insetCell(currentTopology, selection.dimension, cellId, currentVertexCount);
+    if (!inset) continue;
+
+    if (targetIsBase) {
+      X = appendDimensionMajorDuplicateVertices(X, M, inset.sourceVertices);
+      M = inset.vertexCount;
+      Y = new Float32Array(3 * M);
+      E = new Uint32Array(inset.edges);
+      baseCellTopology = inset.topology;
+      baseSurfaceTopology = surfaceTopologyForEditedCellTopology(baseCellTopology);
+      insetSignatures.push(cellVertexSignature(getCellVertices(baseCellTopology, selection.dimension, inset.insetCellId)));
+    } else if (target) {
+      target.X = appendDimensionMajorDuplicateVertices(target.X, target.M, inset.sourceVertices);
+      target.M = inset.vertexCount;
+      target.Y = new Float32Array(3 * target.M);
+      target.E = new Uint32Array(inset.edges);
+      target.cellTopology = inset.topology;
+      target.surfaceTopology = surfaceTopologyForEditedCellTopology(target.cellTopology);
+      insetSignatures.push(cellVertexSignature(getCellVertices(target.cellTopology, selection.dimension, inset.insetCellId)));
+    }
+    insetGroups.push({
+      sourceVertices: inset.sourceVertices,
+      insetVertices: inset.insetVertices,
+    });
+    allSourceVertices.push(...inset.sourceVertices);
+    allInsetVertices.push(...inset.insetVertices);
+  }
+  if (!insetGroups.length) {
+    restoreEditGeometrySnapshot(selectedInstance, original);
+    return null;
+  }
+
   if (targetIsBase) {
-    X = appendDimensionMajorDuplicateVertices(X, M, inset.sourceVertices);
-    M = inset.vertexCount;
-    Y = new Float32Array(3 * M);
-    E = new Uint32Array(inset.edges);
-    baseCellTopology = inset.topology;
-    baseSurfaceTopology = surfaceTopologyForEditedCellTopology(baseCellTopology);
     rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
     rendererND.setSurface(baseSurface);
     rendererND.setMode(PARAMS.renderMode);
   } else if (target) {
-    target.X = appendDimensionMajorDuplicateVertices(target.X, target.M, inset.sourceVertices);
-    target.M = inset.vertexCount;
-    target.Y = new Float32Array(3 * target.M);
-    target.E = new Uint32Array(inset.edges);
-    target.cellTopology = inset.topology;
-    target.surfaceTopology = surfaceTopologyForEditedCellTopology(target.cellTopology);
     target.renderer.build(target.M, target.E, target.surfaceTopology, target.cellTopology);
     target.renderer.setSurface(target.surface);
     target.renderer.setMode(PARAMS.renderMode);
@@ -4513,7 +4584,10 @@ function startEditInset(): EditInsetToken | null {
 
   projectAndRenderAll();
   const nextTopology = targetIsBase ? baseCellTopology : target?.cellTopology;
-  transformController.setSelectedEditCells(selection.dimension, inset.insetCellIds?.length ? inset.insetCellIds : [inset.insetCellId], nextTopology);
+  const insetCellIds = insetSignatures
+    .map(signature => findCellIdByVertexSignature(nextTopology, selection.dimension, signature))
+    .filter(cellId => cellId >= 0);
+  transformController.setSelectedEditCells(selection.dimension, insetCellIds, nextTopology);
   transformController.updateVertexCloud(selectedInstance);
   updateSelectionOutline();
   updateTransformActionButtons();
@@ -4522,11 +4596,12 @@ function startEditInset(): EditInsetToken | null {
     undoSnapshot,
     instIdx: selectedInstance,
     dimension: selection.dimension,
-    cellId: inset.insetCellId,
+    cellId: insetCellIds[0] ?? -1,
     cellIds: [...selection.cellIds],
     vertices: [...selection.vertices],
-    sourceVertices: inset.sourceVertices,
-    insetVertices: inset.insetVertices,
+    sourceVertices: allSourceVertices,
+    insetVertices: allInsetVertices,
+    insetGroups,
     amount: 0,
     original,
   };
@@ -4549,7 +4624,12 @@ function updateEditInset(token: unknown, amount: number) {
   const data = targetIsBase ? X : target?.X;
   const vertexCount = targetIsBase ? M : (target?.M ?? 0);
   if (!data || vertexCount <= 0) return;
-  writeInsetVertices(data, token.original.X, vertexCount, token.original.M, token.sourceVertices, token.insetVertices, token.amount);
+  const groups = token.insetGroups?.length
+    ? token.insetGroups
+    : [{ sourceVertices: token.sourceVertices, insetVertices: token.insetVertices }];
+  groups.forEach(group => {
+    writeInsetVertices(data, token.original.X, vertexCount, token.original.M, group.sourceVertices, group.insetVertices, token.amount);
+  });
   if (targetIsBase) rendererND.refreshSurface();
   else target?.renderer.refreshSurface();
   projectAndRenderAll();
