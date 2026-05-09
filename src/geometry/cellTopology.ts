@@ -586,10 +586,18 @@ export function bevelVertex(
   const highestCapDimension = Math.min(highestSourceDimension, incidentNeighbors.length - 1);
   const highestTargetDimension = Math.max(highestSourceDimension, highestCapDimension);
   const cellsByDim: number[][][] = Array.from({ length: highestTargetDimension + 1 }, () => []);
+  const sourceCellsByDim: number[][][] = Array.from({ length: highestSourceDimension + 1 }, (_entry, dim) => (
+    dim > 0 ? cellVerticesForMutation(topology, dim) : []
+  ));
 
   const remapCell = (cell: number[]) => {
     const remapped = cell.map(vertex => vertexMap[vertex]).filter(vertex => vertex >= 0);
     return remapped.length === cell.length ? remapped : [];
+  };
+
+  const incidentNeighborsInCell = (cell: number[]) => {
+    const source = new Set(cell);
+    return incidentNeighbors.filter(neighbor => source.has(neighbor));
   };
 
   const replacementForFaceVertex = (face: number[], selectedIndex: number) => {
@@ -612,7 +620,7 @@ export function bevelVertex(
   };
 
   for (let dim = 1; dim <= highestSourceDimension; dim++) {
-    const sourceCells = cellVerticesForMutation(topology, dim);
+    const sourceCells = sourceCellsByDim[dim] ?? [];
     const targetCells = cellsByDim[dim];
     const signatures = new Set<string>();
 
@@ -656,43 +664,142 @@ export function bevelVertex(
     if (a === b) return;
     pushUniqueCell(cellsByDim[1], [a, b], capEdgeSignatures);
   };
-  for (let a = 0; a < incidentNeighbors.length; a++) {
-    for (let b = a + 1; b < incidentNeighbors.length; b++) {
-      const arc = arcBetween(incidentNeighbors[a], incidentNeighbors[b]);
-      for (let idx = 0; idx < arc.length - 1; idx++) addCapEdge(arc[idx], arc[idx + 1]);
-    }
+  for (const sourceFace of sourceCellsByDim[2] ?? []) {
+    if (!sourceFace.includes(vertexId)) continue;
+    const faceNeighbors = incidentNeighborsInCell(sourceFace);
+    if (faceNeighbors.length !== 2) continue;
+    const arc = arcBetween(faceNeighbors[0], faceNeighbors[1]);
+    for (let idx = 0; idx < arc.length - 1; idx++) addCapEdge(arc[idx], arc[idx + 1]);
   }
+
+  const orderedLinkCycle = (sourceCell: number[], cellNeighbors: number[]) => {
+    if (cellNeighbors.length <= 3) return cellNeighbors;
+    const source = new Set(sourceCell);
+    const allowed = new Set(cellNeighbors);
+    const adjacency = new Map<number, Set<number>>();
+    const addLinkEdge = (a: number, b: number) => {
+      if (a === b) return;
+      let aSet = adjacency.get(a);
+      if (!aSet) {
+        aSet = new Set();
+        adjacency.set(a, aSet);
+      }
+      aSet.add(b);
+      let bSet = adjacency.get(b);
+      if (!bSet) {
+        bSet = new Set();
+        adjacency.set(b, bSet);
+      }
+      bSet.add(a);
+    };
+
+    for (const sourceFace of sourceCellsByDim[2] ?? []) {
+      if (!sourceFace.includes(vertexId) || !isSubsetCell(sourceFace, source)) continue;
+      const faceNeighbors = incidentNeighbors
+        .filter(neighbor => allowed.has(neighbor) && sourceFace.includes(neighbor));
+      if (faceNeighbors.length === 2) addLinkEdge(faceNeighbors[0], faceNeighbors[1]);
+    }
+
+    if (cellNeighbors.some(neighbor => (adjacency.get(neighbor)?.size ?? 0) !== 2)) return cellNeighbors;
+
+    const order: number[] = [];
+    const start = cellNeighbors[0];
+    let previous = -1;
+    let current = start;
+    for (let guard = 0; guard < cellNeighbors.length; guard++) {
+      order.push(current);
+      const next = Array.from(adjacency.get(current) ?? [])
+        .find(candidate => candidate !== previous && (candidate !== start || order.length === cellNeighbors.length));
+      if (next === undefined) return cellNeighbors;
+      previous = current;
+      current = next;
+    }
+    return current === start && order.length === cellNeighbors.length ? order : cellNeighbors;
+  };
+
+  const capVerticesForNeighborSet = (neighborSet: Set<number>) => (
+    cuts
+      .filter(cut => cut.neighbors.length > 0 && cut.neighbors.every(neighbor => neighborSet.has(neighbor)))
+      .map(cut => cut.vertex)
+  );
+
+  const capCellSignaturesByDim = new Map<number, Set<string>>();
+  const capSignaturesFor = (dimension: number) => {
+    let signatures = capCellSignaturesByDim.get(dimension);
+    if (!signatures) {
+      signatures = new Set((cellsByDim[dimension] ?? []).map(sortedCellSignature));
+      capCellSignaturesByDim.set(dimension, signatures);
+    }
+    return signatures;
+  };
+
+  const addTriangularCapPatch = (neighborIds: number[], faceSignatures: Set<string>) => {
+    const indices = neighborIds.map(neighbor => neighborIndexByVertex.get(neighbor));
+    if (indices.some(index => typeof index !== 'number')) return -1;
+    const [a, b, c] = indices as number[];
+    let firstCellId = -1;
+    const tripleVertex = (wa: number, wb: number, wc: number) => (
+      capVertex(weightsFor([[a, wa], [b, wb], [c, wc]]))
+    );
+    for (let i = 0; i < layerCount; i++) {
+      for (let j = 0; j < layerCount - i; j++) {
+        const k = layerCount - i - j;
+        const va = tripleVertex(i, j, k);
+        const vb = tripleVertex(i + 1, j, k - 1);
+        const vc = tripleVertex(i, j + 1, k - 1);
+        const nextId = pushUniqueCell(cellsByDim[2], [va, vb, vc], faceSignatures);
+        if (firstCellId < 0 && nextId >= 0) firstCellId = nextId;
+      }
+    }
+    for (let i = 0; i < layerCount - 1; i++) {
+      for (let j = 0; j < layerCount - i - 1; j++) {
+        const k = layerCount - i - j;
+        const va = tripleVertex(i + 1, j, k - 1);
+        const vb = tripleVertex(i + 1, j + 1, k - 2);
+        const vc = tripleVertex(i, j + 1, k - 1);
+        const nextId = pushUniqueCell(cellsByDim[2], [va, vb, vc], faceSignatures);
+        if (firstCellId < 0 && nextId >= 0) firstCellId = nextId;
+      }
+    }
+    return firstCellId;
+  };
+
+  const addPolygonCapPatch = (sourceCell: number[], neighborIds: number[], faceSignatures: Set<string>) => {
+    const ordered = orderedLinkCycle(sourceCell, neighborIds);
+    const polygon: number[] = [];
+    for (let idx = 0; idx < ordered.length; idx++) {
+      const arc = arcBetween(ordered[idx], ordered[(idx + 1) % ordered.length]);
+      if (arc.length < 2) continue;
+      polygon.push(...arc.slice(0, -1));
+    }
+    return pushUniqueCell(cellsByDim[2], polygon, faceSignatures);
+  };
 
   let capCellId = -1;
   if (highestCapDimension >= 2) {
-    const faceSignatures = new Set((cellsByDim[2] ?? []).map(sortedCellSignature));
-    const tripleVertex = (a: number, b: number, c: number, wa: number, wb: number, wc: number) => (
-      capVertex(weightsFor([[a, wa], [b, wb], [c, wc]]))
-    );
-    for (let a = 0; a < incidentNeighbors.length - 2; a++) {
-      for (let b = a + 1; b < incidentNeighbors.length - 1; b++) {
-        for (let c = b + 1; c < incidentNeighbors.length; c++) {
-          for (let i = 0; i < layerCount; i++) {
-            for (let j = 0; j < layerCount - i; j++) {
-              const k = layerCount - i - j;
-              const va = tripleVertex(a, b, c, i, j, k);
-              const vb = tripleVertex(a, b, c, i + 1, j, k - 1);
-              const vc = tripleVertex(a, b, c, i, j + 1, k - 1);
-              const nextId = pushUniqueCell(cellsByDim[2], [va, vb, vc], faceSignatures);
-              if (capCellId < 0 && nextId >= 0) capCellId = nextId;
-            }
-          }
-          for (let i = 0; i < layerCount - 1; i++) {
-            for (let j = 0; j < layerCount - i - 1; j++) {
-              const k = layerCount - i - j;
-              const va = tripleVertex(a, b, c, i + 1, j, k - 1);
-              const vb = tripleVertex(a, b, c, i + 1, j + 1, k - 2);
-              const vc = tripleVertex(a, b, c, i, j + 1, k - 1);
-              pushUniqueCell(cellsByDim[2], [va, vb, vc], faceSignatures);
-            }
-          }
-        }
-      }
+    const faceSignatures = capSignaturesFor(2);
+    for (const sourceVolume of sourceCellsByDim[3] ?? []) {
+      if (!sourceVolume.includes(vertexId)) continue;
+      const volumeNeighbors = incidentNeighborsInCell(sourceVolume);
+      if (volumeNeighbors.length < 3) continue;
+      const nextId = volumeNeighbors.length === 3
+        ? addTriangularCapPatch(volumeNeighbors, faceSignatures)
+        : addPolygonCapPatch(sourceVolume, volumeNeighbors, faceSignatures);
+      if (capCellId < 0 && nextId >= 0) capCellId = nextId;
+    }
+  }
+
+  for (let sourceDim = 4; sourceDim <= highestSourceDimension; sourceDim++) {
+    const capDim = sourceDim - 1;
+    if (capDim > highestCapDimension) continue;
+    const signatures = capSignaturesFor(capDim);
+    for (const sourceCell of sourceCellsByDim[sourceDim] ?? []) {
+      if (!sourceCell.includes(vertexId)) continue;
+      const neighborSet = new Set(incidentNeighborsInCell(sourceCell));
+      if (neighborSet.size < capDim + 1) continue;
+      const capVertices = capVerticesForNeighborSet(neighborSet);
+      const nextId = pushUniqueCell(cellsByDim[capDim], capVertices, signatures);
+      if (capDim === highestCapDimension && capCellId < 0 && nextId >= 0) capCellId = nextId;
     }
   }
 
