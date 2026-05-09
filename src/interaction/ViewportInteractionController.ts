@@ -74,7 +74,7 @@ type ViewportInteractionControllerOptions = {
   extrudeSelectedEditCell: () => EditExtrusionToken | null;
   commitEditExtrusion: (token: EditExtrusionToken) => void;
   cancelEditExtrusion: (token: EditExtrusionToken) => void;
-  startEditBevel: (smoothness: number) => EditBevelToken | null;
+  startEditBevel: (smoothness: number, kind?: 'vertex' | 'edge') => EditBevelToken | null;
   updateEditBevel: (token: EditBevelToken, amount: number, smoothness: number) => void;
   commitEditBevel: (token: EditBevelToken) => void;
   cancelEditBevel: (token: EditBevelToken) => void;
@@ -191,12 +191,12 @@ export class ViewportInteractionController {
     this.editExtrusion = { token };
   }
 
-  startEditBevelFromLastPointer() {
+  startEditBevelFromLastPointer(kind: 'vertex' | 'edge' = 'edge') {
     if (this.editBevel || this.editExtrusion || this.duplicatePlacement) return;
     if (!this.options.getParams().editMode) return;
     if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
     const smoothness = BEVEL_MIN_SMOOTHNESS;
-    const token = this.options.startEditBevel(smoothness);
+    const token = this.options.startEditBevel(smoothness, kind);
     if (!token) return;
     this.editBevel = {
       token,

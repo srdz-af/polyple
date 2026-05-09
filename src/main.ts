@@ -28,10 +28,12 @@ import {
   buildGeneratedCellTopology,
   cellCount,
   cloneCellTopology,
+  bevelEdge,
   bevelVertex,
   deleteCellAndPrune,
   extrudeCell,
   getCellVertices,
+  type BevelEdgeResult,
   type BevelVertexResult,
   maxCellDimension,
   surfaceTopologyFromCellTopology,
@@ -229,6 +231,7 @@ type EditBevelGeometrySnapshot = {
 };
 type EditBevelToken = {
   undoSnapshot: PackedSceneUrlState;
+  kind: 'vertex' | 'edge';
   instIdx: number;
   dimension: number;
   cellId: number;
@@ -3781,6 +3784,56 @@ function buildBeveledVertexData(
   return next;
 }
 
+function buildBeveledEdgeData(
+  data: Float32Array,
+  oldVertexCount: number,
+  bevel: BevelEdgeResult,
+  amount: number,
+) {
+  const dimension = oldVertexCount > 0 ? Math.floor(data.length / oldVertexCount) : 0;
+  const next = new Float32Array(dimension * bevel.vertexCount);
+  for (let oldVertex = 0; oldVertex < oldVertexCount; oldVertex++) {
+    const mapped = bevel.vertexMap[oldVertex];
+    if (mapped < 0) continue;
+    for (let dim = 0; dim < dimension; dim++) {
+      next[(dim * bevel.vertexCount) + mapped] = data[(dim * oldVertexCount) + oldVertex];
+    }
+  }
+
+  let minLength = Number.POSITIVE_INFINITY;
+  for (const cut of bevel.cuts) {
+    let lengthSq = 0;
+    for (let dim = 0; dim < dimension; dim++) {
+      const delta = data[(dim * oldVertexCount) + cut.sideNeighbor] - data[(dim * oldVertexCount) + cut.endpoint];
+      lengthSq += delta * delta;
+    }
+    const length = Math.sqrt(lengthSq);
+    if (length > 1e-8) minLength = Math.min(minLength, length);
+  }
+  if (!Number.isFinite(minLength)) return next;
+
+  const distance = Math.max(0, Math.min(BEVEL_MAX_AMOUNT, amount)) * minLength;
+  for (const cut of bevel.cuts) {
+    const endpoint = cut.endpoint;
+    const sideNeighbor = cut.sideNeighbor;
+    let lengthSq = 0;
+    for (let dim = 0; dim < dimension; dim++) {
+      const delta = data[(dim * oldVertexCount) + sideNeighbor] - data[(dim * oldVertexCount) + endpoint];
+      lengthSq += delta * delta;
+    }
+    const length = Math.sqrt(lengthSq);
+    if (length <= 1e-8) continue;
+    const cutDistance = Math.min(distance, length * BEVEL_MAX_AMOUNT);
+    for (let dim = 0; dim < dimension; dim++) {
+      const origin = data[(dim * oldVertexCount) + endpoint];
+      const delta = data[(dim * oldVertexCount) + sideNeighbor] - origin;
+      next[(dim * bevel.vertexCount) + cut.vertex] = origin + ((delta / length) * cutDistance);
+    }
+  }
+
+  return next;
+}
+
 function deleteSelected() {
   const deleteIndices = selectedInstances.filter(idx => idx >= 0).sort((a, b) => b - a);
   const deleteLightIndices = selectedInstances
@@ -4001,15 +4054,17 @@ function restoreEditBevelTarget(token: EditBevelToken) {
   }
 }
 
-function startEditBevel(smoothness: number): EditBevelToken | null {
+function startEditBevel(smoothness: number, kind: 'vertex' | 'edge' = 'edge'): EditBevelToken | null {
   if (!PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return null;
   const selection = transformController.getEditSelection();
   if (!selection || selection.cellId < 0 || !selection.vertices.length) return null;
-  if (selection.dimension !== 0) return null;
+  if (kind === 'vertex' && selection.dimension !== 0) return null;
+  if (kind === 'edge' && selection.dimension !== 1) return null;
   const original = captureEditBevelTargetSnapshot(selectedInstance);
   if (!original) return null;
   return {
     undoSnapshot: captureSceneUrlState(),
+    kind,
     instIdx: selectedInstance,
     dimension: selection.dimension,
     cellId: selection.cellId,
@@ -4024,6 +4079,7 @@ function startEditBevel(smoothness: number): EditBevelToken | null {
 function isEditBevelToken(token: unknown): token is EditBevelToken {
   return typeof token === 'object'
     && token !== null
+    && 'kind' in token
     && 'instIdx' in token
     && 'dimension' in token
     && 'cellId' in token
@@ -4033,7 +4089,7 @@ function isEditBevelToken(token: unknown): token is EditBevelToken {
 
 function applyEditBevelPreview(token: EditBevelToken) {
   restoreEditBevelTarget(token);
-  if (token.dimension !== 0 || token.cellId < 0 || token.amount <= 0) {
+  if (token.cellId < 0 || token.amount <= 0) {
     token.applied = false;
     projectAndRenderAll();
     if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
@@ -4047,9 +4103,13 @@ function applyEditBevelPreview(token: EditBevelToken) {
   const oldX = targetIsBase ? X : target?.X;
   if (!oldX || oldVertexCount <= 0) return;
 
-  const bevel = bevelVertex(topology, token.cellId, oldVertexCount, token.smoothness);
+  const bevel = token.kind === 'vertex'
+    ? bevelVertex(topology, token.cellId, oldVertexCount, token.smoothness)
+    : bevelEdge(topology, token.cellId, oldVertexCount, token.smoothness);
   if (!bevel) return;
-  const nextX = buildBeveledVertexData(oldX, oldVertexCount, token.cellId, bevel, token.amount);
+  const nextX = token.kind === 'vertex'
+    ? buildBeveledVertexData(oldX, oldVertexCount, token.cellId, bevel as BevelVertexResult, token.amount)
+    : buildBeveledEdgeData(oldX, oldVertexCount, bevel as BevelEdgeResult, token.amount);
   const nextSurfaceTopology = surfaceTopologyFromPositionedCellTopology(bevel.topology, nextX, bevel.vertexCount)
     ?? surfaceTopologyForEditedCellTopology(bevel.topology);
 
@@ -5250,7 +5310,7 @@ new KeyboardShortcutController({
   toggleEditMode: () => setEditMode(!PARAMS.editMode),
   startTransformFromPointer: mode => viewportInteraction.startTransformFromLastPointer(mode),
   extrudeEditSelectionFromPointer: () => viewportInteraction.startEditExtrusionFromLastPointer(),
-  startBevelEditSelection: () => viewportInteraction.startEditBevelFromLastPointer(),
+  startBevelEditSelection: kind => viewportInteraction.startEditBevelFromLastPointer(kind),
   showAddObjectMenuAtPointer: () => viewportInteraction.showAddObjectMenuAtLastPointer(),
   duplicateSelectionFromPointer: () => viewportInteraction.startDuplicateFromLastPointer(),
   deleteOrConfirmSelection: () => viewportInteraction.deleteOrConfirmSelection(),

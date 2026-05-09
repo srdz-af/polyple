@@ -58,6 +58,23 @@ export type BevelVertexResult = {
   smoothness: number;
 };
 
+export type BevelEdgeCut = {
+  vertex: number;
+  endpoint: number;
+  faceId: number;
+  sideNeighbor: number;
+};
+
+export type BevelEdgeResult = {
+  topology: CellTopology;
+  vertexMap: Int32Array;
+  vertexCount: number;
+  edges: Uint32Array;
+  cuts: BevelEdgeCut[];
+  edgeVertices: [number, number];
+  smoothness: number;
+};
+
 const DEFAULT_PRODUCT_TOPOLOGY_MAX_CELLS = 250000;
 const DEFAULT_PRODUCT_TOPOLOGY_MAX_VERTEX_REFS = 2000000;
 const boundaryFaceCache = new WeakMap<CellTopology, Map<number, Map<number, number[]>>>();
@@ -290,6 +307,15 @@ function edgeListFromCells(edges: number[][] | undefined) {
     packed.push(edge[0], edge[1]);
   }
   return new Uint32Array(packed);
+}
+
+function addFaceBoundaryEdges(edgeCellsTarget: number[][], edgeSignatures: Set<string>, face: number[]) {
+  for (let idx = 0; idx < face.length; idx++) {
+    const a = face[idx];
+    const b = face[(idx + 1) % face.length];
+    if (a === b) continue;
+    pushUniqueCell(edgeCellsTarget, [a, b], edgeSignatures);
+  }
 }
 
 export function deleteCellAndPrune(
@@ -816,6 +842,175 @@ export function bevelVertex(
     edges: edgeListFromCells(cellsByDim[1]),
     cuts,
     capCellId,
+    smoothness: layerCount,
+  };
+}
+
+export function bevelEdge(
+  topology: CellTopology | undefined,
+  edgeCellId: number,
+  vertexCount: number,
+  smoothness = 1,
+): BevelEdgeResult | undefined {
+  if (!topology || edgeCellId < 0 || edgeCellId >= cellCount(topology, 1)) return undefined;
+  const selectedEdge = getCellVertices(topology, 1, edgeCellId);
+  if (selectedEdge.length < 2) return undefined;
+  const edgeA = selectedEdge[0];
+  const edgeB = selectedEdge[1];
+  if (edgeA < 0 || edgeB < 0 || edgeA >= vertexCount || edgeB >= vertexCount || edgeA === edgeB) {
+    return undefined;
+  }
+
+  const layerCount = Math.max(1, Math.min(32, Math.floor(smoothness)));
+  const highestSourceDimension = maxCellDimension(topology);
+  const cellsByDim: number[][][] = Array.from({ length: highestSourceDimension + 1 }, (_entry, dim) => {
+    if (dim === 0) return Array.from({ length: vertexCount }, (_vertex, vertex) => [vertex]);
+    return cellVerticesForMutation(topology, dim);
+  });
+
+  const vertexMap = new Int32Array(vertexCount);
+  for (let vertex = 0; vertex < vertexCount; vertex++) vertexMap[vertex] = vertex;
+  let nextVertex = vertexCount;
+
+  const hasSelectedEdge = (cell: number[]) => cell.includes(edgeA) && cell.includes(edgeB);
+  const edgeKey = `${Math.min(edgeA, edgeB)}:${Math.max(edgeA, edgeB)}`;
+  const faceCutByFaceId = new Map<number, [number, number]>();
+  const cuts: BevelEdgeCut[] = [];
+  const sourceCellsByDim: number[][][] = Array.from({ length: highestSourceDimension + 1 }, (_entry, dim) => (
+    dim > 0 ? cellVerticesForMutation(topology, dim) : []
+  ));
+
+  const selectedEdgeSideNeighbor = (face: number[], endpoint: number) => {
+    const idx = face.indexOf(endpoint);
+    if (idx < 0) return -1;
+    const prev = face[(idx - 1 + face.length) % face.length];
+    const next = face[(idx + 1) % face.length];
+    if (prev === edgeA || prev === edgeB) return next;
+    if (next === edgeA || next === edgeB) return prev;
+    return -1;
+  };
+
+  const ensureFaceCuts = (faceId: number, face: number[]) => {
+    const existing = faceCutByFaceId.get(faceId);
+    if (existing) return existing;
+    const sideA = selectedEdgeSideNeighbor(face, edgeA);
+    const sideB = selectedEdgeSideNeighbor(face, edgeB);
+    if (sideA < 0 || sideB < 0) return undefined;
+    const cutA = nextVertex++;
+    const cutB = nextVertex++;
+    cuts.push({ vertex: cutA, endpoint: edgeA, faceId, sideNeighbor: sideA });
+    cuts.push({ vertex: cutB, endpoint: edgeB, faceId, sideNeighbor: sideB });
+    const pair: [number, number] = [cutA, cutB];
+    faceCutByFaceId.set(faceId, pair);
+    return pair;
+  };
+
+  for (let faceId = 0; faceId < (sourceCellsByDim[2]?.length ?? 0); faceId++) {
+    const face = sourceCellsByDim[2][faceId];
+    if (hasSelectedEdge(face)) ensureFaceCuts(faceId, face);
+  }
+  if (!cuts.length) return undefined;
+
+  const faceIdsInCell = (cell: number[]) => {
+    const source = new Set(cell);
+    const faceIds: number[] = [];
+    for (let faceId = 0; faceId < (sourceCellsByDim[2]?.length ?? 0); faceId++) {
+      const face = sourceCellsByDim[2][faceId];
+      if (hasSelectedEdge(face) && isSubsetCell(face, source) && faceCutByFaceId.has(faceId)) {
+        faceIds.push(faceId);
+      }
+    }
+    return faceIds;
+  };
+
+  const cutVerticesForFaceIds = (faceIds: number[]) => {
+    if (faceIds.length === 2) {
+      const first = faceCutByFaceId.get(faceIds[0]);
+      const second = faceCutByFaceId.get(faceIds[1]);
+      if (first && second) return [first[0], first[1], second[1], second[0]];
+    }
+    return faceIds.flatMap(faceId => Array.from(faceCutByFaceId.get(faceId) ?? []));
+  };
+
+  const replaceSelectedEdgeInFace = (faceId: number, face: number[]) => {
+    const cutsForFace = faceCutByFaceId.get(faceId);
+    if (!cutsForFace) return [];
+    const [cutA, cutB] = cutsForFace;
+    const nextFace: number[] = [];
+    for (let idx = 0; idx < face.length; idx++) {
+      const current = face[idx];
+      const next = face[(idx + 1) % face.length];
+      if (current === edgeA && next === edgeB) {
+        nextFace.push(cutA, cutB);
+        idx++;
+        continue;
+      }
+      if (current === edgeB && next === edgeA) {
+        nextFace.push(cutB, cutA);
+        idx++;
+        continue;
+      }
+      nextFace.push(current);
+    }
+    return nextFace;
+  };
+
+  const remapWithoutSelectedEdge = (cell: number[]) => cell.filter(vertex => vertex !== edgeA && vertex !== edgeB);
+
+  const nextCellsByDim: number[][][] = Array.from({ length: highestSourceDimension + 1 }, () => []);
+  nextCellsByDim[0] = Array.from({ length: nextVertex }, (_entry, vertex) => [vertex]);
+
+  for (let dim = 1; dim <= highestSourceDimension; dim++) {
+    const signatures = new Set<string>();
+    const sourceCells = sourceCellsByDim[dim] ?? [];
+    for (let cellId = 0; cellId < sourceCells.length; cellId++) {
+      const cell = sourceCells[cellId];
+      if (dim === 1 && sortedCellSignature(cell) === edgeKey) continue;
+      if (dim === 2 && hasSelectedEdge(cell)) {
+        pushUniqueCell(nextCellsByDim[2], replaceSelectedEdgeInFace(cellId, cell), signatures);
+        continue;
+      }
+      if (dim >= 3 && hasSelectedEdge(cell)) {
+        const faceIds = faceIdsInCell(cell);
+        const cutVertices = cutVerticesForFaceIds(faceIds);
+        pushUniqueCell(nextCellsByDim[dim], [...remapWithoutSelectedEdge(cell), ...cutVertices], signatures);
+        continue;
+      }
+      pushUniqueCell(nextCellsByDim[dim], [...cell], signatures);
+    }
+  }
+
+  const edgeSignatures = new Set((nextCellsByDim[1] ?? []).map(sortedCellSignature));
+  for (const [cutA, cutB] of faceCutByFaceId.values()) pushUniqueCell(nextCellsByDim[1], [cutA, cutB], edgeSignatures);
+
+  for (let dim = 3; dim <= highestSourceDimension; dim++) {
+    const replacementDim = dim - 1;
+    const signatures = new Set((nextCellsByDim[replacementDim] ?? []).map(sortedCellSignature));
+    for (const sourceCell of sourceCellsByDim[dim] ?? []) {
+      if (!hasSelectedEdge(sourceCell)) continue;
+      const faceIds = faceIdsInCell(sourceCell);
+      const cutVertices = cutVerticesForFaceIds(faceIds);
+      pushUniqueCell(nextCellsByDim[replacementDim], cutVertices, signatures);
+    }
+  }
+
+  for (const faces of nextCellsByDim[2] ? [nextCellsByDim[2]] : []) {
+    for (const face of faces) addFaceBoundaryEdges(nextCellsByDim[1], edgeSignatures, face);
+  }
+
+  nextCellsByDim[0] = Array.from({ length: nextVertex }, (_entry, vertex) => [vertex]);
+  const newCells = nextCellsByDim.map(cells => cells.length ? makeCellDim(cells) : undefined);
+  return {
+    topology: {
+      cells: newCells,
+      generatedKind: 'edited',
+      sourceDimension: topology.sourceDimension,
+    },
+    vertexMap,
+    vertexCount: nextVertex,
+    edges: edgeListFromCells(nextCellsByDim[1]),
+    cuts,
+    edgeVertices: [edgeA, edgeB],
     smoothness: layerCount,
   };
 }
