@@ -236,6 +236,8 @@ type EditBevelToken = {
   dimension: number;
   cellId: number;
   vertices: number[];
+  targetVertices: number[];
+  targetEdges: Array<[number, number]>;
   amount: number;
   smoothness: number;
   applied: boolean;
@@ -3899,6 +3901,75 @@ function buildBeveledEdgeData(
   return next;
 }
 
+function initialVertexOrigins(vertexCount: number) {
+  return Int32Array.from({ length: vertexCount }, (_entry, vertex) => vertex);
+}
+
+function findVertexWithOrigin(origins: Int32Array, origin: number) {
+  for (let vertex = 0; vertex < origins.length; vertex++) {
+    if (origins[vertex] === origin) return vertex;
+  }
+  return -1;
+}
+
+function findEdgeWithOrigins(
+  topology: CellTopology | undefined,
+  origins: Int32Array,
+  originA: number,
+  originB: number,
+) {
+  if (!topology || originA === originB) return -1;
+  const edgeCount = cellCount(topology, 1);
+  for (let edgeId = 0; edgeId < edgeCount; edgeId++) {
+    const edge = getCellVertices(topology, 1, edgeId);
+    if (edge.length < 2) continue;
+    const a = origins[edge[0]];
+    const b = origins[edge[1]];
+    if ((a === originA && b === originB) || (a === originB && b === originA)) return edgeId;
+  }
+  return -1;
+}
+
+function edgeListFromCellTopology(topology: CellTopology | undefined) {
+  const packed: number[] = [];
+  const edgeCount = cellCount(topology, 1);
+  for (let edgeId = 0; edgeId < edgeCount; edgeId++) {
+    const edge = getCellVertices(topology, 1, edgeId);
+    if (edge.length >= 2) packed.push(edge[0], edge[1]);
+  }
+  return packed;
+}
+
+function remapOriginsAfterVertexBevel(
+  origins: Int32Array,
+  selectedVertex: number,
+  bevel: BevelVertexResult,
+) {
+  const next = new Int32Array(bevel.vertexCount);
+  next.fill(-1);
+  for (let vertex = 0; vertex < origins.length; vertex++) {
+    const mapped = bevel.vertexMap[vertex];
+    if (mapped >= 0) next[mapped] = origins[vertex];
+  }
+  const selectedOrigin = origins[selectedVertex] ?? -1;
+  for (const cut of bevel.cuts) next[cut.vertex] = selectedOrigin;
+  return next;
+}
+
+function remapOriginsAfterEdgeBevel(
+  origins: Int32Array,
+  bevel: BevelEdgeResult,
+) {
+  const next = new Int32Array(bevel.vertexCount);
+  next.fill(-1);
+  for (let vertex = 0; vertex < origins.length; vertex++) {
+    const mapped = bevel.vertexMap[vertex];
+    if (mapped >= 0) next[mapped] = origins[vertex];
+  }
+  for (const cut of bevel.cuts) next[cut.vertex] = origins[cut.endpoint] ?? -1;
+  return next;
+}
+
 function deleteSelected() {
   const deleteIndices = selectedInstances.filter(idx => idx >= 0).sort((a, b) => b - a);
   const deleteLightIndices = selectedInstances
@@ -4119,12 +4190,58 @@ function restoreEditBevelTarget(token: EditBevelToken) {
   }
 }
 
+function collectEditBevelTargets(
+  topology: CellTopology | undefined,
+  selection: { dimension: number; cellId: number; vertices: number[] },
+  kind: 'vertex' | 'edge',
+) {
+  if (!topology) return null;
+  const selectedVertices = selection.vertices
+    .filter(vertex => Number.isInteger(vertex) && vertex >= 0)
+    .filter((vertex, index, arr) => arr.indexOf(vertex) === index);
+  if (!selectedVertices.length) return null;
+
+  if (kind === 'vertex') {
+    return {
+      targetVertices: selectedVertices,
+      targetEdges: [] as Array<[number, number]>,
+    };
+  }
+
+  const targetEdges: Array<[number, number]> = [];
+  const seen = new Set<string>();
+  const selectedSet = new Set(selectedVertices);
+  const addEdge = (edge: number[]) => {
+    if (edge.length < 2) return;
+    const a = edge[0];
+    const b = edge[1];
+    if (!selectedSet.has(a) || !selectedSet.has(b) || a === b) return;
+    const signature = a < b ? `${a}:${b}` : `${b}:${a}`;
+    if (seen.has(signature)) return;
+    seen.add(signature);
+    targetEdges.push([a, b]);
+  };
+
+  if (selection.dimension === 1) {
+    addEdge(getCellVertices(topology, 1, selection.cellId));
+  } else {
+    for (let edgeId = 0; edgeId < cellCount(topology, 1); edgeId++) {
+      addEdge(getCellVertices(topology, 1, edgeId));
+    }
+  }
+
+  return targetEdges.length ? { targetVertices: [] as number[], targetEdges } : null;
+}
+
 function startEditBevel(smoothness: number, kind: 'vertex' | 'edge' = 'edge'): EditBevelToken | null {
   if (!PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return null;
   const selection = transformController.getEditSelection();
   if (!selection || selection.cellId < 0 || !selection.vertices.length) return null;
-  if (kind === 'vertex' && selection.dimension !== 0) return null;
-  if (kind === 'edge' && selection.dimension !== 1) return null;
+  const targetIsBase = selectedInstance === BASE_SELECTION;
+  const target = targetIsBase ? null : extraInstances[selectedInstance];
+  const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
+  const targets = collectEditBevelTargets(topology, selection, kind);
+  if (!targets) return null;
   const original = captureEditBevelTargetSnapshot(selectedInstance);
   if (!original) return null;
   return {
@@ -4134,6 +4251,8 @@ function startEditBevel(smoothness: number, kind: 'vertex' | 'edge' = 'edge'): E
     dimension: selection.dimension,
     cellId: selection.cellId,
     vertices: [...selection.vertices],
+    targetVertices: targets.targetVertices,
+    targetEdges: targets.targetEdges,
     amount: 0,
     smoothness: Math.max(1, Math.floor(smoothness)),
     applied: false,
@@ -4168,33 +4287,61 @@ function applyEditBevelPreview(token: EditBevelToken) {
   const oldX = targetIsBase ? X : target?.X;
   if (!oldX || oldVertexCount <= 0) return;
 
-  const bevel = token.kind === 'vertex'
-    ? bevelVertex(topology, token.cellId, oldVertexCount, token.smoothness)
-    : bevelEdge(topology, token.cellId, oldVertexCount, token.smoothness);
-  if (!bevel) return;
-  const nextX = token.kind === 'vertex'
-    ? buildBeveledVertexData(oldX, oldVertexCount, token.cellId, bevel as BevelVertexResult, token.amount)
-    : buildBeveledEdgeData(oldX, oldVertexCount, bevel as BevelEdgeResult, token.amount);
-  const nextSurfaceTopology = surfaceTopologyFromPositionedCellTopology(bevel.topology, nextX, bevel.vertexCount)
-    ?? surfaceTopologyForEditedCellTopology(bevel.topology);
+  let currentTopology = topology;
+  let currentX = oldX;
+  let currentVertexCount = oldVertexCount;
+  let currentOrigins = initialVertexOrigins(oldVertexCount);
+  let appliedAny = false;
+
+  if (token.kind === 'vertex') {
+    for (const targetVertex of token.targetVertices) {
+      const currentVertex = findVertexWithOrigin(currentOrigins, targetVertex);
+      if (currentVertex < 0) continue;
+      const bevel = bevelVertex(currentTopology, currentVertex, currentVertexCount, token.smoothness);
+      if (!bevel) continue;
+      const nextX = buildBeveledVertexData(currentX, currentVertexCount, currentVertex, bevel, token.amount);
+      currentOrigins = remapOriginsAfterVertexBevel(currentOrigins, currentVertex, bevel);
+      currentTopology = bevel.topology;
+      currentX = nextX;
+      currentVertexCount = bevel.vertexCount;
+      appliedAny = true;
+    }
+  } else {
+    for (const [originA, originB] of token.targetEdges) {
+      const currentEdge = findEdgeWithOrigins(currentTopology, currentOrigins, originA, originB);
+      if (currentEdge < 0) continue;
+      const bevel = bevelEdge(currentTopology, currentEdge, currentVertexCount, token.smoothness);
+      if (!bevel) continue;
+      const nextX = buildBeveledEdgeData(currentX, currentVertexCount, bevel, token.amount);
+      currentOrigins = remapOriginsAfterEdgeBevel(currentOrigins, bevel);
+      currentTopology = bevel.topology;
+      currentX = nextX;
+      currentVertexCount = bevel.vertexCount;
+      appliedAny = true;
+    }
+  }
+  if (!appliedAny || !currentTopology) return;
+
+  const nextSurfaceTopology = surfaceTopologyFromPositionedCellTopology(currentTopology, currentX, currentVertexCount)
+    ?? surfaceTopologyForEditedCellTopology(currentTopology);
 
   transformController.clearEditSelection();
   if (targetIsBase) {
-    X = nextX;
-    M = bevel.vertexCount;
+    X = new Float32Array(currentX);
+    M = currentVertexCount;
     Y = new Float32Array(3 * M);
-    E = new Uint32Array(bevel.edges);
-    baseCellTopology = bevel.topology;
+    E = new Uint32Array(edgeListFromCellTopology(currentTopology));
+    baseCellTopology = currentTopology;
     baseSurfaceTopology = nextSurfaceTopology;
     rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
     rendererND.setSurface(baseSurface);
     rendererND.setMode(PARAMS.renderMode);
   } else if (target) {
-    target.X = nextX;
-    target.M = bevel.vertexCount;
+    target.X = new Float32Array(currentX);
+    target.M = currentVertexCount;
     target.Y = new Float32Array(3 * target.M);
-    target.E = new Uint32Array(bevel.edges);
-    target.cellTopology = bevel.topology;
+    target.E = new Uint32Array(edgeListFromCellTopology(currentTopology));
+    target.cellTopology = currentTopology;
     target.surfaceTopology = nextSurfaceTopology;
     target.renderer.build(target.M, target.E, target.surfaceTopology, target.cellTopology);
     target.renderer.setSurface(target.surface);
