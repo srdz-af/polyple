@@ -95,6 +95,7 @@
         background-clip: padding-box;
       }
       #background-controls input[type="range"],
+      #scene-light-controls input[type="range"],
       #render-effects-controls input[type="range"],
       #texture-controls input[type="range"] {
         appearance: none;
@@ -106,18 +107,21 @@
         cursor: pointer;
       }
       #background-controls input[type="range"]:disabled,
+      #scene-light-controls input[type="range"]:disabled,
       #render-effects-controls input[type="range"]:disabled,
       #texture-controls input[type="range"]:disabled {
         cursor: default;
         opacity: 0.48;
       }
       #background-controls input[type="range"]:focus-visible,
+      #scene-light-controls input[type="range"]:focus-visible,
       #render-effects-controls input[type="range"]:focus-visible,
       #texture-controls input[type="range"]:focus-visible {
         outline: 2px solid rgba(255,255,255,0.55);
         outline-offset: 2px;
       }
       #background-controls input[type="range"]::-webkit-slider-runnable-track,
+      #scene-light-controls input[type="range"]::-webkit-slider-runnable-track,
       #render-effects-controls input[type="range"]::-webkit-slider-runnable-track,
       #texture-controls input[type="range"]::-webkit-slider-runnable-track {
         height: 3px;
@@ -126,6 +130,7 @@
         box-shadow: none;
       }
       #background-controls input[type="range"]::-webkit-slider-thumb,
+      #scene-light-controls input[type="range"]::-webkit-slider-thumb,
       #render-effects-controls input[type="range"]::-webkit-slider-thumb,
       #texture-controls input[type="range"]::-webkit-slider-thumb {
         -webkit-appearance: none;
@@ -1479,6 +1484,127 @@
         font-family: var(--ui-font);
         font-size: 11px;
       }
+      #scene-lights {
+        margin-top: 18px;
+        padding-top: 14px;
+        border-top: 1px solid var(--ui-border-soft);
+      }
+      #scene-lights h4 {
+        margin: 0 0 12px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.2px;
+        line-height: 1.45;
+        color: var(--ui-text-strong);
+      }
+      #scene-light-actions {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 32px 32px 32px;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      #scene-light-select,
+      #scene-light-actions button {
+        height: 28px;
+        border: 1px solid var(--ui-border-soft);
+        border-radius: 4px;
+        background: var(--ui-bg-soft);
+        color: var(--ui-text-strong);
+        font: inherit;
+      }
+      #scene-light-select {
+        min-width: 0;
+        padding: 0 8px;
+      }
+      #scene-light-actions button {
+        display: inline-grid;
+        place-items: center;
+        padding: 0;
+        cursor: pointer;
+      }
+      #scene-light-actions button:hover:not(:disabled) {
+        background: var(--ui-bg-hover);
+        border-color: var(--ui-border);
+      }
+      #scene-light-actions button:disabled,
+      #scene-light-select:disabled {
+        cursor: default;
+        opacity: 0.52;
+      }
+      #scene-light-actions .material-symbols-rounded {
+        font-size: 17px;
+        line-height: 1;
+      }
+      #scene-light-controls {
+        display: grid;
+        gap: 12px;
+      }
+      #scene-light-controls .scene-light-row {
+        display: grid;
+        grid-template-columns: var(--scene-control-label-width) minmax(0, 1fr) var(--scene-control-value-width);
+        align-items: center;
+        gap: 14px;
+      }
+      #scene-light-controls label {
+        color: var(--ui-text);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+        line-height: 1.45;
+      }
+      #scene-light-controls input[type="text"],
+      #scene-light-controls input[type="number"] {
+        width: 100%;
+        min-width: 0;
+        height: 28px;
+        padding: 0 8px;
+        border: 1px solid var(--ui-border-soft);
+        border-radius: 4px;
+        background: var(--ui-bg-soft);
+        color: var(--ui-text-strong);
+        font: inherit;
+      }
+      #scene-light-controls input[type="range"] {
+        width: 100%;
+        min-width: 0;
+      }
+      #scene-light-controls input[type="color"] {
+        appearance: none;
+        -webkit-appearance: none;
+        width: 100%;
+        height: 20px;
+        padding: 0;
+        border: 0;
+        border-radius: 2px;
+        background: transparent;
+        cursor: pointer;
+        overflow: hidden;
+      }
+      #scene-light-controls input[type="color"]::-webkit-color-swatch-wrapper {
+        padding: 0;
+      }
+      #scene-light-controls input[type="color"]::-webkit-color-swatch {
+        border: 0;
+        border-radius: 2px;
+      }
+      #scene-light-controls input[type="color"]::-moz-color-swatch {
+        border: 0;
+        border-radius: 2px;
+      }
+      #scene-light-controls output {
+        text-align: right;
+        color: var(--ui-muted);
+        font-variant-numeric: tabular-nums;
+        font-size: 11px;
+        line-height: 1.45;
+      }
+      #scene-light-controls .scene-light-axis-row {
+        grid-template-columns: var(--scene-control-label-width) repeat(3, minmax(0, 1fr));
+      }
+      #scene-light-controls .scene-light-axis-row output {
+        display: none;
+      }
       #background-quality-toggle {
         display: inline-flex;
         align-items: center;
@@ -2519,6 +2645,7 @@
           height: 108px;
         }
         #background-controls .background-row,
+        #scene-light-controls .scene-light-row,
         #render-settings-controls .render-setting-row,
         #render-effects-controls .render-effect-row,
         #texture-controls .texture-row {
@@ -2528,7 +2655,14 @@
         #background-controls .background-row.quality-row {
           grid-template-columns: 1fr;
         }
+        #scene-light-actions {
+          grid-template-columns: minmax(0, 1fr) 30px 30px 30px;
+        }
+        #scene-light-controls .scene-light-axis-row {
+          grid-template-columns: 1fr;
+        }
         #background-controls output,
+        #scene-light-controls output,
         #render-effects-controls output,
         #texture-controls output {
           width: 100%;
@@ -2781,6 +2915,50 @@
               <label for="background-lightness">Brightness</label>
               <input id="background-lightness" type="range" min="0" max="2" step="0.01" value="0.15" />
               <output id="background-lightness-value">0.15</output>
+            </div>
+          </div>
+          <div id="scene-lights" role="group" aria-label="Scene lights">
+            <h4>Lights</h4>
+            <div id="scene-light-actions">
+              <select id="scene-light-select" aria-label="Scene light"></select>
+              <button id="scene-light-add-point" type="button" aria-label="Add point light" title="Add point light">
+                <span class="material-symbols-rounded" aria-hidden="true">lightbulb</span>
+              </button>
+              <button id="scene-light-add-directional" type="button" aria-label="Add directional light" title="Add directional light">
+                <span class="material-symbols-rounded" aria-hidden="true">wb_sunny</span>
+              </button>
+              <button id="scene-light-remove" type="button" aria-label="Remove selected light" title="Remove selected light">
+                <span class="material-symbols-rounded" aria-hidden="true">delete</span>
+              </button>
+            </div>
+            <div id="scene-light-controls">
+              <div class="scene-light-row">
+                <label for="scene-light-label">Name</label>
+                <input id="scene-light-label" type="text" value="" />
+                <output id="scene-light-kind-value">None</output>
+              </div>
+              <div class="scene-light-row">
+                <label for="scene-light-visible">Visible</label>
+                <input id="scene-light-visible" type="checkbox" checked />
+                <output id="scene-light-visible-value">On</output>
+              </div>
+              <div class="scene-light-row">
+                <label for="scene-light-color">Color</label>
+                <input id="scene-light-color" type="color" value="#ffffff" />
+                <output id="scene-light-color-value">#ffffff</output>
+              </div>
+              <div class="scene-light-row">
+                <label for="scene-light-intensity">Intensity</label>
+                <input id="scene-light-intensity" type="range" min="0" max="20" step="0.01" value="1" />
+                <output id="scene-light-intensity-value">1.00</output>
+              </div>
+              <div class="scene-light-row scene-light-axis-row">
+                <label>Position</label>
+                <input id="scene-light-x" type="number" step="0.1" value="0" inputmode="decimal" aria-label="Light X position" />
+                <input id="scene-light-y" type="number" step="0.1" value="2" inputmode="decimal" aria-label="Light Y position" />
+                <input id="scene-light-z" type="number" step="0.1" value="2" inputmode="decimal" aria-label="Light Z position" />
+                <output></output>
+              </div>
             </div>
           </div>
         </div>
