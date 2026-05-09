@@ -984,6 +984,14 @@ export function bevelEdge(
     }
     return faceIds;
   };
+  const selectedEdgeFaceIds = () => {
+    const faceIds: number[] = [];
+    for (let faceId = 0; faceId < (sourceCellsByDim[2]?.length ?? 0); faceId++) {
+      const face = sourceCellsByDim[2][faceId];
+      if (hasSelectedEdge(face) && faceCutByFaceId.has(faceId)) faceIds.push(faceId);
+    }
+    return faceIds;
+  };
 
   const cutVerticesForFaceIds = (faceIds: number[]) => {
     if (faceIds.length === 2) {
@@ -1164,6 +1172,11 @@ export function bevelEdge(
       const cutVertices = cutVerticesForFaceIds(faceIds);
       pushUniqueCell(nextCellsByDim[replacementDim], cutVertices, signatures);
     }
+  }
+
+  const surfaceStripSignatures = new Set((nextCellsByDim[2] ?? []).map(sortedCellSignature));
+  for (const stripFace of bevelStripFacesForFaceIds(selectedEdgeFaceIds().slice(0, 2))) {
+    pushUniqueCell(nextCellsByDim[2], stripFace, surfaceStripSignatures);
   }
 
   for (const faces of nextCellsByDim[2] ? [nextCellsByDim[2]] : []) {
