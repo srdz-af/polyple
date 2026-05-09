@@ -16,6 +16,8 @@ export const DEFAULT_SURFACE: SurfaceState = {
   clearcoat: 1,
   clearcoatRoughness: 0.02,
   specularIntensity: 1,
+  emissiveColor: 0x000000,
+  emissiveIntensity: 0,
 };
 
 export const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
@@ -35,6 +37,8 @@ export const normalizeSurface = (surface: Partial<SurfaceState> | undefined): Su
   clearcoat: clamp01(surface?.clearcoat ?? DEFAULT_SURFACE.clearcoat),
   clearcoatRoughness: clamp01(surface?.clearcoatRoughness ?? DEFAULT_SURFACE.clearcoatRoughness),
   specularIntensity: clamp(surface?.specularIntensity ?? DEFAULT_SURFACE.specularIntensity, 0, 2),
+  emissiveColor: Math.max(0, Math.min(0xffffff, (surface?.emissiveColor ?? DEFAULT_SURFACE.emissiveColor) >>> 0)),
+  emissiveIntensity: clamp(surface?.emissiveIntensity ?? DEFAULT_SURFACE.emissiveIntensity, 0, 20),
 });
 
 export const cloneSurface = (surface: SurfaceState): SurfaceState => ({ ...surface });
@@ -53,6 +57,8 @@ export const surfacesEqual = (a: SurfaceState, b: SurfaceState) => (
   && Math.abs(a.clearcoat - b.clearcoat) <= 1e-6
   && Math.abs(a.clearcoatRoughness - b.clearcoatRoughness) <= 1e-6
   && Math.abs(a.specularIntensity - b.specularIntensity) <= 1e-6
+  && a.emissiveColor === b.emissiveColor
+  && Math.abs(a.emissiveIntensity - b.emissiveIntensity) <= 1e-6
 );
 
 export function toColorHex(color: number) {

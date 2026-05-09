@@ -104,7 +104,7 @@ type PackedSurface = [
   0 | 1,
   number, number, number, number,
   number, number, number, number, number,
-  number, number, number,
+  number, number, number, number, number,
 ];
 type PackedSceneMaterial = [string, string, PackedSurface];
 type PackedTopology = [string, string];
@@ -996,6 +996,8 @@ function packSurfaceState(surface: SurfaceState): PackedSurface {
     surface.clearcoat,
     surface.clearcoatRoughness,
     surface.specularIntensity,
+    surface.emissiveColor,
+    surface.emissiveIntensity,
   ];
 }
 
@@ -1014,6 +1016,8 @@ function unpackSurfaceState(surface: ArrayLike<unknown> | undefined) {
     clearcoat: finiteNumber(surface?.[10], DEFAULT_SURFACE.clearcoat),
     clearcoatRoughness: finiteNumber(surface?.[11], DEFAULT_SURFACE.clearcoatRoughness),
     specularIntensity: finiteNumber(surface?.[12], DEFAULT_SURFACE.specularIntensity),
+    emissiveColor: finiteInteger(surface?.[13], DEFAULT_SURFACE.emissiveColor),
+    emissiveIntensity: finiteNumber(surface?.[14], DEFAULT_SURFACE.emissiveIntensity),
   });
 }
 
