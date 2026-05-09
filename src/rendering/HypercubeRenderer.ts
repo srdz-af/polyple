@@ -277,6 +277,7 @@ export class HypercubeRenderer {
     if (this.line) {
       this.group.remove(this.line);
       this.line.geometry.dispose();
+      this.line = undefined as unknown as THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial>;
     }
 
     if (this.mesh) {
@@ -287,6 +288,21 @@ export class HypercubeRenderer {
 
     this.geometry = undefined as unknown as THREE.BufferGeometry;
     this.hullBuilder.reset();
+  }
+
+  destroy(): void {
+    this.dispose();
+    this.scene.remove(this.group);
+    this.lineMaterial.dispose();
+    this.solidMaterial.dispose();
+    this.glassMaterial.dispose();
+    this.facetedMaterial.dispose();
+    this.surfaceTopology = undefined;
+    this.cellTopology = undefined;
+    this.points = [];
+    this.positions = new Float32Array();
+    this.allEdges = new Uint32Array();
+    this.facetColorCache.clear();
   }
 
   private setIndexAttribute(array: Uint32Array): void {

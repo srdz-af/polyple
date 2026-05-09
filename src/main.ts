@@ -268,6 +268,7 @@ const SELECTED_SCENE_LIGHT_MARKER_PIXEL_DIAMETER = 15;
 const SCENE_LIGHT_TARGET_PIXEL_DIAMETER = 10;
 const SCENE_SPOT_DIRECTION_ANGLE = Math.PI / 2;
 const SCENE_SPOT_DIRECTION_PENUMBRA = 0.08;
+const MAX_UNDO_SNAPSHOT_BYTES = 64 * 1024 * 1024;
 const SHADOW_MAP_SIZE_BY_QUALITY: Record<RenderQuality, number> = {
   full: 2048,
   high: 1024,
@@ -2693,8 +2694,42 @@ function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
   };
 }
 
+function byteLengthOfCellTopology(topology?: CellTopology) {
+  if (!topology) return 0;
+  return topology.cells.reduce((sum, dim) => (
+    sum + (dim ? dim.offsets.byteLength + dim.vertices.byteLength : 0)
+  ), 0);
+}
+
+function byteLengthOfSurfaceTopology(topology?: PrimitiveSurfaceTopology) {
+  if (!topology) return 0;
+  return topology.triangles.byteLength + topology.facetIds.byteLength;
+}
+
+function estimateUndoSnapshotBytes() {
+  let bytes = 0;
+  bytes += X.byteLength + E.byteLength + Y.byteLength + rot.matrix.byteLength;
+  bytes += baseOrigin.byteLength;
+  bytes += byteLengthOfCellTopology(baseCellTopology);
+  bytes += byteLengthOfSurfaceTopology(baseSurfaceTopology);
+  for (const inst of extraInstances) {
+    bytes += inst.X.byteLength + inst.Y.byteLength + inst.E.byteLength + inst.origin.byteLength;
+    bytes += byteLengthOfCellTopology(inst.cellTopology);
+    bytes += byteLengthOfSurfaceTopology(inst.surfaceTopology);
+  }
+  // Undo snapshots are URL-packed, so binary payloads expand into base64 strings.
+  return Math.ceil(bytes * 4 / 3);
+}
+
 function pushUndoSnapshot() {
   if (sceneUrlApplying) return;
+  const estimatedBytes = estimateUndoSnapshotBytes();
+  if (estimatedBytes > MAX_UNDO_SNAPSHOT_BYTES) {
+    console.warn(
+      `Skipping undo snapshot because the scene is too large (${(estimatedBytes / 1024 / 1024).toFixed(1)} MB).`,
+    );
+    return;
+  }
   sceneHistory.push();
 }
 
@@ -3266,7 +3301,7 @@ function cancelDuplicatePlacement(token: unknown) {
   if (placement.instance) {
     const idx = extraInstances.indexOf(placement.instance);
     if (idx >= 0) {
-      placement.instance.renderer.dispose();
+      placement.instance.renderer.destroy();
       extraInstances.splice(idx, 1);
     }
   }
@@ -4080,7 +4115,7 @@ function deleteSelected() {
   for (const idx of deleteIndices) {
     const inst = extraInstances[idx];
     if (!inst) continue;
-    inst.renderer.dispose();
+    inst.renderer.destroy();
     extraInstances.splice(idx, 1);
   }
   for (const idx of deleteLightIndices) {
@@ -4146,7 +4181,7 @@ function deleteSelectedEditCell() {
       target.renderer.setSurface(target.surface);
       target.renderer.setMode(PARAMS.renderMode);
     } else {
-      target.renderer.dispose();
+      target.renderer.destroy();
       extraInstances.splice(selectedInstance, 1);
       selectedInstance = NO_SELECTION;
       selectedInstances = [];
@@ -5459,7 +5494,7 @@ function addSceneLightAt(kind: SceneLightKind, position: THREE.Vector3) {
 
 function clearExtraInstances() {
   removeSelectionOutlines();
-  extraInstances.forEach(inst => inst.renderer.dispose());
+  extraInstances.forEach(inst => inst.renderer.destroy());
   extraInstances.length = 0;
   selectedInstance = NO_SELECTION;
   selectedInstances = [];
