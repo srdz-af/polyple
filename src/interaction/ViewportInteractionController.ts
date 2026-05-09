@@ -120,6 +120,7 @@ export class ViewportInteractionController {
   };
   private readonly operationManager = new ViewportOperationManager();
   private transformGizmoPrevControlsEnabled = true;
+  private transformGizmoEndEvent: PointerEvent | null = null;
   private lastBevelSmoothness = BEVEL_MIN_SMOOTHNESS;
   private suppressNextContextMenu = false;
 
@@ -629,6 +630,33 @@ export class ViewportInteractionController {
     if (ev.button === 0 && this.options.transformController.handleGizmoPointerDown(ev)) {
       this.transformGizmoPrevControlsEnabled = this.options.controls.enabled;
       this.options.controls.enabled = false;
+      if (!this.operationManager.start({
+        kind: 'transform-gizmo',
+        scope: this.options.getParams().editMode ? 'edit' : 'object',
+        blocksCamera: true,
+        blocksSelection: true,
+        blocksContextMenu: true,
+        usesPointerCapture: true,
+        updatePointer: (_point, pointerEvent) => (
+          pointerEvent
+            ? this.options.transformController.handleGizmoPointerMove(pointerEvent, point => { this.lastPointer = point; })
+            : false
+        ),
+        commit: () => {
+          if (this.transformGizmoEndEvent) this.options.transformController.handleGizmoPointerEnd(this.transformGizmoEndEvent, true);
+          else this.options.transformController.cancelGizmoDrag();
+        },
+        cancel: () => {
+          if (this.transformGizmoEndEvent) this.options.transformController.handleGizmoPointerEnd(this.transformGizmoEndEvent, false);
+          else this.options.transformController.cancelGizmoDrag();
+        },
+        cleanup: () => {
+          this.options.controls.enabled = this.transformGizmoPrevControlsEnabled;
+        },
+      })) {
+        this.options.transformController.cancelGizmoDrag();
+        this.options.controls.enabled = this.transformGizmoPrevControlsEnabled;
+      }
       return;
     }
 
@@ -685,7 +713,6 @@ export class ViewportInteractionController {
 
   private handleWindowPointerMove(ev: PointerEvent) {
     if (this.operationManager.updatePointer(ev, ev)) return;
-    if (this.options.transformController.handleGizmoPointerMove(ev, point => { this.lastPointer = point; })) return;
   }
 
   private handleWindowPointerUp(ev: PointerEvent) {
@@ -694,8 +721,10 @@ export class ViewportInteractionController {
       ev.preventDefault();
       return;
     }
-    if (this.options.transformController.handleGizmoPointerEnd(ev, true)) {
-      this.options.controls.enabled = this.transformGizmoPrevControlsEnabled;
+    if (this.operationManager.isKind('transform-gizmo')) {
+      this.transformGizmoEndEvent = ev;
+      this.operationManager.finish(true);
+      this.transformGizmoEndEvent = null;
       return;
     }
     if (this.operationManager.isKind('axis-shift')) this.operationManager.finish(true);
@@ -713,8 +742,10 @@ export class ViewportInteractionController {
       ev.preventDefault();
       return;
     }
-    if (this.options.transformController.handleGizmoPointerEnd(ev, false)) {
-      this.options.controls.enabled = this.transformGizmoPrevControlsEnabled;
+    if (this.operationManager.isKind('transform-gizmo')) {
+      this.transformGizmoEndEvent = ev;
+      this.operationManager.finish(false);
+      this.transformGizmoEndEvent = null;
       return;
     }
     if (this.operationManager.isKind('edit-extrusion')) {
@@ -732,9 +763,7 @@ export class ViewportInteractionController {
     if (this.operationManager.hasScope('edit')) this.operationManager.finish(false);
     if (this.operationManager.isKind('transform')) this.operationManager.finish(false);
     if (this.operationManager.isKind('duplicate-placement')) this.operationManager.finish(false);
-    if (this.options.transformController.cancelGizmoDrag()) {
-      this.options.controls.enabled = this.transformGizmoPrevControlsEnabled;
-    }
+    if (this.operationManager.isKind('transform-gizmo')) this.operationManager.finish(false);
     if (this.operationManager.isKind('axis-shift')) this.operationManager.finish(false);
     this.options.keyboardCamera.clearKeys();
   }
