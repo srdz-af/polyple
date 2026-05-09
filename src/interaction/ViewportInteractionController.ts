@@ -331,10 +331,6 @@ export class ViewportInteractionController {
     });
   }
 
-  isDuplicatePlacementActive() {
-    return this.operationManager.isKind('duplicate-placement');
-  }
-
   isOperationActive() {
     return this.operationManager.isActive();
   }
@@ -425,12 +421,6 @@ export class ViewportInteractionController {
     }
 
     if (this.operationManager.current?.blocksContextMenu) {
-      ev.preventDefault();
-      this.operationManager.finish(false);
-      return;
-    }
-
-    if (this.operationManager.isKind('duplicate-placement')) {
       ev.preventDefault();
       this.operationManager.finish(false);
       return;

@@ -5,7 +5,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/x-icon" href="./favicon.ico" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=1k,2k,add,call_split,chevron_left,chevron_right,delete,deployed_code,diagonal_line,download,edit,ev_shadow,filter_4,filter_5,filter_6,filter_7,filter_8,filter_b_and_w,fullscreen,fullscreen_exit,grid_on,help,high_quality,imagesmode,keyboard_arrow_down,keyboard_arrow_up,line_end_circle,open_with,pause,photo_camera_back,play_arrow,public,recenter,redo,refresh,reset_focus,screen_record,screenshot_frame_2,settings,skip_next,skip_previous,speed_1_5x,speed_2x,square,stop,sync_alt,undo,upload,visibility,visibility_off,vr180_create2d,vrpano,zoom_out_map&display=block" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=1k,2k,add,call_split,chevron_left,chevron_right,delete,deployed_code,diagonal_line,download,edit,ev_shadow,filter_4,filter_5,filter_6,filter_7,filter_8,filter_b_and_w,fullscreen,fullscreen_exit,grid_on,help,high_quality,imagesmode,keyboard_arrow_down,keyboard_arrow_up,lightbulb,line_end_circle,open_with,pause,photo_camera_back,play_arrow,public,recenter,redo,refresh,reset_focus,screen_record,screenshot_frame_2,settings,skip_next,skip_previous,speed_1_5x,speed_2x,square,stop,sync_alt,undo,upload,visibility,visibility_off,vr180_create2d,vrpano,wb_incandescent,wb_sunny,zoom_out_map&display=block" />
     <title>BleND</title>
     <style>
       :root {
@@ -79,6 +79,7 @@
       #scene-load-button,
       #pane-toggle,
       #background-controls input[type="color"],
+      #environment-light-toggle,
       #texture-preview-wrap,
       #texture-controls input[type="color"],
       #texture-material-select,
@@ -95,6 +96,7 @@
         background-clip: padding-box;
       }
       #background-controls input[type="range"],
+      #scene-light-controls input[type="range"],
       #render-effects-controls input[type="range"],
       #texture-controls input[type="range"] {
         appearance: none;
@@ -106,18 +108,21 @@
         cursor: pointer;
       }
       #background-controls input[type="range"]:disabled,
+      #scene-light-controls input[type="range"]:disabled,
       #render-effects-controls input[type="range"]:disabled,
       #texture-controls input[type="range"]:disabled {
         cursor: default;
         opacity: 0.48;
       }
       #background-controls input[type="range"]:focus-visible,
+      #scene-light-controls input[type="range"]:focus-visible,
       #render-effects-controls input[type="range"]:focus-visible,
       #texture-controls input[type="range"]:focus-visible {
         outline: 2px solid rgba(255,255,255,0.55);
         outline-offset: 2px;
       }
       #background-controls input[type="range"]::-webkit-slider-runnable-track,
+      #scene-light-controls input[type="range"]::-webkit-slider-runnable-track,
       #render-effects-controls input[type="range"]::-webkit-slider-runnable-track,
       #texture-controls input[type="range"]::-webkit-slider-runnable-track {
         height: 3px;
@@ -126,6 +131,7 @@
         box-shadow: none;
       }
       #background-controls input[type="range"]::-webkit-slider-thumb,
+      #scene-light-controls input[type="range"]::-webkit-slider-thumb,
       #render-effects-controls input[type="range"]::-webkit-slider-thumb,
       #texture-controls input[type="range"]::-webkit-slider-thumb {
         -webkit-appearance: none;
@@ -504,10 +510,10 @@
         z-index: 9;
         display: none;
         box-sizing: border-box;
-        border: 1px solid rgba(245, 248, 255, 0.9);
+        border: 2px solid rgba(190, 196, 205, 0.98);
         box-shadow:
           0 0 0 9999px rgba(0, 0, 0, 0.45),
-          inset 0 0 0 1px rgba(0, 0, 0, 0.45);
+          inset 0 0 0 1px rgba(0, 0, 0, 0.72);
         pointer-events: none;
       }
       #animation-keyframe-menu button {
@@ -1151,6 +1157,7 @@
       #background-swatches button,
       #background-quality-toggle,
       #background-quality-toggle button,
+      #environment-light-toggle,
       #background-controls label,
       #background-controls output,
       #render-panel,
@@ -1417,7 +1424,7 @@
       #background-selector.plain-only #background-swatches .background-swatch:not([data-hdri="plain"]) {
         display: none;
       }
-      #background-controls.disabled .background-row:not(.plain-color-row) {
+      #background-controls.disabled .background-row:not(.plain-color-row):not(.environment-light-row) {
         opacity: 0.52;
       }
       #background-controls {
@@ -1475,9 +1482,154 @@
         border: 0;
         border-radius: 2px;
       }
+      #environment-light-toggle {
+        width: 100%;
+        height: 26px;
+        border: 1px solid var(--ui-border-soft);
+        border-radius: 4px;
+        background: var(--ui-bg-soft);
+        color: var(--ui-text);
+        font: 600 11px/1 var(--ui-font);
+        cursor: pointer;
+        transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+      }
+      #environment-light-toggle:hover {
+        background: var(--ui-bg-hover);
+        border-color: var(--ui-border);
+        color: var(--ui-text-strong);
+      }
+      #environment-light-toggle.active {
+        background: var(--ui-blue);
+        border-color: rgba(130, 176, 255, 0.58);
+        color: var(--ui-text-strong);
+      }
       #background-color-value {
         font-family: var(--ui-font);
         font-size: 11px;
+      }
+      #scene-lights {
+        margin-top: 0;
+      }
+      #scene-lights h4 {
+        margin: 0 0 12px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.2px;
+        line-height: 1.45;
+        color: var(--ui-text-strong);
+      }
+      #scene-light-actions {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 32px 32px 32px;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      #scene-light-select,
+      #scene-light-actions button {
+        height: 28px;
+        border: 1px solid var(--ui-border-soft);
+        border-radius: 4px;
+        background: var(--ui-bg-soft);
+        color: var(--ui-text-strong);
+        font: inherit;
+      }
+      #scene-light-select {
+        min-width: 0;
+        padding: 0 8px;
+      }
+      #scene-light-actions button {
+        display: inline-grid;
+        place-items: center;
+        padding: 0;
+        cursor: pointer;
+      }
+      #scene-light-actions button:hover:not(:disabled) {
+        background: var(--ui-bg-hover);
+        border-color: var(--ui-border);
+      }
+      #scene-light-actions button.active {
+        background: rgba(255, 166, 77, 0.22);
+        border-color: rgba(255, 185, 112, 0.58);
+        color: var(--ui-text-strong);
+      }
+      #scene-light-actions button:disabled,
+      #scene-light-select:disabled {
+        cursor: default;
+        opacity: 0.52;
+      }
+      #scene-light-actions .material-symbols-rounded {
+        font-size: 17px;
+        line-height: 1;
+      }
+      #scene-light-controls {
+        display: grid;
+        gap: 12px;
+      }
+      #scene-light-controls .scene-light-row {
+        display: grid;
+        grid-template-columns: var(--scene-control-label-width) minmax(0, 1fr) var(--scene-control-value-width);
+        align-items: center;
+        gap: 14px;
+      }
+      #scene-light-controls label {
+        color: var(--ui-text);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+        line-height: 1.45;
+      }
+      #scene-light-controls input[type="text"],
+      #scene-light-controls input[type="number"] {
+        width: 100%;
+        min-width: 0;
+        height: 28px;
+        padding: 0 8px;
+        border: 1px solid var(--ui-border-soft);
+        border-radius: 4px;
+        background: var(--ui-bg-soft);
+        color: var(--ui-text-strong);
+        font: inherit;
+      }
+      #scene-light-controls input[type="range"] {
+        width: 100%;
+        min-width: 0;
+      }
+      #scene-light-controls input[type="color"] {
+        appearance: none;
+        -webkit-appearance: none;
+        width: 100%;
+        height: 20px;
+        padding: 0;
+        border: 0;
+        border-radius: 2px;
+        background: transparent;
+        cursor: pointer;
+        overflow: hidden;
+      }
+      #scene-light-controls input[type="color"]::-webkit-color-swatch-wrapper {
+        padding: 0;
+      }
+      #scene-light-controls input[type="color"]::-webkit-color-swatch {
+        border: 0;
+        border-radius: 2px;
+      }
+      #scene-light-controls input[type="color"]::-moz-color-swatch {
+        border: 0;
+        border-radius: 2px;
+      }
+      #scene-light-controls output {
+        text-align: right;
+        color: var(--ui-muted);
+        font-variant-numeric: tabular-nums;
+        font-size: 11px;
+        line-height: 1.45;
+      }
+      #scene-light-controls .scene-light-axis-row {
+        grid-template-columns: var(--scene-control-label-width) repeat(3, minmax(0, 1fr));
+      }
+      #scene-light-controls .scene-light-axis-row output {
+        display: none;
       }
       #background-quality-toggle {
         display: inline-flex;
@@ -1548,6 +1700,18 @@
       #render-effects-controls input[type="range"] {
         width: 100%;
         min-width: 0;
+      }
+      #render-effects-controls select {
+        width: 100%;
+        min-width: 0;
+        height: 31px;
+        border-radius: 7px;
+        border: 1px solid rgba(255,255,255,0.08);
+        background: var(--ui-control-bg);
+        color: var(--ui-text-strong);
+        font: inherit;
+        font-size: 11px;
+        padding: 0 9px;
       }
       #render-effects-controls output {
         text-align: right;
@@ -2507,6 +2671,7 @@
           height: 108px;
         }
         #background-controls .background-row,
+        #scene-light-controls .scene-light-row,
         #render-settings-controls .render-setting-row,
         #render-effects-controls .render-effect-row,
         #texture-controls .texture-row {
@@ -2516,7 +2681,14 @@
         #background-controls .background-row.quality-row {
           grid-template-columns: 1fr;
         }
+        #scene-light-actions {
+          grid-template-columns: minmax(0, 1fr) 30px 30px 30px;
+        }
+        #scene-light-controls .scene-light-axis-row {
+          grid-template-columns: 1fr;
+        }
         #background-controls output,
+        #scene-light-controls output,
         #render-effects-controls output,
         #texture-controls output {
           width: 100%;
@@ -2537,7 +2709,7 @@
         border: 0 !important;
       }
     </style>
-    <script type="module" crossorigin src="/BleND/assets/index-KgpjREGw.js"></script>
+    <script type="module" crossorigin src="/BleND/assets/index-Bly4fD28.js"></script>
   </head>
   <body>
     <div id="camera-view-overlay" aria-hidden="true"></div>
@@ -2682,6 +2854,19 @@
               type="button"
               class="scene-control-tab"
               role="tab"
+              data-scene-control-tab="lights"
+              aria-controls="lights-panel"
+              aria-label="Lights"
+              aria-selected="false"
+              tabindex="-1"
+              title="Lights"
+            >
+              <span class="material-symbols-rounded" aria-hidden="true">wb_incandescent</span>
+            </button>
+            <button
+              type="button"
+              class="scene-control-tab"
+              role="tab"
               data-scene-control-tab="render"
               aria-controls="render-panel"
               aria-label="Render"
@@ -2761,6 +2946,11 @@
               <input id="background-color" type="color" value="#10141a" />
               <output id="background-color-value">#10141a</output>
             </div>
+            <div class="background-row environment-light-row">
+              <label for="environment-light-toggle">Lighting</label>
+              <button id="environment-light-toggle" type="button" aria-pressed="false" title="Enable environment lighting">Off</button>
+              <output aria-hidden="true"></output>
+            </div>
             <div class="background-row">
               <label for="background-blur">Blur</label>
               <input id="background-blur" type="range" min="0" max="1" step="0.01" value="0.00" />
@@ -2770,6 +2960,40 @@
               <label for="background-lightness">Brightness</label>
               <input id="background-lightness" type="range" min="0" max="2" step="0.01" value="0.15" />
               <output id="background-lightness-value">0.15</output>
+            </div>
+          </div>
+        </div>
+        <div id="lights-panel" class="scene-control-tab-panel" role="tabpanel" data-scene-control-panel="lights" aria-label="Light controls" hidden>
+          <div id="scene-lights" role="group" aria-label="Scene lights">
+            <h4>Lights</h4>
+            <div id="scene-light-actions">
+              <select id="scene-light-select" aria-label="Scene light"></select>
+              <button id="scene-light-add-point" type="button" aria-label="Set selected light to point" title="Point light" aria-pressed="false">
+                <span class="material-symbols-rounded" aria-hidden="true">lightbulb</span>
+              </button>
+              <button id="scene-light-add-directional" type="button" aria-label="Set selected light to directional" title="Directional light" aria-pressed="false">
+                <span class="material-symbols-rounded" aria-hidden="true">wb_sunny</span>
+              </button>
+              <button id="scene-light-remove" type="button" aria-label="Remove selected light" title="Remove selected light">
+                <span class="material-symbols-rounded" aria-hidden="true">delete</span>
+              </button>
+            </div>
+            <div id="scene-light-controls">
+              <div class="scene-light-row">
+                <label for="scene-light-shadow">Shadow</label>
+                <input id="scene-light-shadow" type="checkbox" />
+                <output id="scene-light-shadow-value">Off</output>
+              </div>
+              <div class="scene-light-row">
+                <label for="scene-light-color">Color</label>
+                <input id="scene-light-color" type="color" value="#ffffff" />
+                <output id="scene-light-color-value">#ffffff</output>
+              </div>
+              <div class="scene-light-row">
+                <label for="scene-light-intensity">Intensity</label>
+                <input id="scene-light-intensity" type="number" min="0" step="1" value="1" inputmode="decimal" />
+                <output></output>
+              </div>
             </div>
           </div>
         </div>
@@ -2834,10 +3058,43 @@
               <input id="motion-blur-intensity" type="range" min="0" max="1" step="0.01" value="0.00" />
               <output id="motion-blur-intensity-value">0.00</output>
             </div>
+            <div class="render-effect-row">
+              <label for="color-hue">Hue</label>
+              <input id="color-hue" type="range" min="-1" max="1" step="0.01" value="0.00" />
+              <output id="color-hue-value">0.00</output>
+            </div>
+            <div class="render-effect-row">
+              <label for="color-saturation">Saturation</label>
+              <input id="color-saturation" type="range" min="-1" max="1" step="0.01" value="0.00" />
+              <output id="color-saturation-value">0.00</output>
+            </div>
+            <div class="render-effect-row">
+              <label for="color-brightness">Brightness</label>
+              <input id="color-brightness" type="range" min="-1" max="1" step="0.01" value="0.00" />
+              <output id="color-brightness-value">0.00</output>
+            </div>
+            <div class="render-effect-row">
+              <label for="color-contrast">Contrast</label>
+              <input id="color-contrast" type="range" min="-1" max="1" step="0.01" value="0.00" />
+              <output id="color-contrast-value">0.00</output>
+            </div>
+            <div class="render-effect-row">
+              <label for="render-antialias">Antialias</label>
+              <select id="render-antialias" aria-label="Antialias">
+                <option value="off">Native</option>
+                <option value="smaa">SMAA</option>
+              </select>
+              <output id="render-antialias-value">Native</output>
+            </div>
+            <div class="render-effect-row">
+              <label for="grain-intensity">Grain</label>
+              <input id="grain-intensity" type="range" min="0" max="1" step="0.01" value="0.00" />
+              <output id="grain-intensity-value">0.00</output>
+            </div>
           </div>
         </div>
         </div>
-        <div id="texture-panel" class="scene-control-tab-panel empty disabled" role="tabpanel" data-scene-control-panel="texture" aria-label="Texture controls" hidden>
+        <div id="texture-panel" class="scene-control-tab-panel" role="tabpanel" data-scene-control-panel="texture" aria-label="Texture controls" hidden>
           <h4>Texture</h4>
           <div id="texture-preview-wrap">
             <canvas id="texture-preview" aria-label="Texture preview"></canvas>
@@ -2884,6 +3141,16 @@
               <label for="texture-alpha">Alpha</label>
               <input id="texture-alpha" type="range" min="0" max="1" step="0.001" value="1" />
               <output id="texture-alpha-value">1.000</output>
+            </div>
+            <div class="texture-row">
+              <label for="texture-emissive-color">Emission</label>
+              <input id="texture-emissive-color" type="color" value="#000000" />
+              <output id="texture-emissive-color-value">#000000</output>
+            </div>
+            <div class="texture-row">
+              <label for="texture-emissive-intensity">Emit power</label>
+              <input id="texture-emissive-intensity" type="range" min="0" max="20" step="0.01" value="0" />
+              <output id="texture-emissive-intensity-value">0.00</output>
             </div>
             <div class="texture-row" data-material-scope="glass">
               <label for="texture-transmission">Transmission</label>
