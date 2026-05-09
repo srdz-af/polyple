@@ -3426,6 +3426,19 @@ function appendDimensionMajorDuplicateVertices(
 
 const BEVEL_MAX_AMOUNT = 0.995;
 
+type BevelSphereBase = {
+  dimension: number;
+  origin: number[];
+  tangentDistance: number;
+  directions: Map<number, Float64Array>;
+};
+
+type LocalBevelSphere = {
+  center: Float64Array;
+  radius: number;
+  endpointRadials: Map<number, Float64Array>;
+};
+
 function vectorDot(a: ArrayLike<number>, b: ArrayLike<number>) {
   let dot = 0;
   for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
@@ -3505,7 +3518,7 @@ function buildBevelSphere(
   selectedVertex: number,
   bevel: BevelVertexResult,
   amount: number,
-) {
+): BevelSphereBase | null {
   const dimension = oldVertexCount > 0 ? Math.floor(data.length / oldVertexCount) : 0;
   if (dimension <= 0) return null;
 
@@ -3525,45 +3538,55 @@ function buildBevelSphere(
 
   const tangentDistance = Math.max(0, Math.min(BEVEL_MAX_AMOUNT, amount)) * minLength;
   if (tangentDistance <= 1e-8) return null;
-  const activeNeighbors = Array.from(directions.keys());
+  return {
+    dimension,
+    origin,
+    tangentDistance,
+    directions,
+  };
+}
+
+function buildLocalBevelSphere(
+  sphere: BevelSphereBase,
+  neighborIds: number[],
+): LocalBevelSphere | null {
+  const activeNeighbors = Array.from(new Set(neighborIds))
+    .filter(neighbor => sphere.directions.has(neighbor));
+  if (activeNeighbors.length < 2) return null;
   const gram = activeNeighbors.map(a => activeNeighbors.map(b => (
-    vectorDot(directions.get(a) ?? [], directions.get(b) ?? [])
+    vectorDot(sphere.directions.get(a) ?? [], sphere.directions.get(b) ?? [])
   )));
-  const rhs = activeNeighbors.map(() => tangentDistance);
+  const rhs = activeNeighbors.map(() => sphere.tangentDistance);
   const coefficients = solveLinearSystem(gram, rhs);
   if (!coefficients) return null;
 
-  const center = new Float64Array(dimension);
+  const center = new Float64Array(sphere.dimension);
   activeNeighbors.forEach((neighbor, idx) => {
-    const direction = directions.get(neighbor);
+    const direction = sphere.directions.get(neighbor);
     if (!direction) return;
     const coefficient = coefficients[idx] ?? 0;
-    for (let dim = 0; dim < dimension; dim++) center[dim] += coefficient * direction[dim];
+    for (let dim = 0; dim < sphere.dimension; dim++) center[dim] += coefficient * direction[dim];
   });
 
   const endpointRadials = new Map<number, Float64Array>();
   let radius = 0;
   for (const neighbor of activeNeighbors) {
-    const direction = directions.get(neighbor);
+    const direction = sphere.directions.get(neighbor);
     if (!direction) continue;
-    const radial = new Float64Array(dimension);
-    for (let dim = 0; dim < dimension; dim++) radial[dim] = (direction[dim] * tangentDistance) - center[dim];
+    const radial = new Float64Array(sphere.dimension);
+    for (let dim = 0; dim < sphere.dimension; dim++) radial[dim] = (direction[dim] * sphere.tangentDistance) - center[dim];
     const radialLength = vectorLength(radial);
     if (radialLength <= 1e-8) continue;
     radius += radialLength;
-    for (let dim = 0; dim < dimension; dim++) radial[dim] /= radialLength;
+    for (let dim = 0; dim < sphere.dimension; dim++) radial[dim] /= radialLength;
     endpointRadials.set(neighbor, radial);
   }
   if (!endpointRadials.size) return null;
   radius /= endpointRadials.size;
 
   return {
-    dimension,
-    origin,
-    tangentDistance,
     center,
     radius,
-    directions,
     endpointRadials,
   };
 }
@@ -3598,9 +3621,12 @@ function buildBeveledVertexData(
       continue;
     }
 
+    const localSphere = buildLocalBevelSphere(sphere, cut.neighbors);
+    if (!localSphere) continue;
+
     if (cut.neighbors.length === 2) {
-      const a = sphere.endpointRadials.get(cut.neighbors[0]);
-      const b = sphere.endpointRadials.get(cut.neighbors[1]);
+      const a = localSphere.endpointRadials.get(cut.neighbors[0]);
+      const b = localSphere.endpointRadials.get(cut.neighbors[1]);
       const weightA = cut.weights[0] ?? 0;
       const weightB = cut.weights[1] ?? 0;
       const total = weightA + weightB;
@@ -3608,7 +3634,7 @@ function buildBeveledVertexData(
       radial = slerpUnitVectors(a, b, weightB / total);
     } else {
       for (let idx = 0; idx < cut.neighbors.length; idx++) {
-        const endpoint = sphere.endpointRadials.get(cut.neighbors[idx]);
+        const endpoint = localSphere.endpointRadials.get(cut.neighbors[idx]);
         const weight = cut.weights[idx] ?? 0;
         if (!endpoint || weight <= 0) continue;
         for (let dim = 0; dim < dimension; dim++) radial[dim] += endpoint[dim] * weight;
@@ -3620,8 +3646,8 @@ function buildBeveledVertexData(
 
     for (let dim = 0; dim < dimension; dim++) {
       next[(dim * bevel.vertexCount) + cut.vertex] = sphere.origin[dim]
-        + sphere.center[dim]
-        + (radial[dim] * sphere.radius);
+        + localSphere.center[dim]
+        + (radial[dim] * localSphere.radius);
     }
   }
   return next;
