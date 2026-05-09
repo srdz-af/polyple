@@ -90,9 +90,13 @@ import type {
 import type { ExtraAxisGizmoState } from './ui/ExtraAxisGizmoController';
 
 type PrimitiveMode = PrimitiveKind;
+type SceneLightHelper = THREE.PointLightHelper | THREE.DirectionalLightHelper;
+type SceneLightMarker = THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
 type SceneLightRuntime = {
   state: SceneLightState;
   light: THREE.PointLight | THREE.DirectionalLight;
+  helper: SceneLightHelper;
+  marker: SceneLightMarker;
 };
 type PackedVec3 = [number, number, number];
 type PackedTransform = [
@@ -209,6 +213,9 @@ const MAX_VIEWPORT_PIXEL_RATIO = 2;
 const POSTPROCESSING_MSAA_SAMPLES = 4;
 const GRAIN_UPDATE_INTERVAL_FRAMES = 3;
 const GRAIN_TEXTURE_SCALE = 0.5;
+const SCENE_LIGHT_MARKER_RADIUS = 0.025;
+const SCENE_LIGHT_MARKER_PIXEL_DIAMETER = 11;
+const SELECTED_SCENE_LIGHT_MARKER_PIXEL_DIAMETER = 15;
 
 let sceneUrlApplying = false;
 
@@ -873,6 +880,7 @@ scene.add(ambient, hemi, light);
 let sceneLightIdCounter = 1;
 let selectedSceneLightId = '';
 const sceneLights: SceneLightRuntime[] = [];
+const sceneLightMarkerGeometry = new THREE.SphereGeometry(SCENE_LIGHT_MARKER_RADIUS, 12, 8);
 const axes = new THREE.AxesHelper(1000);
 axes.position.set(0, -0.6, 0);
 scene.add(axes);
@@ -1158,8 +1166,65 @@ function createSceneLightObject(state: SceneLightState) {
   return object;
 }
 
+function configureLightHelperMaterials(object: THREE.Object3D, color: number, opacity = 0.82) {
+  object.traverse(child => {
+    child.renderOrder = 42;
+    const material = (child as THREE.Line | THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+    const materials = Array.isArray(material) ? material : (material ? [material] : []);
+    materials.forEach(entry => {
+      entry.depthTest = false;
+      entry.depthWrite = false;
+      entry.transparent = true;
+      entry.opacity = opacity;
+      if ('color' in entry && entry.color instanceof THREE.Color) entry.color.setHex(color);
+    });
+  });
+}
+
+function createSceneLightHelper(state: SceneLightState, lightObject: THREE.PointLight | THREE.DirectionalLight): SceneLightHelper {
+  const helper = lightObject instanceof THREE.PointLight
+    ? new THREE.PointLightHelper(lightObject, 0.25, state.color)
+    : new THREE.DirectionalLightHelper(lightObject, 0.55, state.color);
+  helper.name = `${state.id}-helper`;
+  helper.visible = false;
+  configureLightHelperMaterials(helper, state.color);
+  scene.add(helper);
+  return helper;
+}
+
+function createSceneLightMarker(state: SceneLightState): SceneLightMarker {
+  const material = new THREE.MeshBasicMaterial({
+    color: state.color,
+    transparent: true,
+    opacity: 0.68,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const marker = new THREE.Mesh(sceneLightMarkerGeometry, material);
+  marker.name = `${state.id}-marker`;
+  marker.renderOrder = 41;
+  marker.userData.sceneLightId = state.id;
+  marker.visible = false;
+  scene.add(marker);
+  return marker;
+}
+
+function createSceneLightRuntime(state: SceneLightState): SceneLightRuntime {
+  const normalized = normalizeSceneLightState(state);
+  const lightObject = createSceneLightObject(normalized);
+  const runtime: SceneLightRuntime = {
+    state: normalized,
+    light: lightObject,
+    helper: createSceneLightHelper(normalized, lightObject),
+    marker: createSceneLightMarker(normalized),
+  };
+  syncSceneLightRuntime(runtime);
+  return runtime;
+}
+
 function syncSceneLightRuntime(runtime: SceneLightRuntime) {
-  const { state, light } = runtime;
+  const { state, light, helper, marker } = runtime;
+  const selected = state.id === selectedSceneLightId;
   light.name = state.id;
   light.color.setHex(state.color);
   light.intensity = state.intensity;
@@ -1169,9 +1234,28 @@ function syncSceneLightRuntime(runtime: SceneLightRuntime) {
     light.target.position.set(0, 0, 0);
     light.target.updateMatrixWorld();
   }
+  marker.name = `${state.id}-marker`;
+  marker.userData.sceneLightId = state.id;
+  marker.position.copy(state.position);
+  marker.visible = state.visible;
+  marker.material.color.setHex(state.color);
+  marker.material.opacity = selected ? 1 : 0.68;
+
+  helper.name = `${state.id}-helper`;
+  helper.visible = state.visible && selected;
+  configureLightHelperMaterials(helper, state.color, selected ? 0.92 : 0.72);
+  helper.update();
+}
+
+function syncSceneLightRuntimes() {
+  sceneLights.forEach(syncSceneLightRuntime);
 }
 
 function disposeSceneLightRuntime(runtime: SceneLightRuntime) {
+  scene.remove(runtime.helper);
+  runtime.helper.dispose();
+  scene.remove(runtime.marker);
+  runtime.marker.material.dispose();
   scene.remove(runtime.light);
   if (runtime.light instanceof THREE.DirectionalLight) scene.remove(runtime.light.target);
   runtime.light.dispose();
@@ -1180,18 +1264,13 @@ function disposeSceneLightRuntime(runtime: SceneLightRuntime) {
 function setSceneLights(states: SceneLightState[]) {
   sceneLights.splice(0).forEach(disposeSceneLightRuntime);
   states.forEach(state => {
-    const normalized = normalizeSceneLightState(state);
-    const runtime = {
-      state: normalized,
-      light: createSceneLightObject(normalized),
-    };
-    syncSceneLightRuntime(runtime);
-    sceneLights.push(runtime);
+    sceneLights.push(createSceneLightRuntime(state));
   });
   syncSceneLightIdCounter();
   if (!sceneLights.some(runtime => runtime.state.id === selectedSceneLightId)) {
     selectedSceneLightId = sceneLights[0]?.state.id ?? '';
   }
+  syncSceneLightRuntimes();
   syncSceneLightControls();
 }
 
@@ -1254,6 +1333,7 @@ function syncSceneLightControls() {
     sceneLightZInput.disabled = !enabled;
     sceneLightZInput.value = `${selected?.state.position.z ?? 0}`;
   }
+  syncSceneLightRuntimes();
 }
 
 function addSceneLight(kind: SceneLightKind) {
@@ -1264,10 +1344,9 @@ function addSceneLight(kind: SceneLightKind) {
     kind,
     label: `${kind === 'point' ? 'Point' : 'Directional'} light ${index}`,
   });
-  const runtime = { state, light: createSceneLightObject(state) };
-  syncSceneLightRuntime(runtime);
-  sceneLights.push(runtime);
+  sceneLights.push(createSceneLightRuntime(state));
   selectedSceneLightId = state.id;
+  syncSceneLightRuntimes();
   syncSceneLightControls();
   requestSceneUrlUpdate();
 }
@@ -1290,7 +1369,7 @@ function updateSelectedSceneLight(mutator: (state: SceneLightState) => void) {
   pushUndoSnapshot();
   mutator(selected.state);
   selected.state = normalizeSceneLightState(selected.state);
-  syncSceneLightRuntime(selected);
+  syncSceneLightRuntimes();
   syncSceneLightControls();
   requestSceneUrlUpdate();
 }
@@ -1336,6 +1415,51 @@ function bindSceneLightControls() {
   sceneLightYInput?.addEventListener('change', updatePosition);
   sceneLightZInput?.addEventListener('change', updatePosition);
   syncSceneLightControls();
+}
+
+function sceneLightMarkerScale(position: THREE.Vector3, pixelDiameter: number) {
+  const viewportHeight = Math.max(1, renderer.domElement.clientHeight || renderer.domElement.height);
+  const cameraSpace = tmpVec.copy(position).applyMatrix4(camera.matrixWorldInverse);
+  const distance = Math.max(0.01, Math.abs(cameraSpace.z));
+  const visibleHeight = (2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5)) / camera.zoom;
+  const worldDiameter = (pixelDiameter / viewportHeight) * visibleHeight;
+  return Math.max(0.01, worldDiameter / (SCENE_LIGHT_MARKER_RADIUS * 2));
+}
+
+function updateSceneLightMarkersScreenSpace() {
+  sceneLights.forEach(runtime => {
+    if (!runtime.marker.visible) return;
+    const selected = runtime.state.id === selectedSceneLightId;
+    runtime.marker.scale.setScalar(sceneLightMarkerScale(
+      runtime.marker.position,
+      selected ? SELECTED_SCENE_LIGHT_MARKER_PIXEL_DIAMETER : SCENE_LIGHT_MARKER_PIXEL_DIAMETER,
+    ));
+  });
+}
+
+function handleSceneLightPointerDown(ev: PointerEvent) {
+  if (ev.button !== 0 || PARAMS.editMode || transformController.isActive() || transformController.isGizmoDragging()) return;
+  const markers = sceneLights
+    .map(runtime => runtime.marker)
+    .filter(marker => marker.visible);
+  if (!markers.length) return;
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  ndc.set(
+    ((ev.clientX - rect.left) / rect.width) * 2 - 1,
+    -((ev.clientY - rect.top) / rect.height) * 2 + 1,
+  );
+  raycaster.setFromCamera(ndc, camera);
+  const hit = raycaster.intersectObjects(markers, false)[0];
+  const lightId = hit?.object.userData.sceneLightId;
+  if (typeof lightId !== 'string') return;
+
+  selectedSceneLightId = lightId;
+  selectObject(NO_SELECTION);
+  syncSceneLightControls();
+  ev.preventDefault();
+  ev.stopPropagation();
+  ev.stopImmediatePropagation();
 }
 
 function objectLabelForMaterialList(idx: number) {
@@ -3019,6 +3143,7 @@ function renderViewportFrame() {
   const projectionMs = projectIfDirty();
   controls.update();
   transformController.updateScreenSpaceMarkerScales();
+  updateSceneLightMarkersScreenSpace();
   updateAxisGizmo();
   const renderStart = performance.now();
   if (hasRenderEffects() || downsampleSceneOnly) renderEffectsFrame();
@@ -3654,6 +3779,7 @@ new KeyboardShortcutController({
 updateTransformActionButtons();
 paneController.syncToViewport(true);
 modalOverlayController.initializeMobileOnboarding();
+renderer.domElement.addEventListener('pointerdown', handleSceneLightPointerDown, { capture: true });
 viewportInteraction.bind();
 void backgroundSelectorReady
   .then(() => initializeSceneUrlState())
