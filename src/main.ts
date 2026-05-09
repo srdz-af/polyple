@@ -2654,7 +2654,7 @@ sceneLoadInput?.addEventListener('change', () => {
   { el: transformRotateButton, mode: 'rotate' as TransformMode },
   { el: transformScaleButton, mode: 'scale' as TransformMode },
 ].forEach(entry => {
-  entry.el?.addEventListener('pointerdown', ev => transformController.beginControlDrag(entry.mode, ev));
+  entry.el?.addEventListener('click', () => transformController.toggleTransformMode(entry.mode));
 });
 dimensionDownButton?.addEventListener('click', () => setNewPrimitiveDimension(PARAMS.N - 1));
 dimensionUpButton?.addEventListener('click', () => setNewPrimitiveDimension(PARAMS.N + 1));

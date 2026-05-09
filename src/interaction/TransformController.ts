@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { RotND } from '../RotND';
+import { AXIS_PALETTE } from '../constants';
 import { cellCount, getCellBoundaryFaceIds, getCellVertices } from '../geometry/cellTopology';
 import type { NDProjector } from '../geometry/NDProjector';
 import { perspectiveScaleFrom, type AxisMap } from '../geometry/projectionUtils';
@@ -68,6 +69,7 @@ type TransformOperation = {
   lastHit: THREE.Vector3;
   vertexDataStart: Float32Array | null;
   lockAxis: -1 | 0 | 1 | 2;
+  extraAxisDim: number;
   objectDataStart: Float32Array | null;
   originDataStart: Float32Array | null;
   extraPlane: boolean;
@@ -86,10 +88,36 @@ type ObjectTransformStart = {
   originDataStart: Float32Array | null;
 };
 
+type TransformGizmoConstraint = {
+  kind: 'free' | 'axis' | 'extra';
+  axisSlot: -1 | 0 | 1 | 2;
+  extraDim: number;
+};
+
 const MARKER_GEOMETRY_RADIUS = 0.012;
 const VERTEX_MARKER_PIXEL_DIAMETER = 8;
 const CELL_CENTER_MARKER_PIXEL_DIAMETER = 6.5;
 const SELECTED_MARKER_PIXEL_DIAMETER = 11;
+const TRANSFORM_GIZMO_MIN_PIXEL_RADIUS = 54;
+const TRANSFORM_GIZMO_HANDLE_PIXEL_DIAMETER = 15;
+const TRANSFORM_GIZMO_SEGMENTS = 96;
+const PROJECTED_AXIS_DIRECTIONS = [
+  new THREE.Vector3(1, 0, 0),
+  new THREE.Vector3(0, 1, 0),
+  new THREE.Vector3(0, 0, 1),
+];
+const FREE_HANDLE_COLOR = AXIS_PALETTE[7];
+const EXTRA_HANDLE_DIRECTION = new THREE.Vector3(1, 1, 1).normalize();
+const FREE_GIZMO_CONSTRAINT: TransformGizmoConstraint = {
+  kind: 'free',
+  axisSlot: -1,
+  extraDim: -1,
+};
+const PROJECTED_AXIS_CONSTRAINTS: TransformGizmoConstraint[] = [
+  { kind: 'axis', axisSlot: 0, extraDim: -1 },
+  { kind: 'axis', axisSlot: 1, extraDim: -1 },
+  { kind: 'axis', axisSlot: 2, extraDim: -1 },
+];
 
 function computeCenterFromPositions(positions: Float32Array, count: number) {
   if (!count) return new THREE.Vector3();
@@ -133,6 +161,13 @@ export class TransformController {
   private editFaceTintOverlay: THREE.Mesh | null = null;
   private axisGuide: THREE.Line | null = null;
   private extraPlaneGuide: THREE.Line | null = null;
+  private activeTransformMode: TransformMode = 'none';
+  private transformGizmo: THREE.Group | null = null;
+  private transformGizmoRings: THREE.LineLoop[] = [];
+  private transformGizmoHandles: THREE.Mesh[] = [];
+  private transformGizmoExtraHandle: THREE.Mesh | null = null;
+  private readonly transformGizmoCenter = new THREE.Vector3();
+  private pendingGizmoConstraint: TransformGizmoConstraint | null = null;
   private readonly tmpVec = new THREE.Vector3();
   private readonly markerMatrix = new THREE.Matrix4();
   private readonly markerPosition = new THREE.Vector3();
@@ -170,6 +205,7 @@ export class TransformController {
     lastHit: new THREE.Vector3(),
     vertexDataStart: null,
     lockAxis: -1,
+    extraAxisDim: -1,
     objectDataStart: null,
     originDataStart: null,
     extraPlane: false,
@@ -178,14 +214,10 @@ export class TransformController {
     pivotWorldStart: new THREE.Vector3(),
   };
 
-  private readonly controlTransformDrag = {
+  private readonly gizmoDrag = {
     active: false,
-    started: false,
     pointerId: -1,
-    mode: 'none' as TransformMode,
-    startX: 0,
-    startY: 0,
-    sourceButton: null as HTMLButtonElement | null,
+    pointerCaptureTarget: null as HTMLElement | null,
   };
 
   constructor(private readonly options: TransformControllerOptions) {}
@@ -207,6 +239,7 @@ export class TransformController {
     this.selectedVertex = vertex;
     this.selectedEditVertices = vertex >= 0 ? [vertex] : [];
     this.selectedCellId = vertex;
+    this.updateActionButtons();
   }
 
   getEditCellDimension() {
@@ -228,6 +261,7 @@ export class TransformController {
     this.selectedEditVertices = uniqueVertices;
     this.selectedVertex = this.editCellDimension === 0 && uniqueVertices.length ? uniqueVertices[0] : -1;
     this.selectedCellId = cellId;
+    this.updateActionButtons();
   }
 
   clearEditSelection() {
@@ -236,6 +270,7 @@ export class TransformController {
     this.selectedCellId = -1;
     this.clearVertexMarker();
     this.clearEditComponentOverlay();
+    this.updateActionButtons();
   }
 
   hasEditSelection() {
@@ -263,6 +298,7 @@ export class TransformController {
     this.clearFaceCenterCloud();
     this.clearEditWireOverlay();
     this.clearEditComponentOverlay();
+    this.clearTransformMode();
   }
 
   clearVertexMarker() {
@@ -443,6 +479,7 @@ export class TransformController {
       const scale = this.screenSpaceMarkerScale(this.selectionVertexMarker.position, SELECTED_MARKER_PIXEL_DIAMETER);
       this.selectionVertexMarker.scale.setScalar(scale);
     }
+    this.updateTransformGizmo();
   }
 
   private updateInstancedMarkerScale(mesh: THREE.InstancedMesh | null, pixelDiameter: number) {
@@ -635,21 +672,338 @@ export class TransformController {
       { mode: 'rotate', el: this.options.rotateButton },
       { mode: 'scale', el: this.options.scaleButton },
     ];
-    const hasTarget = this.options.getParams().editMode
-      ? this.hasEditSelection()
-      : this.getObjectTransformSelection().length > 0;
-    const busy = this.transformOp.mode !== 'none';
+    if (!this.canUseTransformMode(this.activeTransformMode)) this.activeTransformMode = 'none';
 
     for (const entry of buttons) {
       if (!entry.el) continue;
-      entry.el.classList.toggle('active', this.transformOp.mode === entry.mode);
-      entry.el.disabled = !hasTarget || busy;
+      const enabled = this.canUseTransformMode(entry.mode);
+      entry.el.classList.toggle('active', this.activeTransformMode === entry.mode);
+      entry.el.disabled = !enabled;
     }
+    this.updateTransformGizmo();
+  }
+
+  setTransformMode(mode: TransformMode) {
+    if (mode === this.activeTransformMode) {
+      this.updateActionButtons();
+      return;
+    }
+    if (this.transformOp.mode !== 'none') this.finish(false);
+    if (!this.canUseTransformMode(mode)) return;
+    this.activeTransformMode = mode;
+    this.updateActionButtons();
+  }
+
+  toggleTransformMode(mode: TransformMode) {
+    if (mode === 'none' || this.activeTransformMode === mode) this.clearTransformMode();
+    else this.setTransformMode(mode);
+  }
+
+  clearTransformMode() {
+    if (this.transformOp.mode !== 'none') this.finish(false);
+    this.activeTransformMode = 'none';
+    this.clearTransformGizmo();
+    this.updateActionButtons();
+  }
+
+  private hasTransformTarget() {
+    return this.options.getParams().editMode
+      ? this.hasEditSelection()
+      : this.getObjectTransformSelection().length > 0;
+  }
+
+  canUseTransformMode(mode: TransformMode) {
+    if (mode === 'none') return true;
+    if (!this.hasTransformTarget()) return false;
+    return !(this.options.getParams().editMode && this.editCellDimension === 0 && mode !== 'move');
+  }
+
+  private updateTransformGizmo() {
+    if (this.activeTransformMode === 'none' || !this.hasTransformTarget()) {
+      this.clearTransformGizmo();
+      return;
+    }
+
+    const bounds = this.computeTransformGizmoBounds();
+    if (!bounds) {
+      this.clearTransformGizmo();
+      return;
+    }
+
+    this.ensureTransformGizmo();
+    if (!this.transformGizmo) return;
+
+    const minRadius = this.screenSpaceWorldRadius(bounds.center, TRANSFORM_GIZMO_MIN_PIXEL_RADIUS);
+    const radius = Math.max(bounds.radius * 1.18, minRadius, 0.08);
+    const handleScale = this.screenSpaceMarkerScale(bounds.center, TRANSFORM_GIZMO_HANDLE_PIXEL_DIAMETER) / radius;
+    const extraDim = this.extraAxisDimForTransformTarget();
+    this.updateTransformGizmoColors(extraDim);
+
+    this.transformGizmo.position.copy(bounds.center);
+    this.transformGizmo.quaternion.identity();
+    this.transformGizmo.scale.setScalar(radius);
+    this.transformGizmoHandles.forEach(handle => {
+      handle.scale.setScalar(handleScale);
+    });
+    if (this.transformGizmoExtraHandle) {
+      this.transformGizmoExtraHandle.visible = extraDim >= 0;
+      this.transformGizmoExtraHandle.userData.transformGizmoConstraint = {
+        kind: 'extra',
+        axisSlot: -1,
+        extraDim,
+      } satisfies TransformGizmoConstraint;
+    }
+    if (!this.options.scene.children.includes(this.transformGizmo)) this.options.scene.add(this.transformGizmo);
+  }
+
+  private ensureTransformGizmo() {
+    if (this.transformGizmo) return;
+
+    const group = new THREE.Group();
+    group.name = 'TransformGizmo';
+    group.renderOrder = 35;
+
+    this.transformGizmoRings = [0, 1, 2].map(axisSlot => {
+      const ring = new THREE.LineLoop(
+        new THREE.BufferGeometry().setFromPoints(this.createGizmoRingPoints(axisSlot)),
+        new THREE.LineBasicMaterial({
+          color: this.axisPaletteColor(axisSlot),
+          transparent: true,
+          opacity: 0.72,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      );
+      ring.renderOrder = 35;
+      group.add(ring);
+      return ring;
+    });
+
+    const makeHandle = (color: THREE.ColorRepresentation, constraint: TransformGizmoConstraint, position: THREE.Vector3) => {
+      const handle = new THREE.Mesh(
+        this.options.vertexGeo,
+        new THREE.MeshBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 0.96,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      );
+      handle.position.copy(position);
+      handle.renderOrder = 36;
+      handle.userData.transformGizmoHandle = true;
+      handle.userData.transformGizmoConstraint = constraint;
+      group.add(handle);
+      return handle;
+    };
+
+    this.transformGizmoHandles = [
+      makeHandle(FREE_HANDLE_COLOR, FREE_GIZMO_CONSTRAINT, new THREE.Vector3(0, 0, 0)),
+      ...PROJECTED_AXIS_DIRECTIONS.map((direction, axisSlot) => makeHandle(
+        this.axisPaletteColor(axisSlot),
+        PROJECTED_AXIS_CONSTRAINTS[axisSlot],
+        direction,
+      )),
+    ];
+    this.transformGizmoExtraHandle = makeHandle(
+      this.axisPaletteColor(3),
+      { kind: 'extra', axisSlot: -1, extraDim: -1 },
+      EXTRA_HANDLE_DIRECTION.clone().multiplyScalar(1.18),
+    );
+    this.transformGizmoHandles.push(this.transformGizmoExtraHandle);
+
+    this.transformGizmo = group;
+    this.options.scene.add(group);
+  }
+
+  private updateTransformGizmoColors(extraDim: number) {
+    const params = this.options.getParams();
+    const activeDims = [params.axesX, params.axesY, params.axesZ];
+    this.transformGizmoRings.forEach((ring, axisSlot) => {
+      this.setRenderableColor(ring.material, this.axisPaletteColor(activeDims[axisSlot] ?? axisSlot));
+    });
+    this.transformGizmoHandles.forEach((handle, index) => {
+      if (index === 0) {
+        this.setRenderableColor(handle.material, FREE_HANDLE_COLOR);
+      } else if (index >= 1 && index <= 3) {
+        this.setRenderableColor(handle.material, this.axisPaletteColor(activeDims[index - 1] ?? index - 1));
+      }
+    });
+    if (this.transformGizmoExtraHandle && extraDim >= 0) {
+      this.setRenderableColor(this.transformGizmoExtraHandle.material, this.axisPaletteColor(extraDim));
+    }
+  }
+
+  private axisPaletteColor(dim: number) {
+    const index = ((dim % AXIS_PALETTE.length) + AXIS_PALETTE.length) % AXIS_PALETTE.length;
+    return AXIS_PALETTE[index];
+  }
+
+  private setRenderableColor(material: THREE.Material | THREE.Material[], color: THREE.ColorRepresentation) {
+    if (Array.isArray(material)) {
+      material.forEach(entry => this.setRenderableColor(entry, color));
+      return;
+    }
+    if ('color' in material && material.color instanceof THREE.Color) material.color.set(color);
+  }
+
+  private createGizmoRingPoints(axisSlot: number) {
+    const points: THREE.Vector3[] = [];
+    for (let i = 0; i < TRANSFORM_GIZMO_SEGMENTS; i++) {
+      const angle = (i / TRANSFORM_GIZMO_SEGMENTS) * Math.PI * 2;
+      const a = Math.cos(angle);
+      const b = Math.sin(angle);
+      if (axisSlot === 0) points.push(new THREE.Vector3(0, a, b));
+      else if (axisSlot === 1) points.push(new THREE.Vector3(a, 0, b));
+      else points.push(new THREE.Vector3(a, b, 0));
+    }
+    return points;
+  }
+
+  private clearTransformGizmo() {
+    if (!this.transformGizmo) return;
+    this.options.scene.remove(this.transformGizmo);
+    const materials = new Set<THREE.Material>();
+    this.transformGizmo.traverse(object => {
+      const maybeRenderable = object as THREE.Mesh | THREE.Line;
+      if ('geometry' in maybeRenderable && maybeRenderable.geometry !== this.options.vertexGeo) {
+        maybeRenderable.geometry.dispose();
+      }
+      if ('material' in maybeRenderable) {
+        const material = maybeRenderable.material;
+        if (Array.isArray(material)) material.forEach(entry => materials.add(entry));
+        else materials.add(material);
+      }
+    });
+    materials.forEach(material => material.dispose());
+    this.transformGizmo = null;
+    this.transformGizmoRings = [];
+    this.transformGizmoHandles = [];
+    this.transformGizmoExtraHandle = null;
+  }
+
+  private pickTransformGizmoConstraint(ev: PointerEvent): TransformGizmoConstraint | null {
+    if (!this.transformGizmoHandles.length || !this.transformGizmo) return null;
+    const rect = this.options.renderer.domElement.getBoundingClientRect();
+    this.options.ndc.set(
+      ((ev.clientX - rect.left) / rect.width) * 2 - 1,
+      -((ev.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this.options.raycaster.setFromCamera(this.options.ndc, this.options.camera);
+    const hit = this.options.raycaster
+      .intersectObjects(this.transformGizmoHandles, false)
+      .find(entry => entry.object.visible);
+    const constraint = hit?.object.userData.transformGizmoConstraint as TransformGizmoConstraint | undefined;
+    return constraint ?? null;
+  }
+
+  private computeTransformGizmoBounds() {
+    let sumX = 0;
+    let sumY = 0;
+    let sumZ = 0;
+    let count = 0;
+    this.forEachTransformTargetPosition((x, y, z) => {
+      sumX += x;
+      sumY += y;
+      sumZ += z;
+      count++;
+    });
+    if (!count) return null;
+
+    this.transformGizmoCenter.set(sumX / count, sumY / count, sumZ / count);
+    let radius = 0;
+    this.forEachTransformTargetPosition((x, y, z) => {
+      radius = Math.max(radius, this.tmpVec.set(x, y, z).distanceTo(this.transformGizmoCenter));
+    });
+    return { center: this.transformGizmoCenter, radius };
+  }
+
+  private extraAxisDimForTransformTarget() {
+    const instIdx = this.options.getParams().editMode
+      ? this.options.getSelectedInstance()
+      : this.getObjectTransformSelection()[0];
+    if (instIdx === undefined) return -1;
+    const data = this.getObjectData(instIdx);
+    if (!data || data.originalN < 4) return -1;
+
+    const params = this.options.getParams();
+    const projected = new Set([params.axesX, params.axesY, params.axesZ]);
+    const available = data.axisMap
+      .slice(0, data.originalN)
+      .filter(dim => Number.isInteger(dim) && dim >= 0 && !projected.has(dim));
+    if (!available.length) return -1;
+
+    const primary = this.options.primaryExtraRotationDepthDim(data.originalN, data.axisMap);
+    if (available.includes(primary)) return primary;
+    return available[0] ?? -1;
+  }
+
+  private forEachTransformTargetPosition(visitor: (x: number, y: number, z: number) => void) {
+    const visitRenderer = (positions: Float32Array, count: number, vertices?: number[]) => {
+      if (vertices) {
+        for (const vertex of vertices) {
+          if (vertex < 0 || vertex >= count) continue;
+          const pIdx = vertex * 3;
+          visitor(positions[pIdx], positions[pIdx + 1], positions[pIdx + 2]);
+        }
+        return;
+      }
+      for (let i = 0; i < count; i++) {
+        const pIdx = i * 3;
+        visitor(positions[pIdx], positions[pIdx + 1], positions[pIdx + 2]);
+      }
+    };
+
+    if (this.options.getParams().editMode) {
+      const instIdx = this.options.getSelectedInstance();
+      if (!this.options.getObjectVisible(instIdx)) return;
+      const rendererRef = instIdx === -1
+        ? this.options.getRendererND()
+        : this.options.getExtraInstances()[instIdx]?.renderer;
+      const count = instIdx === -1 ? this.options.getM() : this.options.getExtraInstances()[instIdx]?.M ?? 0;
+      if (rendererRef && count > 0) visitRenderer(rendererRef.positions, count, this.selectedEditVertices);
+      return;
+    }
+
+    this.getObjectTransformSelection().forEach(instIdx => {
+      if (instIdx === -1) {
+        visitRenderer(this.options.getRendererND().positions, this.options.getM());
+        return;
+      }
+      const inst = this.options.getExtraInstances()[instIdx];
+      if (inst) visitRenderer(inst.renderer.positions, inst.M);
+    });
+  }
+
+  private screenSpaceWorldRadius(position: THREE.Vector3, pixelRadius: number) {
+    const viewportHeight = Math.max(1, this.options.renderer.domElement.clientHeight || this.options.renderer.domElement.height);
+    const cameraSpace = this.tmpVec.copy(position).applyMatrix4(this.options.camera.matrixWorldInverse);
+    const distance = Math.max(0.01, Math.abs(cameraSpace.z));
+    const visibleHeight = (2 * distance * Math.tan(THREE.MathUtils.degToRad(this.options.camera.fov) * 0.5)) / this.options.camera.zoom;
+    return (pixelRadius / viewportHeight) * visibleHeight;
+  }
+
+  private releaseGizmoPointer(pointerId: number) {
+    const target = this.gizmoDrag.pointerCaptureTarget;
+    if (target?.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId);
+  }
+
+  private resetGizmoDrag() {
+    this.gizmoDrag.active = false;
+    this.gizmoDrag.pointerId = -1;
+    this.gizmoDrag.pointerCaptureTarget = null;
   }
 
   handleConstraintKey(key: string) {
     if (key === 'w') {
       if (this.transformOp.mode === 'rotate') {
+        if (this.transformOp.extraAxisDim < 0) {
+          const data = this.getObjectData(this.transformOp.instIdx);
+          this.transformOp.extraAxisDim = data
+            ? this.options.primaryExtraRotationDepthDim(data.originalN, data.axisMap)
+            : -1;
+        }
         this.transformOp.extraPlane = !this.transformOp.extraPlane;
         this.updateAxisGuide();
         return true;
@@ -658,6 +1012,7 @@ export class TransformController {
     }
     if (key === 'x' || key === 'y' || key === 'z') {
       this.transformOp.lockAxis = key === 'x' ? 0 : key === 'y' ? 1 : 2;
+      if (!this.transformOp.extraPlane) this.transformOp.extraAxisDim = -1;
       this.updateAxisGuide();
       return true;
     }
@@ -669,6 +1024,7 @@ export class TransformController {
   }
 
   start(mode: TransformMode, ev: { clientX: number; clientY: number }) {
+    if (!this.canUseTransformMode(mode)) return;
     const selectedInstance = this.options.getSelectedInstance();
     const selectedObjects = this.getObjectTransformSelection();
     if (this.options.getParams().editMode) {
@@ -698,7 +1054,9 @@ export class TransformController {
     this.transformOp.startScale = primaryStart.startScale.x;
     this.transformOp.pivotWorldStart.copy(primaryStart.originWorldStart);
     this.transformOp.lockAxis = -1;
+    this.transformOp.extraAxisDim = -1;
     this.transformOp.extraPlane = false;
+    this.applyPendingGizmoConstraint();
 
     if (mode === 'move' || mode === 'rotate') {
       this.transformOp.objectDataStart = primaryStart.objectDataStart;
@@ -765,7 +1123,9 @@ export class TransformController {
     this.transformOp.planeHitStart.copy(this.transformOp.vertexStart);
     this.transformOp.lastHit.copy(this.transformOp.vertexStart);
     this.transformOp.lockAxis = -1;
+    this.transformOp.extraAxisDim = -1;
     this.transformOp.extraPlane = false;
+    this.applyPendingGizmoConstraint();
     this.transformOp.objectDataStart = null;
     this.transformOp.originDataStart = null;
 
@@ -778,61 +1138,67 @@ export class TransformController {
     return true;
   }
 
-  beginControlDrag(mode: TransformMode, ev: PointerEvent) {
-    if (mode === 'none') return;
-    if (this.transformOp.mode !== 'none') return;
-    if (this.options.getParams().editMode) {
-      if (!this.hasEditSelection()) return;
-    } else if (!this.getObjectTransformSelection().length) return;
+  private applyPendingGizmoConstraint() {
+    const constraint = this.pendingGizmoConstraint ?? FREE_GIZMO_CONSTRAINT;
+    this.transformOp.lockAxis = constraint.kind === 'axis' ? constraint.axisSlot : -1;
+    this.transformOp.extraAxisDim = constraint.kind === 'extra' ? constraint.extraDim : -1;
+    this.transformOp.extraPlane = constraint.kind === 'extra' && this.transformOp.mode === 'rotate';
+  }
+
+  handleGizmoPointerDown(ev: PointerEvent) {
+    if (ev.button !== 0 || this.activeTransformMode === 'none' || this.transformOp.mode !== 'none') return false;
+    if (!this.transformGizmo || !this.hasTransformTarget()) return false;
+    const constraint = this.pickTransformGizmoConstraint(ev);
+    if (!constraint) return false;
 
     ev.preventDefault();
     ev.stopPropagation();
-    this.controlTransformDrag.active = true;
-    this.controlTransformDrag.started = false;
-    this.controlTransformDrag.pointerId = ev.pointerId;
-    this.controlTransformDrag.mode = mode;
-    this.controlTransformDrag.startX = ev.clientX;
-    this.controlTransformDrag.startY = ev.clientY;
-    this.controlTransformDrag.sourceButton = ev.currentTarget as HTMLButtonElement | null;
+    ev.stopImmediatePropagation();
+    this.pendingGizmoConstraint = constraint;
+    this.start(this.activeTransformMode, ev);
+    this.pendingGizmoConstraint = null;
+    if (this.transformOp.mode === 'none') return true;
+    this.options.pushUndoSnapshot();
+
+    this.gizmoDrag.active = true;
+    this.gizmoDrag.pointerId = ev.pointerId;
+    this.gizmoDrag.pointerCaptureTarget = this.options.renderer.domElement;
     try {
-      this.controlTransformDrag.sourceButton?.setPointerCapture(ev.pointerId);
+      this.gizmoDrag.pointerCaptureTarget.setPointerCapture(ev.pointerId);
     } catch {
-      // Some browsers may reject capture when pointerdown starts from nested SVG nodes.
+      // Pointer capture is best-effort; window-level handlers still keep the drag alive.
     }
+    this.updateActionButtons();
+    return true;
   }
 
-  handleControlPointerMove(ev: PointerEvent, setLastPointer: (point: { x: number; y: number }) => void) {
-    if (!this.controlTransformDrag.active || ev.pointerId !== this.controlTransformDrag.pointerId) return false;
-
+  handleGizmoPointerMove(ev: PointerEvent, setLastPointer: (point: { x: number; y: number }) => void) {
+    if (!this.gizmoDrag.active || ev.pointerId !== this.gizmoDrag.pointerId) return false;
     ev.preventDefault();
     setLastPointer({ x: ev.clientX, y: ev.clientY });
-    if (!this.controlTransformDrag.started) {
-      const moved = Math.hypot(ev.clientX - this.controlTransformDrag.startX, ev.clientY - this.controlTransformDrag.startY);
-      if (moved < 3) return true;
-      this.options.pushUndoSnapshot();
-      this.start(this.controlTransformDrag.mode, ev);
-      this.controlTransformDrag.started = this.transformOp.mode !== 'none';
-      if (!this.controlTransformDrag.started) {
-        this.resetControlDrag();
-        return true;
-      }
-      this.updateActionButtons();
-    }
     this.applyPointer(ev.clientX, ev.clientY);
     return true;
   }
 
-  handleControlPointerEnd(ev: PointerEvent, commit: boolean) {
-    if (!this.controlTransformDrag.active || ev.pointerId !== this.controlTransformDrag.pointerId) return false;
-
-    if (this.controlTransformDrag.sourceButton?.hasPointerCapture(ev.pointerId)) {
-      this.controlTransformDrag.sourceButton.releasePointerCapture(ev.pointerId);
-    }
-    const shouldFinish = this.controlTransformDrag.started && this.transformOp.mode !== 'none';
-    if (shouldFinish) this.finish(commit);
-    this.resetControlDrag();
+  handleGizmoPointerEnd(ev: PointerEvent, commit: boolean) {
+    if (!this.gizmoDrag.active || ev.pointerId !== this.gizmoDrag.pointerId) return false;
+    this.releaseGizmoPointer(ev.pointerId);
+    if (this.transformOp.mode !== 'none') this.finish(commit);
+    this.resetGizmoDrag();
     ev.preventDefault();
     return true;
+  }
+
+  cancelGizmoDrag() {
+    if (!this.gizmoDrag.active) return false;
+    this.releaseGizmoPointer(this.gizmoDrag.pointerId);
+    if (this.transformOp.mode !== 'none') this.finish(false);
+    this.resetGizmoDrag();
+    return true;
+  }
+
+  isGizmoDragging() {
+    return this.gizmoDrag.active;
   }
 
   applyPointer(clientX: number, clientY: number) {
@@ -864,6 +1230,7 @@ export class TransformController {
     const locked = this.transformOp.lockAxis;
     const center = this.transformOp.vertexStart;
     const targets: THREE.Vector3[] = [];
+    if (this.transformOp.extraAxisDim >= 0) return this.applyEditExtraTransform(dx, dy);
 
     if (this.transformOp.mode === 'move') {
       const targetCenter = hit.clone().add(this.transformOp.moveOffset);
@@ -883,7 +1250,12 @@ export class TransformController {
     } else if (this.transformOp.mode === 'scale') {
       const scale = Math.max(0.05, Math.min(8, 1 + ((dx - dy) * 0.005)));
       this.transformOp.editVertexStarts.forEach(start => {
-        targets.push(start.clone().sub(center).multiplyScalar(scale).add(center));
+        const offset = start.clone().sub(center);
+        if (locked === 0) offset.x *= scale;
+        else if (locked === 1) offset.y *= scale;
+        else if (locked === 2) offset.z *= scale;
+        else offset.multiplyScalar(scale);
+        targets.push(offset.add(center));
       });
       this.transformOp.lastHit.copy(center);
     } else if (this.transformOp.mode === 'rotate') {
@@ -918,6 +1290,57 @@ export class TransformController {
     return true;
   }
 
+  private applyEditExtraTransform(dx: number, dy: number) {
+    const data = this.getObjectData(this.transformOp.instIdx);
+    const sourceStart = this.transformOp.vertexDataStart;
+    const dim = this.transformOp.extraAxisDim;
+    if (!data || !sourceStart || !this.objectDataHasAxis(data, dim)) return false;
+
+    const offset = dim * data.count;
+    const delta = this.pointerExtraDelta(dx, dy, this.transformOp.vertexStart);
+    if (this.transformOp.mode === 'move') {
+      for (const vertex of this.transformOp.targetVertices) {
+        data.src[offset + vertex] = sourceStart[offset + vertex] + delta;
+      }
+      return true;
+    }
+
+    if (this.transformOp.mode === 'scale') {
+      const scale = Math.max(0.05, Math.min(8, 1 + ((dx - dy) * 0.005)));
+      const pivot = this.averageSourceValue(sourceStart, data.count, dim, this.transformOp.targetVertices);
+      for (const vertex of this.transformOp.targetVertices) {
+        const start = sourceStart[offset + vertex];
+        data.src[offset + vertex] = pivot + ((start - pivot) * scale);
+      }
+      return true;
+    }
+
+    if (this.transformOp.mode === 'rotate') {
+      const params = this.options.getParams();
+      const n = this.options.getN();
+      const axes = [params.axesX % n, params.axesY % n, params.axesZ % n].map(value => Math.max(0, Math.min(n - 1, value)));
+      const dimA = axes[this.transformOp.lockAxis >= 0 ? this.transformOp.lockAxis : 0];
+      const dimB = dim;
+      if (dimA === dimB || !this.objectDataHasAxis(data, dimA)) return false;
+      const offsetA = dimA * data.count;
+      const offsetB = dimB * data.count;
+      const pivotA = this.averageSourceValue(sourceStart, data.count, dimA, this.transformOp.targetVertices);
+      const pivotB = this.averageSourceValue(sourceStart, data.count, dimB, this.transformOp.targetVertices);
+      const angle = (dx - dy) * 0.01;
+      const c = Math.cos(angle);
+      const s = Math.sin(angle);
+      for (const vertex of this.transformOp.targetVertices) {
+        const a0 = sourceStart[offsetA + vertex] - pivotA;
+        const b0 = sourceStart[offsetB + vertex] - pivotB;
+        data.src[offsetA + vertex] = pivotA + (a0 * c - b0 * s);
+        data.src[offsetB + vertex] = pivotB + (a0 * s + b0 * c);
+      }
+      return true;
+    }
+
+    return false;
+  }
+
   finish(commit: boolean) {
     if (this.transformOp.mode === 'none') return;
 
@@ -947,6 +1370,7 @@ export class TransformController {
     this.transformOp.editProjectedStarts = [];
     this.transformOp.vertexDataStart = null;
     this.transformOp.lockAxis = -1;
+    this.transformOp.extraAxisDim = -1;
     this.transformOp.objectDataStart = null;
     this.transformOp.originDataStart = null;
     this.transformOp.extraPlane = false;
@@ -1049,11 +1473,32 @@ export class TransformController {
     };
   }
 
+  private objectDataHasAxis(data: { originalN: number; axisMap: AxisMap }, dim: number) {
+    return dim >= 0 && data.axisMap.slice(0, data.originalN).includes(dim);
+  }
+
+  private pointerExtraDelta(dx: number, dy: number, position: THREE.Vector3) {
+    return (dx - dy) * this.screenSpaceWorldRadius(position, 1);
+  }
+
+  private averageSourceValue(source: Float32Array, count: number, dim: number, vertices: number[]) {
+    if (!vertices.length) return 0;
+    const offset = dim * count;
+    let sum = 0;
+    let valid = 0;
+    for (const vertex of vertices) {
+      if (vertex < 0 || vertex >= count) continue;
+      sum += source[offset + vertex];
+      valid++;
+    }
+    return valid > 0 ? sum / valid : 0;
+  }
+
   private createObjectTransformStart(instIdx: number, mode: TransformMode): ObjectTransformStart {
     const target = this.getObjectTransformTarget(instIdx);
     const data = this.getObjectData(instIdx);
     const origin = this.options.getObjectOrigin(instIdx);
-    const shouldCaptureData = mode === 'rotate';
+    const shouldCaptureData = mode === 'rotate' || this.pendingGizmoConstraint?.kind === 'extra';
     return {
       instIdx,
       startPos: target?.pos.clone() ?? new THREE.Vector3(),
@@ -1072,6 +1517,10 @@ export class TransformController {
     dy: number,
   ) {
     if (this.transformOp.mode === 'move') {
+      if (this.transformOp.extraAxisDim >= 0) {
+        this.applyObjectExtraMove(dx, dy);
+        return;
+      }
       const rect = this.options.renderer.domElement.getBoundingClientRect();
       this.options.ndc.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
       this.options.raycaster.setFromCamera(this.options.ndc, this.options.camera);
@@ -1103,6 +1552,10 @@ export class TransformController {
     }
 
     if (this.transformOp.mode === 'scale') {
+      if (this.transformOp.extraAxisDim >= 0) {
+        this.applyObjectExtraScale(dx, dy);
+        return;
+      }
       this.applyObjectScale(dx, dy);
     }
   }
@@ -1113,6 +1566,21 @@ export class TransformController {
     target.pos.copy(start.startPos).add(delta);
   }
 
+  private applyObjectExtraMove(dx: number, dy: number) {
+    const dim = this.transformOp.extraAxisDim;
+    const delta = this.pointerExtraDelta(dx, dy, this.transformOp.pivotWorldStart);
+    this.transformOp.objectStarts.forEach(start => {
+      const data = this.getObjectData(start.instIdx);
+      const origin = this.options.getObjectOrigin(start.instIdx);
+      if (!data || !start.objectDataStart || !this.objectDataHasAxis(data, dim)) return;
+      const offset = dim * data.count;
+      for (let i = 0; i < data.count; i++) {
+        data.src[offset + i] = start.objectDataStart[offset + i] + delta;
+      }
+      if (origin && start.originDataStart) origin[dim] = (start.originDataStart[dim] ?? 0) + delta;
+    });
+  }
+
   private applyObjectExtraPlaneRotation(dx: number, dy: number) {
     const primaryStart = this.transformOp.objectStarts.find(start => start.instIdx === this.transformOp.instIdx)
       ?? this.transformOp.objectStarts[0];
@@ -1120,9 +1588,11 @@ export class TransformController {
     const primaryData = this.getObjectData(primaryStart.instIdx);
     if (!primaryData) return;
 
-    const dimB = this.options.primaryExtraRotationDepthDim(primaryData.originalN, primaryData.axisMap);
+    const dimB = this.transformOp.extraAxisDim >= 0
+      ? this.transformOp.extraAxisDim
+      : this.options.primaryExtraRotationDepthDim(primaryData.originalN, primaryData.axisMap);
     const dimA = this.options.extraRotationPlaneAxis(this.transformOp.lockAxis, dimB);
-    if (dimA < 0 || dimB < 0 || dimA === dimB) return;
+    if (dimA < 0 || dimB < 0 || dimA === dimB || !this.objectDataHasAxis(primaryData, dimA) || !this.objectDataHasAxis(primaryData, dimB)) return;
 
     const pivotA = primaryStart.originDataStart?.[dimA] ?? 0;
     const pivotB = primaryStart.originDataStart?.[dimB] ?? 0;
@@ -1132,7 +1602,7 @@ export class TransformController {
 
     this.transformOp.objectStarts.forEach(start => {
       const data = this.getObjectData(start.instIdx);
-      if (!data || !start.objectDataStart || data.count <= 0) return;
+      if (!data || !start.objectDataStart || data.count <= 0 || !this.objectDataHasAxis(data, dimA) || !this.objectDataHasAxis(data, dimB)) return;
       const origin = this.options.getObjectOrigin(start.instIdx);
 
       for (let i = 0; i < data.count; i++) {
@@ -1191,13 +1661,48 @@ export class TransformController {
     this.transformOp.objectStarts.forEach(start => {
       const target = this.getObjectTransformTarget(start.instIdx);
       if (!target) return;
-      target.scale.copy(start.startScale).multiplyScalar(scaleFactor);
-      const scaledOrigin = start.originWorldStart
-        .clone()
-        .sub(this.transformOp.pivotWorldStart)
-        .multiplyScalar(scaleFactor)
-        .add(this.transformOp.pivotWorldStart);
+      target.scale.copy(start.startScale);
+      const scaledOrigin = start.originWorldStart.clone().sub(this.transformOp.pivotWorldStart);
+      if (this.transformOp.lockAxis === 0) {
+        target.scale.x = start.startScale.x * scaleFactor;
+        scaledOrigin.x *= scaleFactor;
+      } else if (this.transformOp.lockAxis === 1) {
+        target.scale.y = start.startScale.y * scaleFactor;
+        scaledOrigin.y *= scaleFactor;
+      } else if (this.transformOp.lockAxis === 2) {
+        target.scale.z = start.startScale.z * scaleFactor;
+        scaledOrigin.z *= scaleFactor;
+      } else {
+        target.scale.multiplyScalar(scaleFactor);
+        scaledOrigin.multiplyScalar(scaleFactor);
+      }
+      scaledOrigin.add(this.transformOp.pivotWorldStart);
       target.pos.copy(start.startPos).add(scaledOrigin.sub(start.originWorldStart));
+    });
+  }
+
+  private applyObjectExtraScale(dx: number, dy: number) {
+    const dim = this.transformOp.extraAxisDim;
+    const delta = (dx - dy) * 0.005;
+    const scale = Math.max(0.1, Math.min(5, this.transformOp.startScale + delta));
+    const scaleFactor = scale / Math.max(this.transformOp.startScale, 1e-6);
+    const primaryStart = this.transformOp.objectStarts.find(start => start.instIdx === this.transformOp.instIdx)
+      ?? this.transformOp.objectStarts[0];
+    const pivot = primaryStart?.originDataStart?.[dim] ?? 0;
+
+    this.transformOp.objectStarts.forEach(start => {
+      const data = this.getObjectData(start.instIdx);
+      const origin = this.options.getObjectOrigin(start.instIdx);
+      if (!data || !start.objectDataStart || !this.objectDataHasAxis(data, dim)) return;
+      const offset = dim * data.count;
+      for (let i = 0; i < data.count; i++) {
+        const value = start.objectDataStart[offset + i];
+        data.src[offset + i] = pivot + ((value - pivot) * scaleFactor);
+      }
+      if (origin && start.originDataStart) {
+        const value = start.originDataStart[dim] ?? 0;
+        origin[dim] = pivot + ((value - pivot) * scaleFactor);
+      }
     });
   }
 
@@ -1330,11 +1835,4 @@ export class TransformController {
     return computeCenterFromPositions(this.options.getRendererND().positions, this.options.getM());
   }
 
-  private resetControlDrag() {
-    this.controlTransformDrag.active = false;
-    this.controlTransformDrag.started = false;
-    this.controlTransformDrag.pointerId = -1;
-    this.controlTransformDrag.mode = 'none';
-    this.controlTransformDrag.sourceButton = null;
-  }
 }

@@ -95,6 +95,7 @@ export class ViewportInteractionController {
     prevZoom: true,
     prevPan: true,
   };
+  private transformGizmoPrevControlsEnabled = true;
 
   constructor(private readonly options: ViewportInteractionControllerOptions) {}
 
@@ -133,7 +134,7 @@ export class ViewportInteractionController {
   }
 
   startTransformFromLastPointer(mode: TransformMode) {
-    this.options.transformController.startFromPointer(mode, this.lastPointer);
+    this.options.transformController.toggleTransformMode(mode);
   }
 
   deleteOrConfirmSelection() {
@@ -267,6 +268,7 @@ export class ViewportInteractionController {
 
   private handleTransformPointerMove(ev: PointerEvent) {
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
+    if (this.options.transformController.isGizmoDragging()) return;
     if (!this.options.transformController.isActive()) return;
     ev.preventDefault();
     this.options.transformController.applyPointer(ev.clientX, ev.clientY);
@@ -395,6 +397,12 @@ export class ViewportInteractionController {
     if (this.axisDrag.active) return;
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
 
+    if (ev.button === 0 && this.options.transformController.handleGizmoPointerDown(ev)) {
+      this.transformGizmoPrevControlsEnabled = this.options.controls.enabled;
+      this.options.controls.enabled = false;
+      return;
+    }
+
     if (this.options.transformController.isActive()) {
       if (ev.button === 0) {
         this.options.pushUndoSnapshot();
@@ -423,7 +431,7 @@ export class ViewportInteractionController {
   }
 
   private handleWindowPointerMove(ev: PointerEvent) {
-    if (this.options.transformController.handleControlPointerMove(ev, point => { this.lastPointer = point; })) return;
+    if (this.options.transformController.handleGizmoPointerMove(ev, point => { this.lastPointer = point; })) return;
     if (!this.axisDrag.active) return;
     if ((ev.buttons & 4) === 0) {
       this.endAxisShiftDrag();
@@ -448,16 +456,25 @@ export class ViewportInteractionController {
   }
 
   private handleWindowPointerUp(ev: PointerEvent) {
-    if (this.options.transformController.handleControlPointerEnd(ev, true)) return;
+    if (this.options.transformController.handleGizmoPointerEnd(ev, true)) {
+      this.options.controls.enabled = this.transformGizmoPrevControlsEnabled;
+      return;
+    }
     if (this.axisDrag.active) this.endAxisShiftDrag();
   }
 
   private handleWindowPointerCancel(ev: PointerEvent) {
-    this.options.transformController.handleControlPointerEnd(ev, false);
+    if (this.options.transformController.handleGizmoPointerEnd(ev, false)) {
+      this.options.controls.enabled = this.transformGizmoPrevControlsEnabled;
+      return;
+    }
     if (this.axisDrag.active) this.endAxisShiftDrag();
   }
 
   private handleWindowBlur() {
+    if (this.options.transformController.cancelGizmoDrag()) {
+      this.options.controls.enabled = this.transformGizmoPrevControlsEnabled;
+    }
     if (this.axisDrag.active) this.endAxisShiftDrag();
     this.options.keyboardCamera.clearKeys();
   }
@@ -874,9 +891,12 @@ export class ViewportInteractionController {
   private appendTransformAction(menu: HTMLDivElement, label: string, mode: TransformMode, ev: MouseEvent) {
     const btn = document.createElement('button');
     btn.textContent = label;
+    btn.disabled = !this.options.transformController.canUseTransformMode(mode);
+    if (btn.disabled) btn.title = 'Vertex selections can only be moved';
     btn.onclick = () => {
+      if (!this.options.transformController.canUseTransformMode(mode)) return;
       menu.style.display = 'none';
-      this.options.transformController.start(mode, ev);
+      this.options.transformController.setTransformMode(mode);
     };
     menu.appendChild(btn);
   }
