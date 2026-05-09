@@ -5424,7 +5424,7 @@ function updateEditModeToggle() {
   editModeToggle.setAttribute('aria-pressed', String(PARAMS.editMode));
 }
 
-function setEditMode(active: boolean) {
+function applyEditMode(active: boolean) {
   PARAMS.editMode = active;
   backgroundController.applySceneBackground(PARAMS.editMode);
   updateEditModeToggle();
@@ -5440,6 +5440,10 @@ function setEditMode(active: boolean) {
   updateSelectionOutline();
   updateTransformActionButtons();
   requestSceneUrlUpdate();
+}
+
+function setEditMode(active: boolean) {
+  runImmediateViewportOperation('set-edit-mode', 'viewport', () => applyEditMode(active));
 }
 
 function fullscreenAvailable() {
@@ -5617,6 +5621,13 @@ const lightMenuOptions: { label: string; kind: SceneLightKind }[] = [
   { label: 'Directional light', kind: 'directional' },
 ];
 
+const insertKeyframeOperation = () => {
+  runImmediateViewportOperation('insert-keyframe', 'viewport', () => animationTimeline?.addKeyframeAtCurrentFrame());
+};
+const removeKeyframeOperation = () => {
+  runImmediateViewportOperation('remove-keyframe', 'viewport', () => animationTimeline?.removeLastKeyframe());
+};
+
 viewportInteraction = new ViewportInteractionController({
   renderer,
   camera,
@@ -5657,8 +5668,8 @@ viewportInteraction = new ViewportInteractionController({
   updateEditBevel,
   commitEditBevel,
   cancelEditBevel,
-  insertKeyframe: () => animationTimeline?.addKeyframeAtCurrentFrame(),
-  removeLastKeyframe: () => animationTimeline?.removeLastKeyframe(),
+  insertKeyframe: insertKeyframeOperation,
+  removeLastKeyframe: removeKeyframeOperation,
   deleteSelected,
   deleteSelectedEditCell,
   hasActiveSelection,
@@ -5867,7 +5878,7 @@ const viewModeController = new ViewModeController({
   getMode: () => PARAMS.renderMode,
   setMode: mode => setViewMode(mode),
 });
-setViewMode = (mode: ViewMode) => {
+function applyViewMode(mode: ViewMode) {
   PARAMS.renderMode = mode;
   rendererND.setMode(mode);
   extraInstances.forEach(inst => {
@@ -5877,6 +5888,9 @@ setViewMode = (mode: ViewMode) => {
   viewModeController.syncButtons();
   backgroundController.syncForRenderMode();
   requestSceneUrlUpdate();
+}
+setViewMode = (mode: ViewMode) => {
+  runImmediateViewportOperation('set-view-mode', 'viewport', () => applyViewMode(mode));
 };
 viewModeController.bind();
 backgroundController.syncForRenderMode();
@@ -5945,8 +5959,8 @@ new KeyboardShortcutController({
   exportAnimation: () => viewportCapture.renderAnimation(),
   toggleAnimationPlayback: () => animationTimeline?.togglePlayback(),
   toggleAxisAutoRotations: () => axisController.toggleActiveAutoRotations(),
-  insertKeyframe: () => animationTimeline?.addKeyframeAtCurrentFrame(),
-  removeLastKeyframe: () => animationTimeline?.removeLastKeyframe(),
+  insertKeyframe: insertKeyframeOperation,
+  removeLastKeyframe: removeKeyframeOperation,
   toggleEditMode: () => setEditMode(!PARAMS.editMode),
   startTransformFromPointer: mode => viewportInteraction.startTransformFromLastPointer(mode),
   extrudeEditSelectionFromPointer: () => viewportInteraction.startEditExtrusionFromLastPointer(),

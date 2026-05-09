@@ -512,14 +512,14 @@ export class ViewportInteractionController {
     insert.textContent = 'Insert keyframe';
     insert.onclick = () => {
       menu.style.display = 'none';
-      this.runImmediateOperation('insert-keyframe', 'viewport', () => this.options.insertKeyframe());
+      this.options.insertKeyframe();
     };
 
     const remove = document.createElement('button');
     remove.textContent = 'Remove last keyframe';
     remove.onclick = () => {
       menu.style.display = 'none';
-      this.runImmediateOperation('remove-keyframe', 'viewport', () => this.options.removeLastKeyframe());
+      this.options.removeLastKeyframe();
     };
 
     menu.append(insert, remove);
