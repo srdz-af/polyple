@@ -3,9 +3,7 @@ import { ConvexHull, type Face } from 'three/examples/jsm/math/ConvexHull.js';
 import type { ViewMode } from '../constants';
 import {
   buildCellTopologyFromEdgesAndSurface,
-  cellCount,
   cloneCellTopology,
-  getCellVertices,
   surfaceTopologyFromCellTopology,
   type CellTopology,
 } from '../geometry/cellTopology';
@@ -63,10 +61,6 @@ export type SurfaceTopology = {
 type FaceInfo = {
   face: Face;
   planeConstant: number;
-};
-
-type IndexedSurfaceGeometryData = {
-  sourceIds: Uint32Array;
 };
 
 export class HypercubeRenderer {
@@ -397,12 +391,7 @@ export class HypercubeRenderer {
 
     const triangleCount = triangles.length / 3;
     if (triangleCount <= 0) return null;
-
-    if (this.mode !== 'faceted') {
-      return this.updateSmoothSurfaceGeometryFromTopology(topology, triangleCount);
-    }
-
-    const geometry = this.ensureFacetedTopologySurfaceGeometry(topology, triangleCount);
+    const geometry = this.ensureTopologySurfaceGeometry(topology, triangleCount);
     const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
     const positions = positionAttr.array as Float32Array;
 
@@ -435,35 +424,16 @@ export class HypercubeRenderer {
     return geometry;
   }
 
-  private updateSmoothSurfaceGeometryFromTopology(
-    topology: SurfaceTopology,
-    triangleCount: number,
-  ): THREE.BufferGeometry | null {
-    const geometry = this.ensureSmoothTopologySurfaceGeometry(topology, triangleCount);
-    const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
-    const positions = positionAttr.array as Float32Array;
-    const sourceIds = (geometry.userData as IndexedSurfaceGeometryData).sourceIds;
-    if (!sourceIds || sourceIds.length * 3 !== positions.length) return null;
-
-    let write = 0;
-    for (let idx = 0; idx < sourceIds.length; idx++) {
-      const point = this.points[sourceIds[idx]];
-      positions[write++] = point.x;
-      positions[write++] = point.y;
-      positions[write++] = point.z;
-    }
-
-    positionAttr.needsUpdate = true;
-    return geometry;
-  }
-
-  private ensureFacetedTopologySurfaceGeometry(topology: SurfaceTopology, triangleCount: number) {
-    const signature = `faceted:${topology.triangles.length}:${topology.facetIds.length}`;
+  private ensureTopologySurfaceGeometry(topology: SurfaceTopology, triangleCount: number) {
+    const needsColors = this.mode === 'faceted';
+    const signature = `${this.mode}:${topology.triangles.length}:${topology.facetIds.length}`;
     const currentPosition = this.mesh?.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
     const currentColor = this.mesh?.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
     const expectedPositionLength = triangleCount * 9;
     const hasExpectedPosition = (currentPosition?.array as ArrayLike<number> | undefined)?.length === expectedPositionLength;
-    const hasExpectedColor = (currentColor?.array as ArrayLike<number> | undefined)?.length === expectedPositionLength;
+    const hasExpectedColor = needsColors
+      ? (currentColor?.array as ArrayLike<number> | undefined)?.length === expectedPositionLength
+      : currentColor == null;
     if (this.mesh && this.surfaceGeometrySignature === signature && hasExpectedPosition && hasExpectedColor) {
       return this.mesh.geometry;
     }
@@ -474,19 +444,21 @@ export class HypercubeRenderer {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', positionAttr);
 
-    const colors = new Float32Array(expectedPositionLength);
-    let colorWrite = 0;
-    for (let i = 0; i < topology.facetIds.length; i++) {
-      const color = this.facetColorForFacet(topology.facetIds[i] ?? 0);
-      for (let v = 0; v < 3; v++) {
-        colors[colorWrite++] = color.r;
-        colors[colorWrite++] = color.g;
-        colors[colorWrite++] = color.b;
+    if (needsColors) {
+      const colors = new Float32Array(expectedPositionLength);
+      let colorWrite = 0;
+      for (let i = 0; i < topology.facetIds.length; i++) {
+        const color = this.facetColorForFacet(topology.facetIds[i] ?? 0);
+        for (let v = 0; v < 3; v++) {
+          colors[colorWrite++] = color.r;
+          colors[colorWrite++] = color.g;
+          colors[colorWrite++] = color.b;
+        }
       }
+      const colorAttr = new THREE.BufferAttribute(colors, 3);
+      colorAttr.setUsage(THREE.StaticDrawUsage);
+      geometry.setAttribute('color', colorAttr);
     }
-    const colorAttr = new THREE.BufferAttribute(colors, 3);
-    colorAttr.setUsage(THREE.StaticDrawUsage);
-    geometry.setAttribute('color', colorAttr);
 
     if (this.mesh) {
       this.mesh.geometry.dispose();
@@ -494,125 +466,6 @@ export class HypercubeRenderer {
     }
     this.surfaceGeometrySignature = signature;
     return geometry;
-  }
-
-  private ensureSmoothTopologySurfaceGeometry(topology: SurfaceTopology, triangleCount: number) {
-    const signature = `smooth:${topology.triangles.length}:${topology.facetIds.length}`;
-    const currentPosition = this.mesh?.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
-    const expectedIndexLength = triangleCount * 3;
-    const currentIndex = this.mesh?.geometry.index;
-    const currentSourceIds = this.mesh?.geometry.userData?.sourceIds as Uint32Array | undefined;
-    if (
-      this.mesh
-      && this.surfaceGeometrySignature === signature
-      && currentPosition
-      && currentIndex?.count === expectedIndexLength
-      && currentSourceIds
-      && currentSourceIds.length === currentPosition.count
-      && !this.mesh.geometry.getAttribute('color')
-    ) {
-      return this.mesh.geometry;
-    }
-
-    const smoothFacetGroups = this.buildSmoothFacetGroups();
-    const vertexByKey = new Map<string, number>();
-    const sourceIds: number[] = [];
-    const indices = new Uint32Array(expectedIndexLength);
-    for (let triangle = 0; triangle < triangleCount; triangle++) {
-      const facetId = topology.facetIds[triangle] ?? 0;
-      const group = smoothFacetGroups.get(facetId) ?? `facet:${facetId}`;
-      for (let corner = 0; corner < 3; corner++) {
-        const sourceId = topology.triangles[(triangle * 3) + corner];
-        const key = `${sourceId}:${group}`;
-        let indexedVertex = vertexByKey.get(key);
-        if (indexedVertex === undefined) {
-          indexedVertex = sourceIds.length;
-          sourceIds.push(sourceId);
-          vertexByKey.set(key, indexedVertex);
-        }
-        indices[(triangle * 3) + corner] = indexedVertex;
-      }
-    }
-
-    const positions = new Float32Array(sourceIds.length * 3);
-    const positionAttr = new THREE.BufferAttribute(positions, 3);
-    positionAttr.setUsage(THREE.DynamicDrawUsage);
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', positionAttr);
-    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-    geometry.userData.sourceIds = new Uint32Array(sourceIds);
-
-    if (this.mesh) {
-      this.mesh.geometry.dispose();
-      this.mesh.geometry = geometry;
-    }
-    this.surfaceGeometrySignature = signature;
-    return geometry;
-  }
-
-  private buildSmoothFacetGroups() {
-    const groups = new Map<number, string>();
-    if (this.cellTopology?.generatedKind !== 'edited') return groups;
-
-    const faceCount = cellCount(this.cellTopology, 2);
-    const triangleFaces = new Map<number, number[]>();
-    for (let faceId = 0; faceId < faceCount; faceId++) {
-      const vertices = getCellVertices(this.cellTopology, 2, faceId);
-      if (vertices.length === 3) triangleFaces.set(faceId & 0xffff, vertices);
-    }
-    if (triangleFaces.size <= 1) return groups;
-
-    const adjacency = new Map<number, Set<number>>();
-    const edgeOwner = new Map<string, number>();
-    const addAdjacent = (a: number, b: number) => {
-      let aSet = adjacency.get(a);
-      if (!aSet) {
-        aSet = new Set();
-        adjacency.set(a, aSet);
-      }
-      aSet.add(b);
-      let bSet = adjacency.get(b);
-      if (!bSet) {
-        bSet = new Set();
-        adjacency.set(b, bSet);
-      }
-      bSet.add(a);
-    };
-
-    for (const [faceId, vertices] of triangleFaces) {
-      for (let idx = 0; idx < 3; idx++) {
-        const a = vertices[idx];
-        const b = vertices[(idx + 1) % 3];
-        const edgeKey = a < b ? `${a}:${b}` : `${b}:${a}`;
-        const owner = edgeOwner.get(edgeKey);
-        if (owner !== undefined) addAdjacent(owner, faceId);
-        else edgeOwner.set(edgeKey, faceId);
-      }
-    }
-
-    const visited = new Set<number>();
-    let componentId = 0;
-    for (const faceId of triangleFaces.keys()) {
-      if (visited.has(faceId)) continue;
-      const stack = [faceId];
-      const component: number[] = [];
-      visited.add(faceId);
-      while (stack.length) {
-        const current = stack.pop() ?? faceId;
-        component.push(current);
-        for (const next of adjacency.get(current) ?? []) {
-          if (visited.has(next)) continue;
-          visited.add(next);
-          stack.push(next);
-        }
-      }
-
-      if (component.length <= 1) continue;
-      const group = `tri-component:${componentId++}`;
-      for (const entry of component) groups.set(entry, group);
-    }
-
-    return groups;
   }
 
   private buildSurfaceTopologyFromCurrentPoints(): SurfaceTopology | undefined {
