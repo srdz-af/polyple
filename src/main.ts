@@ -3907,7 +3907,156 @@ function buildBeveledVertexData(
 
     writeDimensionMajorBevelPoint(next, bevel.vertexCount, cut.vertex, point, sphere.origin, inward);
   }
+
+  smoothConcaveGeneratedBevelVertices(next, bevel.vertexCount, dimension, bevel, selectedVertex, sourceVertex => (
+    sphereFor(sourceVertex)?.origin
+  ));
   return next;
+}
+
+function readDimensionMajorPoint(
+  data: Float32Array,
+  vertexCount: number,
+  dimension: number,
+  vertex: number,
+) {
+  const point = new Float64Array(dimension);
+  for (let axis = 0; axis < dimension; axis++) point[axis] = data[(axis * vertexCount) + vertex] ?? 0;
+  return point;
+}
+
+function writeDimensionMajorPoint(
+  data: Float32Array,
+  vertexCount: number,
+  vertex: number,
+  point: ArrayLike<number>,
+) {
+  for (let axis = 0; axis < point.length; axis++) data[(axis * vertexCount) + vertex] = point[axis] ?? 0;
+}
+
+function averageBevelNeighbors(
+  data: Float32Array,
+  vertexCount: number,
+  dimension: number,
+  neighbors: number[],
+) {
+  const average = new Float64Array(dimension);
+  if (!neighbors.length) return average;
+  for (const neighbor of neighbors) {
+    for (let axis = 0; axis < dimension; axis++) {
+      average[axis] += (data[(axis * vertexCount) + neighbor] ?? 0) / neighbors.length;
+    }
+  }
+  return average;
+}
+
+function isConcaveAgainstBevelOneRing(
+  data: Float32Array,
+  vertexCount: number,
+  dimension: number,
+  vertex: number,
+  neighbors: number[],
+  origin: ArrayLike<number>,
+) {
+  const point = readDimensionMajorPoint(data, vertexCount, dimension, vertex);
+  const radial = new Float64Array(dimension);
+  for (let axis = 0; axis < dimension; axis++) radial[axis] = point[axis] - (origin[axis] ?? 0);
+  const radialLength = vectorLength(radial);
+  if (radialLength <= 1e-8) return false;
+
+  const average = averageBevelNeighbors(data, vertexCount, dimension, neighbors);
+  const averageDelta = new Float64Array(dimension);
+  for (let axis = 0; axis < dimension; axis++) averageDelta[axis] = average[axis] - point[axis];
+  const outwardAverage = vectorDot(averageDelta, radial) / radialLength;
+  if (outwardAverage <= Math.max(1e-6, radialLength * 0.004)) return false;
+
+  let outwardNeighbors = 0;
+  for (const neighbor of neighbors) {
+    const delta = new Float64Array(dimension);
+    for (let axis = 0; axis < dimension; axis++) {
+      delta[axis] = (data[(axis * vertexCount) + neighbor] ?? 0) - point[axis];
+    }
+    if (vectorDot(delta, radial) / radialLength > Math.max(1e-6, radialLength * 0.002)) outwardNeighbors++;
+  }
+  return outwardNeighbors >= Math.min(2, neighbors.length);
+}
+
+function smoothConcaveGeneratedBevelVertices(
+  data: Float32Array,
+  vertexCount: number,
+  dimension: number,
+  bevel: BevelVertexResult,
+  selectedVertex: number,
+  originForSource: (sourceVertex: number) => ArrayLike<number> | undefined,
+) {
+  if (dimension <= 0 || !bevel.cuts.length) return;
+
+  const generatedBySource = new Map<number, Set<number>>();
+  for (const cut of bevel.cuts) {
+    const sourceVertex = cut.sourceVertex ?? selectedVertex;
+    if (sourceVertex < 0 || cut.vertex < 0 || cut.vertex >= vertexCount) continue;
+    let generated = generatedBySource.get(sourceVertex);
+    if (!generated) {
+      generated = new Set<number>();
+      generatedBySource.set(sourceVertex, generated);
+    }
+    generated.add(cut.vertex);
+  }
+
+  const faces: number[][] = [];
+  for (let faceId = 0; faceId < cellCount(bevel.topology, 2); faceId++) {
+    const face = getCellVertices(bevel.topology, 2, faceId);
+    if (face.length >= 3) faces.push(face);
+  }
+  if (!faces.length) return;
+
+  const smoothOnce = () => {
+    let smoothed = 0;
+    for (const [sourceVertex, generated] of generatedBySource) {
+      const origin = originForSource(sourceVertex);
+      if (!origin) continue;
+
+      const adjacency = new Map<number, Set<number>>();
+      const addNeighbor = (a: number, b: number) => {
+        if (a === b || !generated.has(a) || !generated.has(b)) return;
+        let neighbors = adjacency.get(a);
+        if (!neighbors) {
+          neighbors = new Set<number>();
+          adjacency.set(a, neighbors);
+        }
+        neighbors.add(b);
+      };
+
+      for (const face of faces) {
+        for (let idx = 0; idx < face.length; idx++) {
+          const a = face[idx];
+          const b = face[(idx + 1) % face.length];
+          addNeighbor(a, b);
+          addNeighbor(b, a);
+        }
+      }
+
+      const updates: Array<{ vertex: number; point: Float64Array }> = [];
+      for (const vertex of generated) {
+        const neighbors = Array.from(adjacency.get(vertex) ?? []);
+        if (neighbors.length < 2) continue;
+        if (!isConcaveAgainstBevelOneRing(data, vertexCount, dimension, vertex, neighbors, origin)) continue;
+        updates.push({
+          vertex,
+          point: averageBevelNeighbors(data, vertexCount, dimension, neighbors),
+        });
+      }
+
+      for (const update of updates) {
+        writeDimensionMajorPoint(data, vertexCount, update.vertex, update.point);
+        smoothed++;
+      }
+    }
+    return smoothed;
+  };
+
+  // Two conservative passes catch one-ring dents without globally blurring the bevel patch.
+  if (smoothOnce() > 0) smoothOnce();
 }
 
 function buildBeveledEdgeData(
