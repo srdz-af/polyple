@@ -172,9 +172,9 @@ export class ViewportInteractionController {
       blocksCamera: true,
       blocksSelection: true,
       blocksContextMenu: true,
-      updatePointer: point => {
+      updatePointer: (point, pointerEvent) => {
         this.lastPointer = { x: point.clientX, y: point.clientY };
-        this.options.transformController.applyPointer(point.clientX, point.clientY);
+        this.options.transformController.applyPointer(point.clientX, point.clientY, !!pointerEvent?.ctrlKey);
         return true;
       },
       commit: () => {
@@ -419,7 +419,7 @@ export class ViewportInteractionController {
     if (this.options.transformController.isGizmoDragging()) return;
     if (!this.options.transformController.isActive()) return;
     ev.preventDefault();
-    this.options.transformController.applyPointer(ev.clientX, ev.clientY);
+    this.options.transformController.applyPointer(ev.clientX, ev.clientY, ev.ctrlKey);
   }
 
   private handleContextMenu(ev: MouseEvent) {

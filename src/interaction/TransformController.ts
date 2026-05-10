@@ -1480,7 +1480,7 @@ export class TransformController {
     if (!this.gizmoDrag.active || ev.pointerId !== this.gizmoDrag.pointerId) return false;
     ev.preventDefault();
     setLastPointer({ x: ev.clientX, y: ev.clientY });
-    this.applyPointer(ev.clientX, ev.clientY);
+    this.applyPointer(ev.clientX, ev.clientY, ev.ctrlKey);
     return true;
   }
 
@@ -1505,16 +1505,16 @@ export class TransformController {
     return this.gizmoDrag.active;
   }
 
-  applyPointer(clientX: number, clientY: number) {
+  applyPointer(clientX: number, clientY: number, snapToInteger = false) {
     if (this.transformOp.mode === 'none') return;
 
     const dx = clientX - this.transformOp.startMouse.x;
     const dy = clientY - this.transformOp.startMouse.y;
 
     if (this.transformOp.targetVertices.length > 0) {
-      if (!this.applyEditTransform(clientX, clientY, dx, dy)) return;
+      if (!this.applyEditTransform(clientX, clientY, dx, dy, snapToInteger)) return;
     } else {
-      this.applyObjectTransform(clientX, clientY, dx, dy);
+      this.applyObjectTransform(clientX, clientY, dx, dy, snapToInteger);
     }
 
     this.options.projectAndRenderAll();
@@ -1522,7 +1522,16 @@ export class TransformController {
     this.updateAxisGuide();
   }
 
-  private applyEditTransform(clientX: number, clientY: number, dx: number, dy: number) {
+  private snapVectorToInteger(value: THREE.Vector3) {
+    value.set(
+      Math.round(value.x),
+      Math.round(value.y),
+      Math.round(value.z),
+    );
+    return value;
+  }
+
+  private applyEditTransform(clientX: number, clientY: number, dx: number, dy: number, snapToInteger: boolean) {
     const rect = this.options.renderer.domElement.getBoundingClientRect();
     this.options.ndc.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
     this.options.raycaster.setFromCamera(this.options.ndc, this.options.camera);
@@ -1534,7 +1543,7 @@ export class TransformController {
     const locked = this.transformOp.lockAxis;
     const center = this.transformOp.vertexStart;
     const targets: THREE.Vector3[] = [];
-    if (this.transformOp.extraAxisDim >= 0) return this.applyEditExtraTransform(dx, dy);
+    if (this.transformOp.extraAxisDim >= 0) return this.applyEditExtraTransform(dx, dy, snapToInteger);
 
     if (this.transformOp.mode === 'move') {
       const targetCenter = hit.clone().add(this.transformOp.moveOffset);
@@ -1605,6 +1614,10 @@ export class TransformController {
       return false;
     }
 
+    if (snapToInteger && this.transformOp.mode === 'move') {
+      targets.forEach(target => this.snapVectorToInteger(target));
+    }
+
     for (let i = 0; i < this.transformOp.targetVertices.length; i++) {
       if (!this.setDraggedVertexFromWorldPosition(
         this.transformOp.instIdx,
@@ -1619,7 +1632,7 @@ export class TransformController {
     return true;
   }
 
-  private applyEditExtraTransform(dx: number, dy: number) {
+  private applyEditExtraTransform(dx: number, dy: number, snapToInteger: boolean) {
     const data = this.getObjectData(this.transformOp.instIdx);
     const sourceStart = this.transformOp.vertexDataStart;
     const dim = this.transformOp.extraAxisDim;
@@ -1629,7 +1642,8 @@ export class TransformController {
     const delta = this.pointerExtraDelta(dx, dy, this.transformOp.vertexStart);
     if (this.transformOp.mode === 'move') {
       for (const vertex of this.transformOp.targetVertices) {
-        data.src[offset + vertex] = sourceStart[offset + vertex] + delta;
+        const value = sourceStart[offset + vertex] + delta;
+        data.src[offset + vertex] = snapToInteger ? Math.round(value) : value;
       }
       return true;
     }
@@ -1875,10 +1889,11 @@ export class TransformController {
     clientY: number,
     dx: number,
     dy: number,
+    snapToInteger: boolean,
   ) {
     if (this.transformOp.mode === 'move') {
       if (this.transformOp.extraAxisDim >= 0) {
-        this.applyObjectExtraMove(dx, dy);
+        this.applyObjectExtraMove(dx, dy, snapToInteger);
         return;
       }
       const rect = this.options.renderer.domElement.getBoundingClientRect();
@@ -1900,7 +1915,7 @@ export class TransformController {
         delta.x = 0;
         delta.y = 0;
       }
-      this.transformOp.objectStarts.forEach(start => this.applyObjectMove(start, delta));
+      this.transformOp.objectStarts.forEach(start => this.applyObjectMove(start, delta, snapToInteger));
       this.transformOp.lastHit.copy(hit);
       return;
     }
@@ -1923,17 +1938,19 @@ export class TransformController {
     }
   }
 
-  private applyObjectMove(start: ObjectTransformStart, delta: THREE.Vector3) {
+  private applyObjectMove(start: ObjectTransformStart, delta: THREE.Vector3, snapToInteger: boolean) {
     if (start.lightPositionStart) {
-      this.options.setLightPosition(start.instIdx, start.lightPositionStart.clone().add(delta));
+      const position = start.lightPositionStart.clone().add(delta);
+      this.options.setLightPosition(start.instIdx, snapToInteger ? this.snapVectorToInteger(position) : position);
       return;
     }
     const target = this.getObjectTransformTarget(start.instIdx);
     if (!target) return;
     target.pos.copy(start.startPos).add(delta);
+    if (snapToInteger) this.snapVectorToInteger(target.pos);
   }
 
-  private applyObjectExtraMove(dx: number, dy: number) {
+  private applyObjectExtraMove(dx: number, dy: number, snapToInteger: boolean) {
     const dim = this.transformOp.extraAxisDim;
     const delta = this.pointerExtraDelta(dx, dy, this.transformOp.pivotWorldStart);
     this.transformOp.objectStarts.forEach(start => {
@@ -1942,9 +1959,13 @@ export class TransformController {
       if (!data || !start.objectDataStart || !this.objectDataHasAxis(data, dim)) return;
       const offset = dim * data.count;
       for (let i = 0; i < data.count; i++) {
-        data.src[offset + i] = start.objectDataStart[offset + i] + delta;
+        const value = start.objectDataStart[offset + i] + delta;
+        data.src[offset + i] = snapToInteger ? Math.round(value) : value;
       }
-      if (origin && start.originDataStart) origin[dim] = (start.originDataStart[dim] ?? 0) + delta;
+      if (origin && start.originDataStart) {
+        const value = (start.originDataStart[dim] ?? 0) + delta;
+        origin[dim] = snapToInteger ? Math.round(value) : value;
+      }
     });
   }
 
