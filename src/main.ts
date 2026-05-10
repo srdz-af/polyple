@@ -48,7 +48,7 @@ import { KeyboardCameraController } from './controls/KeyboardCameraController';
 import { KeyboardShortcutController } from './interaction/KeyboardShortcutController';
 import { TransformController } from './interaction/TransformController';
 import { ViewportInteractionController } from './interaction/ViewportInteractionController';
-import { createFadingGrid } from './viewport/grid';
+import { createBidirectionalAxes, createFadingGrid } from './viewport/grid';
 import { AxisGizmoController } from './ui/AxisGizmoController';
 import { ModalOverlayController } from './ui/ModalOverlayController';
 import { ObjectListController } from './ui/ObjectListController';
@@ -967,10 +967,9 @@ const sceneLightDrag = {
   startPosition: new THREE.Vector3(),
   startTarget: new THREE.Vector3(),
 };
-const axes = new THREE.AxesHelper(1000);
-axes.position.set(0, -0.6, 0);
+const axes = createBidirectionalAxes(1000);
 scene.add(axes);
-const gridGroup = createFadingGrid({ y: -0.6 });
+const gridGroup = createFadingGrid({ y: 0 });
 scene.add(gridGroup);
 const referenceLineDepthMaterial = new THREE.MeshBasicMaterial();
 referenceLineDepthMaterial.colorWrite = false;

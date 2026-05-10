@@ -24,7 +24,7 @@ export function createFadingGrid(options: FadingGridOptions = {}) {
   const gridFadeBuckets = options.fadeBuckets ?? 36;
   const gridColor = options.color ?? 0x3a414f;
   const gridBuckets = Array.from({ length: gridFadeBuckets }, () => [] as number[]);
-  gridGroup.position.y = options.y ?? -0.6;
+  gridGroup.position.y = options.y ?? 0;
 
   const gridFadeAt = (x: number, z: number) => {
     const radial = Math.hypot(x, z) / gridRadius;
@@ -77,4 +77,23 @@ export function createFadingGrid(options: FadingGridOptions = {}) {
   }
 
   return gridGroup;
+}
+
+export function createBidirectionalAxes(size = 1000) {
+  const positions = new Float32Array([
+    -size, 0, 0, size, 0, 0,
+    0, -size, 0, 0, size, 0,
+    0, 0, -size, 0, 0, size,
+  ]);
+  const colors = new Float32Array(18);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  const material = new THREE.LineBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.9,
+    depthWrite: false,
+  });
+  return new THREE.LineSegments(geometry, material);
 }

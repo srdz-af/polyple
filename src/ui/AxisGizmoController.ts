@@ -32,7 +32,7 @@ type AxisGizmoControllerOptions = {
   camera: THREE.PerspectiveCamera;
   controls: OrbitControls;
   worldUp: THREE.Vector3;
-  axesHelper: THREE.AxesHelper;
+  axesHelper: THREE.LineSegments;
   getParams: () => AxisParams;
   getN: () => number;
   getRot: () => RotND;
