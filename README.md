@@ -1,19 +1,19 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="public/logo_dark.png">
   <source media="(prefers-color-scheme: light)" srcset="public/logo_light.png">
-  <img alt="BleND logo" src="public/logo_light.png">
+  <img alt="Polyple logo" src="public/logo_light.png">
 </picture>
 
-# BleND
+# Polyple
 
-BleND is an interactive N-dimensional geometry viewer built with **Three.js**.
+Polyple is an interactive N-dimensional geometry viewer built with **Three.js**.
 
 It lets you create, inspect, transform, and edit high-dimensional objects, then project them into 3D.
 
 <video src="public/preview.webm" controls autoplay loop muted playsinline width="100%"></video>
 
 Live demo:
-https://srdz-af.github.io/BleND/
+https://polyple.xyz/
 
 ## What It Supports
 
