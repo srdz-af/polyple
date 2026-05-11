@@ -66,6 +66,7 @@ import { ObjectListController } from './ui/ObjectListController';
 import { PaneController } from './ui/PaneController';
 import { TextureEditorController } from './ui/TextureEditorController';
 import { ViewModeController } from './ui/ViewModeController';
+import { WelcomeSplashController } from './ui/WelcomeSplashController';
 import { ViewportCaptureController } from './viewport/ViewportCaptureController';
 import { HypercubeRenderer } from './rendering/HypercubeRenderer';
 import {
@@ -122,7 +123,6 @@ import type {
   TransformState,
 } from './scene/types';
 import type { ExtraAxisGizmoState } from './ui/ExtraAxisGizmoController';
-import { safeLocalStorageGet, safeLocalStorageSet } from './utils/localStorage';
 
 type PrimitiveMode = PrimitiveKind;
 type SceneLightDragHandle = 'position' | 'target';
@@ -730,14 +730,20 @@ const sceneLightShadowValue = document.getElementById('scene-light-shadow-value'
 const sceneLightColorInput = document.getElementById('scene-light-color') as HTMLInputElement | null;
 const sceneLightColorValue = document.getElementById('scene-light-color-value') as HTMLOutputElement | null;
 const sceneLightIntensityInput = document.getElementById('scene-light-intensity') as HTMLInputElement | null;
-const WELCOME_SPLASH_HIDDEN_KEY = 'polyple.welcomeSplashHidden';
-const RECENT_SCENE_PAYLOADS_KEY = 'polyple.recentScenePayloads';
-const MAX_RECENT_SCENES = 5;
-type RecentSceneEntry = { payload: string; name: string };
 const sceneControlTabButtons = Array.from(document.querySelectorAll('[data-scene-control-tab]')) as HTMLButtonElement[];
 const sceneControlPanels = Array.from(document.querySelectorAll('[data-scene-control-panel]')) as HTMLElement[];
 const modalOverlayController = new ModalOverlayController();
 const paneController = new PaneController();
+const welcomeSplashController = new WelcomeSplashController(
+  {
+    splash: welcomeSplash,
+    recentList: welcomeRecentList,
+    dontShowInput: welcomeDontShowInput,
+  },
+  {
+    loadPayload: async payload => sanitizeSceneName((await loadSceneUrlPayload(payload, false)).sn),
+  },
+);
 
 function setSceneControlTab(tab: string) {
   sceneControlTabButtons.forEach(button => {
@@ -2447,132 +2453,6 @@ async function initializeSceneUrlState(loadDefault = false) {
   }
 }
 
-function normalizeRecentSceneEntry(value: unknown): RecentSceneEntry | null {
-  if (typeof value === 'string') {
-    const payload = readScenePayloadFromText(value);
-    return payload ? { payload, name: '' } : null;
-  }
-  if (typeof value !== 'object' || value === null) return null;
-  const raw = value as { p?: unknown; payload?: unknown; n?: unknown; name?: unknown };
-  const payloadSource = typeof raw.p === 'string' ? raw.p : raw.payload;
-  const payload = typeof payloadSource === 'string' ? readScenePayloadFromText(payloadSource) : null;
-  if (!payload) return null;
-  return {
-    payload,
-    name: sanitizeSceneName(typeof raw.n === 'string' ? raw.n : raw.name),
-  };
-}
-
-function packedSceneName(state: PackedSceneUrlState | null | undefined) {
-  return sanitizeSceneName(state?.sn);
-}
-
-function readRecentSceneEntries() {
-  try {
-    const raw = safeLocalStorageGet(RECENT_SCENE_PAYLOADS_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return [];
-    const seen = new Set<string>();
-    const entries: RecentSceneEntry[] = [];
-    for (const value of parsed) {
-      const entry = normalizeRecentSceneEntry(value);
-      if (!entry || seen.has(entry.payload)) continue;
-      seen.add(entry.payload);
-      entries.push(entry);
-      if (entries.length >= MAX_RECENT_SCENES) break;
-    }
-    return entries;
-  } catch {
-    return [];
-  }
-}
-
-function writeRecentSceneEntries(entries: RecentSceneEntry[]) {
-  const stored = safeLocalStorageSet(RECENT_SCENE_PAYLOADS_KEY, JSON.stringify(entries.slice(0, MAX_RECENT_SCENES).map(entry => ({
-    p: entry.payload,
-    n: entry.name || undefined,
-  }))));
-  if (!stored) console.warn('Unable to store recent scene list');
-}
-
-function rememberRecentScenePayload(payload: string, name = '') {
-  const normalizedPayload = readScenePayloadFromText(payload);
-  if (!normalizedPayload) return;
-  const normalizedName = sanitizeSceneName(name);
-  const existing = readRecentSceneEntries().find(entry => entry.payload === normalizedPayload);
-  const entries = readRecentSceneEntries().filter(entry => entry.payload !== normalizedPayload);
-  entries.unshift({ payload: normalizedPayload, name: normalizedName || existing?.name || '' });
-  writeRecentSceneEntries(entries);
-  renderWelcomeRecentScenes();
-}
-
-function shortScenePayload(payload: string) {
-  if (payload.length <= 22) return payload;
-  return `${payload.slice(0, 11)}...${payload.slice(-8)}`;
-}
-
-function renderWelcomeRecentScenes() {
-  if (!welcomeRecentList) return;
-  welcomeRecentList.textContent = '';
-  const entries = readRecentSceneEntries();
-  if (!entries.length) {
-    const empty = document.createElement('div');
-    empty.id = 'welcome-recent-empty';
-    empty.textContent = 'No saved scenes yet.';
-    welcomeRecentList.appendChild(empty);
-    return;
-  }
-
-  entries.forEach((entry, idx) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'welcome-recent-scene';
-    const name = entry.name || `Scene ${idx + 1}`;
-    button.title = `Load ${name}`;
-    button.setAttribute('aria-label', `Load ${name}`);
-
-    const label = document.createElement('span');
-    label.textContent = name;
-    const hash = document.createElement('span');
-    hash.textContent = shortScenePayload(entry.payload);
-    button.append(label, hash);
-    button.addEventListener('click', () => {
-      void loadRecentScenePayload(entry.payload);
-    });
-    welcomeRecentList.appendChild(button);
-  });
-}
-
-function shouldShowWelcomeSplash() {
-  return safeLocalStorageGet(WELCOME_SPLASH_HIDDEN_KEY) !== '1';
-}
-
-function hideWelcomeSplash(persistPreference = false) {
-  if (persistPreference || welcomeDontShowInput?.checked) {
-    if (!safeLocalStorageSet(WELCOME_SPLASH_HIDDEN_KEY, '1')) {
-      console.warn('Unable to store welcome splash preference');
-    }
-  }
-  if (welcomeSplash) welcomeSplash.hidden = true;
-}
-
-function showWelcomeSplashIfNeeded() {
-  if (!welcomeSplash || !shouldShowWelcomeSplash()) return;
-  renderWelcomeRecentScenes();
-  welcomeSplash.hidden = false;
-}
-
-async function loadRecentScenePayload(payload: string) {
-  try {
-    const state = await loadSceneUrlPayload(payload, false);
-    rememberRecentScenePayload(payload, packedSceneName(state));
-    hideWelcomeSplash();
-  } catch (err) {
-    console.warn('Unable to load recent scene URL state', err);
-    window.alert('Unable to load recent scene.');
-  }
-}
-
 function requestSceneNameForSave() {
   const currentName = sanitizeSceneName(sceneName);
   const value = window.prompt('Scene name (optional)', currentName || baseLabel || '');
@@ -2589,7 +2469,7 @@ async function saveSceneStateFile() {
   try {
     const nextSceneName = requestSceneNameForSave();
     const payload = await encodeSceneUrlPayload(captureSceneUrlState(nextSceneName));
-    rememberRecentScenePayload(payload, nextSceneName);
+    welcomeSplashController.rememberScene(payload, nextSceneName);
     const sceneUrl = createSceneUrlWithPayload(payload);
     downloadTextFile(sceneUrl, sceneStateFileName());
     let copied = true;
@@ -2617,8 +2497,8 @@ async function loadSceneStateFile(file: File | null | undefined) {
     const payload = readScenePayloadFromText(await file.text());
     if (!payload) throw new Error('Scene file does not contain a valid scene URL.');
     const state = await loadSceneUrlPayload(payload, false);
-    rememberRecentScenePayload(payload, packedSceneName(state));
-    hideWelcomeSplash();
+    welcomeSplashController.rememberScene(payload, sanitizeSceneName(state.sn));
+    welcomeSplashController.hide();
     return true;
   } catch (err) {
     console.warn('Unable to load scene URL state', err);
@@ -5723,9 +5603,9 @@ sceneRedoButton?.addEventListener('click', () => redoSceneSnapshot());
 sceneSaveButton?.addEventListener('click', () => void saveSceneStateFile());
 sceneLoadButton?.addEventListener('click', () => sceneLoadInput?.click());
 welcomeLoadSceneButton?.addEventListener('click', () => sceneLoadInput?.click());
-welcomeCloseButton?.addEventListener('click', () => hideWelcomeSplash());
+welcomeCloseButton?.addEventListener('click', () => welcomeSplashController.hide());
 welcomeSplash?.addEventListener('click', ev => {
-  if (ev.target === welcomeSplash) hideWelcomeSplash();
+  if (ev.target === welcomeSplash) welcomeSplashController.hide();
 });
 sceneLoadInput?.addEventListener('change', () => {
   void loadSceneStateFile(sceneLoadInput.files?.[0]);
@@ -5802,7 +5682,7 @@ const startupScenePayload = readScenePayloadFromUrl();
 void backgroundSelectorReady
   .then(async () => {
     await initializeSceneUrlState(true);
-    if (!startupScenePayload) showWelcomeSplashIfNeeded();
+    if (!startupScenePayload) welcomeSplashController.showIfNeeded();
   })
   .catch(err => {
     console.warn('Unable to initialize scene URL state', err);
