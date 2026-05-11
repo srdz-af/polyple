@@ -33,7 +33,9 @@ import {
   bevelVertices,
   deleteCellAndPrune,
   extrudeCell,
+  extrudeCells,
   insetCell,
+  insetCells,
   getCellVertices,
   type BevelEdgeResult,
   type BevelFaceBoundaryResult,
@@ -226,9 +228,22 @@ type DuplicatePlacement = {
 };
 type EditExtrusionToken = {
   undoSnapshot: PackedSceneUrlState;
+  mode: EditOperationMode;
+  instIdx: number;
+  dimension: number;
+  cellId: number;
+  cellIds: number[];
+  amount: number;
+  extrudeGroups: Array<{
+    sourceVertices: number[];
+    capVertices: number[];
+    directions: Float64Array[];
+  }>;
+  original: EditBevelGeometrySnapshot;
 };
 type EditInsetToken = {
   undoSnapshot: PackedSceneUrlState;
+  mode: EditOperationMode;
   instIdx: number;
   dimension: number;
   cellId: number;
@@ -239,6 +254,7 @@ type EditInsetToken = {
   insetGroups: Array<{
     sourceVertices: number[];
     insetVertices: number[];
+    cellVertices: number[][];
   }>;
   amount: number;
   original: EditBevelGeometrySnapshot;
@@ -252,6 +268,7 @@ type EditBevelGeometrySnapshot = {
 };
 type EditBevelToken = {
   undoSnapshot: PackedSceneUrlState;
+  mode: EditOperationMode;
   kind: 'vertex' | 'edge';
   inward: boolean;
   instIdx: number;
@@ -267,6 +284,8 @@ type EditBevelToken = {
   applied: boolean;
   original: EditBevelGeometrySnapshot;
 };
+
+type EditOperationMode = 'grouped' | 'individual';
 
 const DEFAULT_BLOOM_INTENSITY = 0;
 const DEFAULT_MOTION_BLUR_INTENSITY = 0;
@@ -3807,13 +3826,13 @@ function blenderStyleBevelCapPoint(
   weights: number[],
   segments: number,
 ) {
-  if (neighbors.length !== 3) return null;
+  if (neighbors.length < 3) return null;
   const total = weights.reduce((sum, weight) => sum + Math.max(0, weight), 0);
   if (total <= 1e-8) return null;
 
   const normalized = weights.map(weight => Math.max(0, weight) / total);
-  const minWeight = Math.min(normalized[0], normalized[1], normalized[2]);
-  const centerT = Math.min(1, Math.max(0, minWeight * 3));
+  const minWeight = Math.min(...normalized);
+  const centerT = Math.min(1, Math.max(0, minWeight * neighbors.length));
 
   const endpoints = neighbors.map(neighbor => bevelEndpointPoint(sphere, neighbor));
   if (endpoints.some(point => !point)) return null;
@@ -3832,7 +3851,7 @@ function blenderStyleBevelCapPoint(
 
   if (centerT >= 1 - 1e-8) return center;
 
-  const boundaryScale = 1 - (3 * minWeight);
+  const boundaryScale = 1 - (neighbors.length * minWeight);
   const boundaryWeights = boundaryScale > 1e-8
     ? normalized.map(weight => (weight - minWeight) / boundaryScale)
     : normalized;
@@ -3846,6 +3865,357 @@ function blenderStyleBevelCapPoint(
   return point;
 }
 
+type AdjacentBevelVMesh = {
+  count: number;
+  seg: number;
+  dimension: number;
+  points: Array<Float64Array | undefined>;
+};
+
+function bevelVMeshIndex(vm: AdjacentBevelVMesh, side: number, ring: number, segment: number) {
+  const ringCount = Math.floor(vm.seg / 2) + 1;
+  return (((side * ringCount) + ring) * (vm.seg + 1)) + segment;
+}
+
+function bevelVMeshCanonical(vm: AdjacentBevelVMesh, side: number, ring: number, segment: number) {
+  const count = vm.count;
+  const seg = vm.seg;
+  const half = Math.floor(seg / 2);
+  const odd = seg % 2;
+  const normalizedSide = ((side % count) + count) % count;
+  if (!odd && ring === half && segment === half) return [0, ring, segment] as const;
+  if (ring <= half - 1 + odd && segment <= half) return [normalizedSide, ring, segment] as const;
+  if (segment <= half) return [((normalizedSide + count - 1) % count), segment, seg - ring] as const;
+  return [((normalizedSide + 1) % count), seg - segment, ring] as const;
+}
+
+function createAdjacentBevelVMesh(count: number, seg: number, dimension: number): AdjacentBevelVMesh {
+  const ringCount = Math.floor(seg / 2) + 1;
+  return {
+    count,
+    seg,
+    dimension,
+    points: new Array(count * ringCount * (seg + 1)),
+  };
+}
+
+function cloneVector(vector: ArrayLike<number>) {
+  return Float64Array.from(Array.from({ length: vector.length }, (_entry, index) => vector[index] ?? 0));
+}
+
+function zeroVector(dimension: number) {
+  return new Float64Array(dimension);
+}
+
+function addScaledVector(target: Float64Array, vector: ArrayLike<number>, scale: number) {
+  for (let dim = 0; dim < target.length; dim++) target[dim] += (vector[dim] ?? 0) * scale;
+}
+
+function scaleVector(vector: Float64Array, scale: number) {
+  for (let dim = 0; dim < vector.length; dim++) vector[dim] *= scale;
+  return vector;
+}
+
+function averageVectors(vectors: Array<ArrayLike<number>>, dimension: number) {
+  const result = zeroVector(dimension);
+  if (!vectors.length) return result;
+  for (const vector of vectors) addScaledVector(result, vector, 1 / vectors.length);
+  return result;
+}
+
+function setBevelVMeshPoint(
+  vm: AdjacentBevelVMesh,
+  side: number,
+  ring: number,
+  segment: number,
+  point: ArrayLike<number>,
+) {
+  const [canonicalSide, canonicalRing, canonicalSegment] = bevelVMeshCanonical(vm, side, ring, segment);
+  vm.points[bevelVMeshIndex(vm, canonicalSide, canonicalRing, canonicalSegment)] = cloneVector(point);
+}
+
+function getBevelVMeshPoint(
+  vm: AdjacentBevelVMesh,
+  side: number,
+  ring: number,
+  segment: number,
+) {
+  const [canonicalSide, canonicalRing, canonicalSegment] = bevelVMeshCanonical(vm, side, ring, segment);
+  return vm.points[bevelVMeshIndex(vm, canonicalSide, canonicalRing, canonicalSegment)] ?? zeroVector(vm.dimension);
+}
+
+function bevelProfileFallbackPoint(sphere: BevelSphereBase, fromNeighbor: number, toNeighbor: number, t: number) {
+  const from = bevelEndpointPoint(sphere, fromNeighbor);
+  const to = bevelEndpointPoint(sphere, toNeighbor);
+  if (!from || !to) return null;
+  const point = zeroVector(sphere.dimension);
+  addScaledVector(point, from, 1 - t);
+  addScaledVector(point, to, t);
+  return point;
+}
+
+function bevelPatchProfilePoint(
+  sphere: BevelSphereBase,
+  orderedNeighbors: number[],
+  side: number,
+  segment: number,
+  segments: number,
+) {
+  const count = orderedNeighbors.length;
+  const from = orderedNeighbors[((side % count) + count) % count];
+  const to = orderedNeighbors[(side + 1) % count];
+  if (segment <= 0) return bevelEndpointPoint(sphere, from);
+  if (segment >= segments) return bevelEndpointPoint(sphere, to);
+  return bevelArcPoint(sphere, from, to, segments - segment, segment)
+    ?? bevelProfileFallbackPoint(sphere, from, to, segment / segments);
+}
+
+function sabinGamma(valence: number) {
+  if (valence < 3) return 0;
+  if (valence === 3) return 0.065247584;
+  if (valence === 4) return 0.25;
+  if (valence === 5) return 0.401983447;
+  if (valence === 6) return 0.523423277;
+  const k = Math.cos(Math.PI / valence);
+  const k2 = k * k;
+  const k4 = k2 * k2;
+  const k6 = k4 * k2;
+  const y = Math.cbrt((Math.sqrt(3) * Math.sqrt((64 * k6) - (144 * k4) + (135 * k2) - 27)) + (9 * k));
+  const x = (0.480749856769136 * y) - ((0.231120424783545 * ((12 * k2) - 9)) / y);
+  return ((k * x) + (2 * k2) - 1) / (x * x * ((k * x) + 1));
+}
+
+function buildInitialAdjacentBevelVMesh(
+  sphere: BevelSphereBase,
+  orderedNeighbors: number[],
+  targetSegments: number,
+) {
+  const vm = createAdjacentBevelVMesh(orderedNeighbors.length, 2, sphere.dimension);
+  const boundaryCorners: Float64Array[] = [];
+  for (let side = 0; side < orderedNeighbors.length; side++) {
+    for (let segment = 0; segment <= 2; segment++) {
+      const point = bevelPatchProfilePoint(sphere, orderedNeighbors, side, segment, 2);
+      if (point) setBevelVMeshPoint(vm, side, 0, segment, point);
+      if (segment === 0 && point) boundaryCorners.push(point);
+    }
+  }
+
+  const boundaryCenter = averageVectors(boundaryCorners, sphere.dimension);
+  const fullness = Math.min(1, Math.max(0, circleProfileFullness(targetSegments)));
+  const center = cloneVector(boundaryCenter);
+  for (let dim = 0; dim < sphere.dimension; dim++) {
+    center[dim] += ((sphere.origin[dim] ?? 0) - boundaryCenter[dim]) * fullness;
+  }
+  setBevelVMeshPoint(vm, 0, 1, 1, center);
+  return vm;
+}
+
+function copyAdjustedBoundary(source: AdjacentBevelVMesh, target: AdjacentBevelVMesh) {
+  const adjusted = createAdjacentBevelVMesh(source.count, source.seg, source.dimension);
+  for (let side = 0; side < source.count; side++) {
+    for (let ring = 0; ring <= Math.floor(source.seg / 2); ring++) {
+      for (let segment = 0; segment <= source.seg; segment++) {
+        setBevelVMeshPoint(adjusted, side, ring, segment, getBevelVMeshPoint(source, side, ring, segment));
+      }
+    }
+  }
+  for (let side = 0; side < source.count; side++) {
+    for (let segment = 0; segment < source.seg; segment++) {
+      setBevelVMeshPoint(adjusted, side, 0, segment, getBevelVMeshPoint(target, side, 0, segment * 2));
+    }
+  }
+  return adjusted;
+}
+
+function cubicSubdivideBevelVMesh(
+  input: AdjacentBevelVMesh,
+  sphere: BevelSphereBase,
+  orderedNeighbors: number[],
+) {
+  const nsIn = input.seg;
+  const nsInHalf = Math.floor(nsIn / 2);
+  const nsOut = nsIn * 2;
+  const output = createAdjacentBevelVMesh(input.count, nsOut, input.dimension);
+
+  for (let side = 0; side < input.count; side++) {
+    setBevelVMeshPoint(output, side, 0, 0, getBevelVMeshPoint(input, side, 0, 0));
+    for (let segment = 1; segment < nsIn; segment++) {
+      const point = cloneVector(getBevelVMeshPoint(input, side, 0, segment));
+      const acc = zeroVector(input.dimension);
+      addScaledVector(acc, getBevelVMeshPoint(input, side, 0, segment - 1), 1);
+      addScaledVector(acc, getBevelVMeshPoint(input, side, 0, segment + 1), 1);
+      addScaledVector(acc, point, -2);
+      addScaledVector(point, acc, -1 / 6);
+      setBevelVMeshPoint(output, side, 0, segment * 2, point);
+    }
+  }
+
+  for (let side = 0; side < input.count; side++) {
+    for (let segment = 1; segment < nsOut; segment += 2) {
+      const point = bevelPatchProfilePoint(sphere, orderedNeighbors, side, segment, nsOut);
+      if (!point) continue;
+      const acc = zeroVector(input.dimension);
+      addScaledVector(acc, getBevelVMeshPoint(output, side, 0, segment - 1), 1);
+      addScaledVector(acc, getBevelVMeshPoint(output, side, 0, segment + 1), 1);
+      addScaledVector(acc, point, -2);
+      addScaledVector(point, acc, -1 / 6);
+      setBevelVMeshPoint(output, side, 0, segment, point);
+    }
+  }
+
+  const adjustedInput = copyAdjustedBoundary(input, output);
+
+  for (let side = 0; side < input.count; side++) {
+    for (let ring = 0; ring < nsInHalf; ring++) {
+      for (let segment = 0; segment < nsInHalf; segment++) {
+        const point = averageVectors([
+          getBevelVMeshPoint(adjustedInput, side, ring, segment),
+          getBevelVMeshPoint(adjustedInput, side, ring, segment + 1),
+          getBevelVMeshPoint(adjustedInput, side, ring + 1, segment),
+          getBevelVMeshPoint(adjustedInput, side, ring + 1, segment + 1),
+        ], input.dimension);
+        setBevelVMeshPoint(output, side, (2 * ring) + 1, (2 * segment) + 1, point);
+      }
+    }
+  }
+
+  for (let side = 0; side < input.count; side++) {
+    for (let ring = 0; ring < nsInHalf; ring++) {
+      for (let segment = 1; segment <= nsInHalf; segment++) {
+        const point = averageVectors([
+          getBevelVMeshPoint(adjustedInput, side, ring, segment),
+          getBevelVMeshPoint(adjustedInput, side, ring + 1, segment),
+          getBevelVMeshPoint(output, side, (2 * ring) + 1, (2 * segment) - 1),
+          getBevelVMeshPoint(output, side, (2 * ring) + 1, (2 * segment) + 1),
+        ], input.dimension);
+        setBevelVMeshPoint(output, side, (2 * ring) + 1, 2 * segment, point);
+      }
+    }
+  }
+
+  for (let side = 0; side < input.count; side++) {
+    for (let ring = 1; ring < nsInHalf; ring++) {
+      for (let segment = 0; segment < nsInHalf; segment++) {
+        const point = averageVectors([
+          getBevelVMeshPoint(adjustedInput, side, ring, segment),
+          getBevelVMeshPoint(adjustedInput, side, ring, segment + 1),
+          getBevelVMeshPoint(output, side, (2 * ring) - 1, (2 * segment) + 1),
+          getBevelVMeshPoint(output, side, (2 * ring) + 1, (2 * segment) + 1),
+        ], input.dimension);
+        setBevelVMeshPoint(output, side, 2 * ring, (2 * segment) + 1, point);
+      }
+    }
+  }
+
+  const gamma = 0.25;
+  const beta = -gamma;
+  for (let side = 0; side < input.count; side++) {
+    for (let ring = 1; ring < nsInHalf; ring++) {
+      for (let segment = 1; segment <= nsInHalf; segment++) {
+        const edgeCenter = averageVectors([
+          getBevelVMeshPoint(output, side, 2 * ring, (2 * segment) - 1),
+          getBevelVMeshPoint(output, side, 2 * ring, (2 * segment) + 1),
+          getBevelVMeshPoint(output, side, (2 * ring) - 1, 2 * segment),
+          getBevelVMeshPoint(output, side, (2 * ring) + 1, 2 * segment),
+        ], input.dimension);
+        const faceCenter = averageVectors([
+          getBevelVMeshPoint(output, side, (2 * ring) - 1, (2 * segment) - 1),
+          getBevelVMeshPoint(output, side, (2 * ring) + 1, (2 * segment) - 1),
+          getBevelVMeshPoint(output, side, (2 * ring) - 1, (2 * segment) + 1),
+          getBevelVMeshPoint(output, side, (2 * ring) + 1, (2 * segment) + 1),
+        ], input.dimension);
+        const point = cloneVector(edgeCenter);
+        addScaledVector(point, faceCenter, beta);
+        addScaledVector(point, getBevelVMeshPoint(adjustedInput, side, ring, segment), gamma);
+        setBevelVMeshPoint(output, side, 2 * ring, 2 * segment, point);
+      }
+    }
+  }
+
+  const centerGamma = sabinGamma(input.count);
+  const centerBeta = -centerGamma;
+  const edgeSum = zeroVector(input.dimension);
+  const faceSum = zeroVector(input.dimension);
+  for (let side = 0; side < input.count; side++) {
+    addScaledVector(edgeSum, getBevelVMeshPoint(output, side, nsIn, nsIn - 1), 1);
+    addScaledVector(faceSum, getBevelVMeshPoint(output, side, nsIn - 1, nsIn - 1), 1);
+    addScaledVector(faceSum, getBevelVMeshPoint(output, side, nsIn - 1, nsIn + 1), 1);
+  }
+  scaleVector(edgeSum, 1 / input.count);
+  const center = cloneVector(edgeSum);
+  addScaledVector(center, faceSum, centerBeta / (2 * input.count));
+  addScaledVector(center, getBevelVMeshPoint(adjustedInput, 0, nsInHalf, nsInHalf), centerGamma);
+  for (let side = 0; side < input.count; side++) setBevelVMeshPoint(output, side, nsIn, nsIn, center);
+
+  for (let side = 0; side < input.count; side++) {
+    for (let segment = 0; segment <= nsOut; segment++) {
+      const point = bevelPatchProfilePoint(sphere, orderedNeighbors, side, segment, nsOut);
+      if (point) setBevelVMeshPoint(output, side, 0, segment, point);
+    }
+  }
+  return output;
+}
+
+function sampleBevelVMesh(source: AdjacentBevelVMesh, side: number, ring: number, segment: number) {
+  const maxRing = Math.floor(source.seg / 2);
+  const clampedRing = Math.max(0, Math.min(maxRing, ring));
+  const clampedSegment = Math.max(0, Math.min(source.seg, segment));
+  const r0 = Math.floor(clampedRing);
+  const r1 = Math.min(maxRing, Math.ceil(clampedRing));
+  const s0 = Math.floor(clampedSegment);
+  const s1 = Math.min(source.seg, Math.ceil(clampedSegment));
+  const rt = clampedRing - r0;
+  const st = clampedSegment - s0;
+  const p00 = getBevelVMeshPoint(source, side, r0, s0);
+  const p10 = getBevelVMeshPoint(source, side, r1, s0);
+  const p01 = getBevelVMeshPoint(source, side, r0, s1);
+  const p11 = getBevelVMeshPoint(source, side, r1, s1);
+  const point = zeroVector(source.dimension);
+  addScaledVector(point, p00, (1 - rt) * (1 - st));
+  addScaledVector(point, p10, rt * (1 - st));
+  addScaledVector(point, p01, (1 - rt) * st);
+  addScaledVector(point, p11, rt * st);
+  return point;
+}
+
+function resampleBevelVMesh(
+  source: AdjacentBevelVMesh,
+  targetSegments: number,
+  sphere: BevelSphereBase,
+  orderedNeighbors: number[],
+) {
+  const target = createAdjacentBevelVMesh(source.count, targetSegments, source.dimension);
+  const scale = source.seg / targetSegments;
+  const targetHalf = Math.floor(targetSegments / 2);
+  for (let side = 0; side < target.count; side++) {
+    for (let ring = 0; ring <= targetHalf; ring++) {
+      for (let segment = 0; segment <= targetSegments; segment++) {
+        const point = sampleBevelVMesh(source, side, ring * scale, segment * scale);
+        setBevelVMeshPoint(target, side, ring, segment, point);
+      }
+    }
+  }
+  for (let side = 0; side < target.count; side++) {
+    for (let segment = 0; segment <= targetSegments; segment++) {
+      const point = bevelPatchProfilePoint(sphere, orderedNeighbors, side, segment, targetSegments);
+      if (point) setBevelVMeshPoint(target, side, 0, segment, point);
+    }
+  }
+  return target;
+}
+
+function buildAdjacentBevelPatchVMesh(
+  sphere: BevelSphereBase,
+  orderedNeighbors: number[],
+  targetSegments: number,
+) {
+  if (orderedNeighbors.length < 3 || targetSegments < 2) return null;
+  let vm = buildInitialAdjacentBevelVMesh(sphere, orderedNeighbors, targetSegments);
+  while (vm.seg < targetSegments) vm = cubicSubdivideBevelVMesh(vm, sphere, orderedNeighbors);
+  if (vm.seg !== targetSegments) vm = resampleBevelVMesh(vm, targetSegments, sphere, orderedNeighbors);
+  return vm;
+}
+
 function writeDimensionMajorBevelPoint(
   data: Float32Array,
   vertexCount: number,
@@ -3857,6 +4227,24 @@ function writeDimensionMajorBevelPoint(
   for (let dim = 0; dim < point.length; dim++) {
     const value = inward ? origin[dim] - (point[dim] - origin[dim]) : point[dim];
     data[(dim * vertexCount) + vertex] = value;
+  }
+}
+
+function applyBeveledVertexPatches(
+  data: Float32Array,
+  bevel: BevelVertexResult,
+  sphereFor: (sourceVertex: number) => BevelSphereBase | null,
+  inward: boolean,
+) {
+  for (const patch of bevel.patches) {
+    const sphere = sphereFor(patch.sourceVertex);
+    if (!sphere) continue;
+    const vm = buildAdjacentBevelPatchVMesh(sphere, patch.orderedNeighbors, patch.segments);
+    if (!vm) continue;
+    for (const pointRef of patch.points) {
+      const point = getBevelVMeshPoint(vm, pointRef.side, pointRef.ring, pointRef.segment);
+      writeDimensionMajorBevelPoint(data, bevel.vertexCount, pointRef.vertex, point, sphere.origin, inward);
+    }
   }
 }
 
@@ -3912,6 +4300,7 @@ function buildBeveledVertexData(
 
     writeDimensionMajorBevelPoint(next, bevel.vertexCount, cut.vertex, point, sphere.origin, inward);
   }
+  applyBeveledVertexPatches(next, bevel, sphereFor, inward);
   return next;
 }
 
@@ -4336,7 +4725,212 @@ function findCellIdByVertexSignature(topology: CellTopology | undefined, dimensi
   return -1;
 }
 
-function extrudeSelectedEditCell(): EditExtrusionToken | null {
+function normalizeEditOperationMode(mode: EditOperationMode | undefined): EditOperationMode {
+  return mode === 'individual' ? 'individual' : 'grouped';
+}
+
+function selectedCellComponents(topology: CellTopology | undefined, dimension: number, cellIds: number[]) {
+  const count = cellCount(topology, dimension);
+  const validCellIds = cellIds
+    .filter(cellId => Number.isInteger(cellId) && cellId >= 0 && cellId < count)
+    .filter((cellId, index, arr) => arr.indexOf(cellId) === index);
+  if (!topology || dimension <= 0 || validCellIds.length <= 1) return validCellIds.map(cellId => [cellId]);
+
+  const lowerCount = cellCount(topology, dimension - 1);
+  if (lowerCount <= 0) return validCellIds.map(cellId => [cellId]);
+
+  const cellSets = new Map<number, Set<number>>();
+  validCellIds.forEach(cellId => {
+    cellSets.set(cellId, new Set(getCellVertices(topology, dimension, cellId)));
+  });
+
+  const parent = new Map<number, number>();
+  validCellIds.forEach(cellId => parent.set(cellId, cellId));
+  const find = (cellId: number): number => {
+    const current = parent.get(cellId) ?? cellId;
+    if (current === cellId) return current;
+    const root = find(current);
+    parent.set(cellId, root);
+    return root;
+  };
+  const union = (a: number, b: number) => {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA !== rootB) parent.set(rootB, rootA);
+  };
+
+  const boundaryOwners = new Map<string, number>();
+  for (const cellId of validCellIds) {
+    const selectedSet = cellSets.get(cellId);
+    if (!selectedSet) continue;
+    for (let lowerId = 0; lowerId < lowerCount; lowerId++) {
+      const lowerCell = getCellVertices(topology, dimension - 1, lowerId);
+      if (!lowerCell.length || !lowerCell.every(vertex => selectedSet.has(vertex))) continue;
+      const signature = cellVertexSignature(lowerCell);
+      const owner = boundaryOwners.get(signature);
+      if (owner === undefined) boundaryOwners.set(signature, cellId);
+      else union(owner, cellId);
+    }
+  }
+
+  const components = new Map<number, number[]>();
+  for (const cellId of validCellIds) {
+    const root = find(cellId);
+    const component = components.get(root);
+    if (component) component.push(cellId);
+    else components.set(root, [cellId]);
+  }
+  return Array.from(components.values());
+}
+
+function selectedCellComponentSignatures(
+  topology: CellTopology | undefined,
+  dimension: number,
+  cellIds: number[],
+  mode: EditOperationMode,
+) {
+  const components = mode === 'grouped'
+    ? selectedCellComponents(topology, dimension, cellIds)
+    : cellIds.map(cellId => [cellId]);
+  return components
+    .map(component => component
+      .map(cellId => cellVertexSignature(getCellVertices(topology, dimension, cellId)))
+      .filter(signature => signature.length > 0))
+    .filter(component => component.length > 0);
+}
+
+function dimensionMajorPoint(data: Float32Array, vertexCount: number, vertex: number) {
+  const dimension = vertexCount > 0 ? Math.floor(data.length / vertexCount) : 0;
+  const point = new Float64Array(dimension);
+  if (vertex < 0 || vertex >= vertexCount) return point;
+  for (let dim = 0; dim < dimension; dim++) point[dim] = data[(dim * vertexCount) + vertex] ?? 0;
+  return point;
+}
+
+function normalizeVector(vector: Float64Array) {
+  let lengthSq = 0;
+  for (let dim = 0; dim < vector.length; dim++) lengthSq += vector[dim] * vector[dim];
+  if (lengthSq <= 1e-16) return false;
+  const invLength = 1 / Math.sqrt(lengthSq);
+  for (let dim = 0; dim < vector.length; dim++) vector[dim] *= invLength;
+  return true;
+}
+
+function objectCenterND(data: Float32Array, vertexCount: number) {
+  const dimension = vertexCount > 0 ? Math.floor(data.length / vertexCount) : 0;
+  const center = new Float64Array(dimension);
+  if (vertexCount <= 0) return center;
+  for (let vertex = 0; vertex < vertexCount; vertex++) {
+    for (let dim = 0; dim < dimension; dim++) center[dim] += data[(dim * vertexCount) + vertex] ?? 0;
+  }
+  for (let dim = 0; dim < dimension; dim++) center[dim] /= vertexCount;
+  return center;
+}
+
+function orthonormalCellVectors(
+  data: Float32Array,
+  vertexCount: number,
+  cell: number[],
+) {
+  const dimension = vertexCount > 0 ? Math.floor(data.length / vertexCount) : 0;
+  if (!cell.length || dimension <= 0) return [];
+  const anchor = dimensionMajorPoint(data, vertexCount, cell[0]);
+  const basis: Float64Array[] = [];
+  for (let idx = 1; idx < cell.length; idx++) {
+    const vertex = cell[idx];
+    if (vertex < 0 || vertex >= vertexCount) continue;
+    const vector = dimensionMajorPoint(data, vertexCount, vertex);
+    for (let dim = 0; dim < dimension; dim++) vector[dim] -= anchor[dim];
+    for (const basisVector of basis) {
+      let dot = 0;
+      for (let dim = 0; dim < dimension; dim++) dot += vector[dim] * basisVector[dim];
+      for (let dim = 0; dim < dimension; dim++) vector[dim] -= dot * basisVector[dim];
+    }
+    if (normalizeVector(vector)) basis.push(vector);
+  }
+  return basis;
+}
+
+function orthogonalizeAgainstBasis(vector: Float64Array, basis: Float64Array[]) {
+  for (const basisVector of basis) {
+    let dot = 0;
+    for (let dim = 0; dim < vector.length; dim++) dot += vector[dim] * basisVector[dim];
+    for (let dim = 0; dim < vector.length; dim++) vector[dim] -= dot * basisVector[dim];
+  }
+  return vector;
+}
+
+function localExtrusionDirectionForCell(
+  data: Float32Array,
+  vertexCount: number,
+  cell: number[],
+  objectCenter: Float64Array,
+) {
+  const dimension = vertexCount > 0 ? Math.floor(data.length / vertexCount) : 0;
+  const direction = new Float64Array(dimension);
+  if (!cell.length || dimension <= 0) {
+    if (dimension > 0) direction[0] = 1;
+    return direction;
+  }
+
+  const center = new Float64Array(dimension);
+  let validCount = 0;
+  for (const vertex of cell) {
+    if (vertex < 0 || vertex >= vertexCount) continue;
+    validCount++;
+    for (let dim = 0; dim < dimension; dim++) center[dim] += data[(dim * vertexCount) + vertex] ?? 0;
+  }
+  if (validCount > 0) {
+    for (let dim = 0; dim < dimension; dim++) {
+      center[dim] /= validCount;
+      direction[dim] = center[dim] - objectCenter[dim];
+    }
+  }
+
+  const basis = orthonormalCellVectors(data, vertexCount, cell);
+  orthogonalizeAgainstBasis(direction, basis);
+  if (normalizeVector(direction)) return direction;
+
+  for (let axis = 0; axis < dimension; axis++) {
+    direction.fill(0);
+    direction[axis] = 1;
+    orthogonalizeAgainstBasis(direction, basis);
+    if (normalizeVector(direction)) return direction;
+  }
+
+  direction.fill(0);
+  if (dimension > 0) direction[0] = 1;
+  return direction;
+}
+
+function extrusionDirectionsForCells(
+  data: Float32Array,
+  vertexCount: number,
+  sourceVertices: number[],
+  cellVertices: number[][],
+) {
+  const dimension = vertexCount > 0 ? Math.floor(data.length / vertexCount) : 0;
+  const objectCenter = objectCenterND(data, vertexCount);
+  const cellDirections = cellVertices.map(cell => localExtrusionDirectionForCell(data, vertexCount, cell, objectCenter));
+  return sourceVertices.map(sourceVertex => {
+    const direction = new Float64Array(dimension);
+    let contributors = 0;
+    cellVertices.forEach((cell, idx) => {
+      if (!cell.includes(sourceVertex)) return;
+      const cellDirection = cellDirections[idx];
+      for (let dim = 0; dim < dimension; dim++) direction[dim] += cellDirection[dim];
+      contributors++;
+    });
+    if (contributors <= 0) {
+      const fallback = cellDirections[0];
+      if (fallback) direction.set(fallback);
+    }
+    if (!normalizeVector(direction) && dimension > 0) direction[0] = 1;
+    return direction;
+  });
+}
+
+function extrudeSelectedEditCell(mode: EditOperationMode = 'grouped'): EditExtrusionToken | null {
   if (!PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return null;
   const selection = transformController.getEditSelection();
   if (!selection || selection.cellId < 0) return null;
@@ -4348,21 +4942,35 @@ function extrudeSelectedEditCell(): EditExtrusionToken | null {
   const target = targetIsBase ? null : extraInstances[selectedInstance];
   const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
   const selectedCellIds = selection.cellIds.length ? selection.cellIds : [selection.cellId];
-  const selectedCellSignatures = selectedCellIds
-    .map(cellId => cellVertexSignature(getCellVertices(topology, selection.dimension, cellId)))
-    .filter(signature => signature.length > 0);
-  if (!selectedCellSignatures.length) return null;
+  const operationMode = normalizeEditOperationMode(mode);
+  const selectedCellSignatureGroups = selectedCellComponentSignatures(topology, selection.dimension, selectedCellIds, operationMode);
+  if (!selectedCellSignatureGroups.length) return null;
+  const original = captureEditGeometrySnapshot(selectedInstance);
+  if (!original) return null;
 
   const undoSnapshot = captureSceneUrlState();
   transformController.clearEditSelection();
   const capSignatures: string[] = [];
-  for (const signature of selectedCellSignatures) {
+  const extrudeGroups: EditExtrusionToken['extrudeGroups'] = [];
+  for (const signatureGroup of selectedCellSignatureGroups) {
     const currentTopology = targetIsBase ? baseCellTopology : target?.cellTopology;
     const currentVertexCount = targetIsBase ? M : (target?.M ?? 0);
-    const cellId = findCellIdByVertexSignature(currentTopology, selection.dimension, signature);
-    if (cellId < 0) continue;
-    const extrusion = extrudeCell(currentTopology, selection.dimension, cellId, currentVertexCount);
+    const currentData = targetIsBase ? X : target?.X;
+    const cellIds = signatureGroup
+      .map(signature => findCellIdByVertexSignature(currentTopology, selection.dimension, signature))
+      .filter(cellId => cellId >= 0);
+    if (!cellIds.length || !currentData) continue;
+    const groupCellVertices = cellIds.map(cellId => getCellVertices(currentTopology, selection.dimension, cellId));
+    const extrusion = operationMode === 'grouped'
+      ? extrudeCells(currentTopology, selection.dimension, cellIds, currentVertexCount)
+      : extrudeCell(currentTopology, selection.dimension, cellIds[0], currentVertexCount);
     if (!extrusion) continue;
+    const directions = extrusionDirectionsForCells(
+      currentData,
+      currentVertexCount,
+      extrusion.sourceVertices,
+      groupCellVertices,
+    );
 
     if (targetIsBase) {
       X = appendDimensionMajorDuplicateVertices(X, M, extrusion.sourceVertices);
@@ -4371,7 +4979,10 @@ function extrudeSelectedEditCell(): EditExtrusionToken | null {
       E = new Uint32Array(extrusion.edges);
       baseCellTopology = extrusion.topology;
       baseSurfaceTopology = surfaceTopologyForEditedCellTopology(baseCellTopology);
-      capSignatures.push(cellVertexSignature(getCellVertices(baseCellTopology, selection.dimension, extrusion.capCellId)));
+      const capCellIds = 'capCellIds' in extrusion ? extrusion.capCellIds : [extrusion.capCellId];
+      capCellIds.forEach(capCellId => {
+        capSignatures.push(cellVertexSignature(getCellVertices(baseCellTopology, selection.dimension, capCellId)));
+      });
     } else if (target) {
       target.X = appendDimensionMajorDuplicateVertices(target.X, target.M, extrusion.sourceVertices);
       target.M = extrusion.vertexCount;
@@ -4379,11 +4990,19 @@ function extrudeSelectedEditCell(): EditExtrusionToken | null {
       target.E = new Uint32Array(extrusion.edges);
       target.cellTopology = extrusion.topology;
       target.surfaceTopology = surfaceTopologyForEditedCellTopology(target.cellTopology);
-      capSignatures.push(cellVertexSignature(getCellVertices(target.cellTopology, selection.dimension, extrusion.capCellId)));
+      const capCellIds = 'capCellIds' in extrusion ? extrusion.capCellIds : [extrusion.capCellId];
+      capCellIds.forEach(capCellId => {
+        capSignatures.push(cellVertexSignature(getCellVertices(target.cellTopology, selection.dimension, capCellId)));
+      });
     }
+    extrudeGroups.push({
+      sourceVertices: extrusion.sourceVertices,
+      capVertices: extrusion.capVertices,
+      directions,
+    });
   }
   if (!capSignatures.length) {
-    void applySceneUrlState(undoSnapshot);
+    restoreEditGeometrySnapshot(selectedInstance, original);
     return null;
   }
 
@@ -4407,11 +5026,58 @@ function extrudeSelectedEditCell(): EditExtrusionToken | null {
   transformController.updateVertexCloud(selectedInstance);
   updateSelectionOutline();
   updateTransformActionButtons();
-  return { undoSnapshot };
+  return {
+    undoSnapshot,
+    mode: operationMode,
+    instIdx: selectedInstance,
+    dimension: selection.dimension,
+    cellId: selection.cellId,
+    cellIds: [...selection.cellIds],
+    amount: 0,
+    extrudeGroups,
+    original,
+  };
 }
 
 function isEditExtrusionToken(token: unknown): token is EditExtrusionToken {
-  return typeof token === 'object' && token !== null && 'undoSnapshot' in token;
+  return typeof token === 'object'
+    && token !== null
+    && 'undoSnapshot' in token
+    && 'instIdx' in token
+    && 'dimension' in token
+    && 'extrudeGroups' in token
+    && 'original' in token;
+}
+
+function updateEditExtrusion(token: unknown, amount: number) {
+  if (!isEditExtrusionToken(token)) return;
+  token.amount = amount;
+  const targetIsBase = token.instIdx === BASE_SELECTION;
+  const target = targetIsBase ? null : extraInstances[token.instIdx];
+  const data = targetIsBase ? X : target?.X;
+  const vertexCount = targetIsBase ? M : (target?.M ?? 0);
+  if (!data || vertexCount <= 0) return;
+  const dimension = Math.floor(data.length / vertexCount);
+  const originalVertexCount = token.original.M;
+  const originalDimension = Math.floor(token.original.X.length / Math.max(1, originalVertexCount));
+  if (dimension <= 0 || originalDimension !== dimension) return;
+
+  for (const group of token.extrudeGroups) {
+    group.sourceVertices.forEach((sourceVertex, idx) => {
+      const capVertex = group.capVertices[idx];
+      const direction = group.directions[idx];
+      if (sourceVertex < 0 || sourceVertex >= originalVertexCount || capVertex < 0 || capVertex >= vertexCount || !direction) return;
+      for (let dim = 0; dim < dimension; dim++) {
+        const source = token.original.X[(dim * originalVertexCount) + sourceVertex] ?? 0;
+        data[(dim * vertexCount) + capVertex] = source + ((direction[dim] ?? 0) * token.amount);
+      }
+    });
+  }
+
+  if (targetIsBase) rendererND.refreshSurface();
+  else target?.renderer.refreshSurface();
+  projectAndRenderAll();
+  if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
 }
 
 function commitEditExtrusion(token: unknown) {
@@ -4423,7 +5089,12 @@ function commitEditExtrusion(token: unknown) {
 
 function cancelEditExtrusion(token: unknown) {
   if (!isEditExtrusionToken(token)) return;
-  void applySceneUrlState(token.undoSnapshot);
+  restoreEditGeometrySnapshot(token.instIdx, token.original);
+  restoreTokenEditSelection(token);
+  projectAndRenderAll();
+  if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
+  updateSelectionOutline();
+  updateTransformActionButtons();
 }
 
 function captureEditGeometrySnapshot(instIdx: number): EditBevelGeometrySnapshot | null {
@@ -4486,6 +5157,107 @@ function restoreEditBevelTarget(token: EditBevelToken) {
   restoreEditGeometrySnapshot(token.instIdx, token.original);
 }
 
+function restoreTokenEditSelection(token: {
+  instIdx: number;
+  dimension: number;
+  cellId: number;
+  cellIds: number[];
+}) {
+  const topology = token.instIdx === BASE_SELECTION
+    ? baseCellTopology
+    : extraInstances[token.instIdx]?.cellTopology;
+  const cellIds = token.cellIds.length ? token.cellIds : [token.cellId];
+  transformController.setSelectedEditCells(token.dimension, cellIds, topology);
+}
+
+function originalVertexVector(
+  original: Float32Array,
+  originalVertexCount: number,
+  dimension: number,
+  vertex: number,
+) {
+  const vector = new Float64Array(dimension);
+  if (vertex < 0 || vertex >= originalVertexCount) return vector;
+  for (let dim = 0; dim < dimension; dim++) {
+    vector[dim] = original[(dim * originalVertexCount) + vertex] ?? 0;
+  }
+  return vector;
+}
+
+function orthonormalCellBasis(
+  original: Float32Array,
+  originalVertexCount: number,
+  dimension: number,
+  cell: number[],
+) {
+  if (!cell.length) return [];
+  const anchor = originalVertexVector(original, originalVertexCount, dimension, cell[0]);
+  const basis: Float64Array[] = [];
+  const minLengthSq = 1e-16;
+  for (let idx = 1; idx < cell.length; idx++) {
+    const vertex = cell[idx];
+    if (vertex < 0 || vertex >= originalVertexCount) continue;
+    const vector = originalVertexVector(original, originalVertexCount, dimension, vertex);
+    for (let dim = 0; dim < dimension; dim++) vector[dim] -= anchor[dim];
+    for (const basisVector of basis) {
+      let dot = 0;
+      for (let dim = 0; dim < dimension; dim++) dot += vector[dim] * basisVector[dim];
+      for (let dim = 0; dim < dimension; dim++) vector[dim] -= basisVector[dim] * dot;
+    }
+    let lengthSq = 0;
+    for (let dim = 0; dim < dimension; dim++) lengthSq += vector[dim] * vector[dim];
+    if (lengthSq <= minLengthSq) continue;
+    const invLength = 1 / Math.sqrt(lengthSq);
+    for (let dim = 0; dim < dimension; dim++) vector[dim] *= invLength;
+    basis.push(vector);
+  }
+  return basis.map(vector => ({ anchor, vector }));
+}
+
+function projectPointToCellSpan(
+  point: Float64Array,
+  span: Array<{ anchor: Float64Array; vector: Float64Array }>,
+) {
+  if (!span.length) return point;
+  const dimension = point.length;
+  const anchor = span[0].anchor;
+  const next = new Float64Array(anchor);
+  for (const { vector } of span) {
+    let dot = 0;
+    for (let dim = 0; dim < dimension; dim++) dot += (point[dim] - anchor[dim]) * vector[dim];
+    for (let dim = 0; dim < dimension; dim++) next[dim] += vector[dim] * dot;
+  }
+  return next;
+}
+
+function constrainInsetTargetToOwnerCells(
+  target: Float64Array,
+  original: Float32Array,
+  originalVertexCount: number,
+  dimension: number,
+  sourceVertex: number,
+  ownerCells: number[][],
+) {
+  if (!ownerCells.length) return target;
+  const spans = ownerCells
+    .map(cell => orthonormalCellBasis(original, originalVertexCount, dimension, cell))
+    .filter(span => span.length > 0 && span.length < dimension);
+  if (!spans.length) return target;
+
+  let point = target;
+  for (let pass = 0; pass < 12; pass++) {
+    for (const span of spans) point = projectPointToCellSpan(point, span);
+  }
+
+  // Numerical drift can move a constrained point imperceptibly away from the original shared vertex span.
+  const source = originalVertexVector(original, originalVertexCount, dimension, sourceVertex);
+  let finite = true;
+  for (let dim = 0; dim < dimension; dim++) {
+    if (!Number.isFinite(point[dim])) finite = false;
+  }
+  return finite ? point : source;
+}
+
 function writeInsetVertices(
   data: Float32Array,
   original: Float32Array,
@@ -4494,6 +5266,7 @@ function writeInsetVertices(
   sourceVertices: number[],
   insetVertices: number[],
   amount: number,
+  cellVertices: number[][] = [],
 ) {
   if (vertexCount <= 0 || originalVertexCount <= 0 || !sourceVertices.length || sourceVertices.length !== insetVertices.length) return;
   const dimension = Math.floor(data.length / vertexCount);
@@ -4510,14 +5283,27 @@ function writeInsetVertices(
   sourceVertices.forEach((sourceVertex, idx) => {
     const insetVertex = insetVertices[idx];
     if (insetVertex < 0 || insetVertex >= vertexCount) return;
+    const target = new Float64Array(dimension);
     for (let dim = 0; dim < dimension; dim++) {
       const source = original[(dim * originalVertexCount) + sourceVertex] ?? 0;
-      data[(dim * vertexCount) + insetVertex] = source + ((center[dim] - source) * t);
+      target[dim] = source + ((center[dim] - source) * t);
+    }
+    const ownerCells = cellVertices.filter(cell => cell.includes(sourceVertex));
+    const constrained = constrainInsetTargetToOwnerCells(
+      target,
+      original,
+      originalVertexCount,
+      dimension,
+      sourceVertex,
+      ownerCells,
+    );
+    for (let dim = 0; dim < dimension; dim++) {
+      data[(dim * vertexCount) + insetVertex] = constrained[dim];
     }
   });
 }
 
-function startEditInset(): EditInsetToken | null {
+function startEditInset(mode: EditOperationMode = 'grouped'): EditInsetToken | null {
   if (!PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return null;
   const selection = transformController.getEditSelection();
   if (!selection || selection.cellId < 0 || selection.dimension < 1) return null;
@@ -4526,10 +5312,9 @@ function startEditInset(): EditInsetToken | null {
   const target = targetIsBase ? null : extraInstances[selectedInstance];
   const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
   const selectedCellIds = selection.cellIds.length ? selection.cellIds : [selection.cellId];
-  const selectedCellSignatures = selectedCellIds
-    .map(cellId => cellVertexSignature(getCellVertices(topology, selection.dimension, cellId)))
-    .filter(signature => signature.length > 0);
-  if (!selectedCellSignatures.length) return null;
+  const operationMode = normalizeEditOperationMode(mode);
+  const selectedCellSignatureGroups = selectedCellComponentSignatures(topology, selection.dimension, selectedCellIds, operationMode);
+  if (!selectedCellSignatureGroups.length) return null;
   const original = captureEditGeometrySnapshot(selectedInstance);
   if (!original) return null;
 
@@ -4539,12 +5324,17 @@ function startEditInset(): EditInsetToken | null {
   const insetSignatures: string[] = [];
   const allSourceVertices: number[] = [];
   const allInsetVertices: number[] = [];
-  for (const signature of selectedCellSignatures) {
+  for (const signatureGroup of selectedCellSignatureGroups) {
     const currentTopology = targetIsBase ? baseCellTopology : target?.cellTopology;
     const currentVertexCount = targetIsBase ? M : (target?.M ?? 0);
-    const cellId = findCellIdByVertexSignature(currentTopology, selection.dimension, signature);
-    if (cellId < 0) continue;
-    const inset = insetCell(currentTopology, selection.dimension, cellId, currentVertexCount);
+    const cellIds = signatureGroup
+      .map(signature => findCellIdByVertexSignature(currentTopology, selection.dimension, signature))
+      .filter(cellId => cellId >= 0);
+    if (!cellIds.length) continue;
+    const groupCellVertices = cellIds.map(cellId => getCellVertices(currentTopology, selection.dimension, cellId));
+    const inset = operationMode === 'grouped'
+      ? insetCells(currentTopology, selection.dimension, cellIds, currentVertexCount)
+      : insetCell(currentTopology, selection.dimension, cellIds[0], currentVertexCount);
     if (!inset) continue;
 
     if (targetIsBase) {
@@ -4554,7 +5344,10 @@ function startEditInset(): EditInsetToken | null {
       E = new Uint32Array(inset.edges);
       baseCellTopology = inset.topology;
       baseSurfaceTopology = surfaceTopologyForEditedCellTopology(baseCellTopology);
-      insetSignatures.push(cellVertexSignature(getCellVertices(baseCellTopology, selection.dimension, inset.insetCellId)));
+      const insetCellIds = 'insetCellIds' in inset ? inset.insetCellIds : [inset.insetCellId];
+      insetCellIds.forEach(insetCellId => {
+        insetSignatures.push(cellVertexSignature(getCellVertices(baseCellTopology, selection.dimension, insetCellId)));
+      });
     } else if (target) {
       target.X = appendDimensionMajorDuplicateVertices(target.X, target.M, inset.sourceVertices);
       target.M = inset.vertexCount;
@@ -4562,11 +5355,15 @@ function startEditInset(): EditInsetToken | null {
       target.E = new Uint32Array(inset.edges);
       target.cellTopology = inset.topology;
       target.surfaceTopology = surfaceTopologyForEditedCellTopology(target.cellTopology);
-      insetSignatures.push(cellVertexSignature(getCellVertices(target.cellTopology, selection.dimension, inset.insetCellId)));
+      const insetCellIds = 'insetCellIds' in inset ? inset.insetCellIds : [inset.insetCellId];
+      insetCellIds.forEach(insetCellId => {
+        insetSignatures.push(cellVertexSignature(getCellVertices(target.cellTopology, selection.dimension, insetCellId)));
+      });
     }
     insetGroups.push({
       sourceVertices: inset.sourceVertices,
       insetVertices: inset.insetVertices,
+      cellVertices: groupCellVertices,
     });
     allSourceVertices.push(...inset.sourceVertices);
     allInsetVertices.push(...inset.insetVertices);
@@ -4598,6 +5395,7 @@ function startEditInset(): EditInsetToken | null {
 
   return {
     undoSnapshot,
+    mode: operationMode,
     instIdx: selectedInstance,
     dimension: selection.dimension,
     cellId: insetCellIds[0] ?? -1,
@@ -4630,9 +5428,18 @@ function updateEditInset(token: unknown, amount: number) {
   if (!data || vertexCount <= 0) return;
   const groups = token.insetGroups?.length
     ? token.insetGroups
-    : [{ sourceVertices: token.sourceVertices, insetVertices: token.insetVertices }];
+    : [{ sourceVertices: token.sourceVertices, insetVertices: token.insetVertices, cellVertices: [] }];
   groups.forEach(group => {
-    writeInsetVertices(data, token.original.X, vertexCount, token.original.M, group.sourceVertices, group.insetVertices, token.amount);
+    writeInsetVertices(
+      data,
+      token.original.X,
+      vertexCount,
+      token.original.M,
+      group.sourceVertices,
+      group.insetVertices,
+      token.amount,
+      group.cellVertices,
+    );
   });
   if (targetIsBase) rendererND.refreshSurface();
   else target?.renderer.refreshSurface();
@@ -4650,6 +5457,7 @@ function commitEditInset(token: unknown) {
 function cancelEditInset(token: unknown) {
   if (!isEditInsetToken(token)) return;
   restoreEditGeometrySnapshot(token.instIdx, token.original);
+  restoreTokenEditSelection(token);
   projectAndRenderAll();
   if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
   updateSelectionOutline();
@@ -4660,6 +5468,7 @@ function collectEditBevelTargets(
   topology: CellTopology | undefined,
   selection: { dimension: number; cellId: number; cellIds?: number[]; vertices: number[] },
   kind: 'vertex' | 'edge',
+  mode: EditOperationMode = 'grouped',
 ) {
   if (!topology) return null;
   const selectedVertices = selection.vertices
@@ -4695,27 +5504,41 @@ function collectEditBevelTargets(
     const edgeIds = selection.cellIds?.length ? selection.cellIds : [selection.cellId];
     edgeIds.forEach(edgeId => addEdge(edgeId, getCellVertices(topology, 1, edgeId)));
   } else {
+    const selectedCellIds = selection.cellIds?.length ? selection.cellIds : [selection.cellId];
+    const selectedCellSets = selectedCellIds
+      .map(cellId => new Set(getCellVertices(topology, selection.dimension, cellId)))
+      .filter(set => set.size > 0);
     for (let edgeId = 0; edgeId < cellCount(topology, 1); edgeId++) {
-      addEdge(edgeId, getCellVertices(topology, 1, edgeId));
+      const edge = getCellVertices(topology, 1, edgeId);
+      if (edge.length < 2) continue;
+      const containingCount = selectedCellSets.filter(cellSet => edge.every(vertex => cellSet.has(vertex))).length;
+      if (mode === 'grouped' ? containingCount === 1 : containingCount > 0) addEdge(edgeId, edge);
     }
   }
 
   return targetEdges.length ? { targetVertices: [] as number[], targetEdges, targetEdgeIds } : null;
 }
 
-function startEditBevel(smoothness: number, kind: 'vertex' | 'edge' = 'edge', inward = false): EditBevelToken | null {
+function startEditBevel(
+  smoothness: number,
+  kind: 'vertex' | 'edge' = 'edge',
+  inward = false,
+  mode: EditOperationMode = 'grouped',
+): EditBevelToken | null {
   if (!PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return null;
   const selection = transformController.getEditSelection();
   if (!selection || selection.cellId < 0 || !selection.vertices.length) return null;
   const targetIsBase = selectedInstance === BASE_SELECTION;
   const target = targetIsBase ? null : extraInstances[selectedInstance];
   const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
-  const targets = collectEditBevelTargets(topology, selection, kind);
+  const operationMode = normalizeEditOperationMode(mode);
+  const targets = collectEditBevelTargets(topology, selection, kind, operationMode);
   if (!targets) return null;
   const original = captureEditBevelTargetSnapshot(selectedInstance);
   if (!original) return null;
   return {
     undoSnapshot: captureSceneUrlState(),
+    mode: operationMode,
     kind,
     inward,
     instIdx: selectedInstance,
@@ -5795,6 +6618,7 @@ viewportInteraction = new ViewportInteractionController({
   commitDuplicatePlacement,
   cancelDuplicatePlacement,
   extrudeSelectedEditCell,
+  updateEditExtrusion,
   commitEditExtrusion,
   cancelEditExtrusion,
   startEditInset,

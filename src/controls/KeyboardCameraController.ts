@@ -15,7 +15,9 @@ const ORBIT_RATE = 1.9;
 const ZOOM_RATE = 2.6;
 const ZOOM_MIN_DISTANCE = 0.2;
 const ZOOM_MAX_DISTANCE = 80;
-const FOCUS_TRANSITION_SECONDS = 0.62;
+const CAMERA_SMOOTHING_RATE = 18;
+const FOCUS_TRANSITION_SECONDS = 0.54;
+const FOCUS_EASE_STRENGTH = 0.65;
 
 export function viewModeShortcutIndex(ev: KeyboardEvent) {
   const keyMatch = /^[1-8]$/.test(ev.key) ? Number.parseInt(ev.key, 10) - 1 : -1;
@@ -172,7 +174,7 @@ export class KeyboardCameraController {
     if (this.offset.lengthSq() < 1e-8) {
       this.offset.copy(this.options.defaultCameraPosition);
     }
-    const alpha = 1 - Math.exp(-dt * 14);
+    const alpha = 1 - Math.exp(-dt * CAMERA_SMOOTHING_RATE);
     this.currentOffset.copy(this.offset).lerp(this.targetOffset, alpha);
     if (this.currentOffset.distanceToSquared(this.targetOffset) < 0.00001) {
       this.currentOffset.copy(this.targetOffset);
@@ -185,7 +187,8 @@ export class KeyboardCameraController {
     if (!this.focusTransitionActive) return;
     this.focusTransitionElapsed += dt;
     const t = Math.min(1, this.focusTransitionElapsed / FOCUS_TRANSITION_SECONDS);
-    const eased = 1 - Math.pow(1 - t, 3);
+    const easeOut = 1 - Math.pow(1 - t, 3);
+    const eased = THREE.MathUtils.lerp(t, easeOut, FOCUS_EASE_STRENGTH);
     this.focusCurrentTarget.copy(this.focusStartTarget).lerp(this.focusEndTarget, eased);
 
     if (t >= 1) {
