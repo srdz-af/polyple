@@ -75,6 +75,7 @@ import { GeometryEditService } from './scene/GeometryEditService';
 import { cloneObjectOrigin, computeObjectOrigin, type ObjectOrigin } from './scene/objectOrigin';
 import { ProjectionPipeline } from './scene/ProjectionPipeline';
 import { RenderSyncService } from './scene/RenderSyncService';
+import { SceneMaterialService } from './scene/SceneMaterialService';
 import { SceneObjectStore } from './scene/SceneObjectStore';
 import { SceneSelectionService } from './scene/SceneSelectionService';
 import { SceneHistory } from './scene/SceneHistory';
@@ -132,7 +133,7 @@ import {
   unpackF32,
   unpackU32,
 } from './scene/sceneUrlState';
-import { DEFAULT_SURFACE, cloneSurface, normalizeSurface, surfacesEqual, type SurfaceState } from './scene/surface';
+import { DEFAULT_SURFACE, cloneSurface, normalizeSurface, type SurfaceState } from './scene/surface';
 import type {
   DataSource,
   Instance,
@@ -140,7 +141,6 @@ import type {
   ProjectionAxes,
   SceneLightKind,
   SceneLightState,
-  SceneMaterialState,
   SceneSnapshot,
   TransformMode,
   TransformState,
@@ -322,6 +322,7 @@ const updateAxisGizmo = () => axisController.updateAxisGizmo();
 const applyAutoRotation = (dt: number) => axisController.applyAutoRotation(dt);
 let projectionPipeline: ProjectionPipeline | null = null;
 let renderSync: RenderSyncService;
+let sceneMaterialService: SceneMaterialService;
 let sceneObjectStore: SceneObjectStore<SceneLightRuntime>;
 let geometryEditService: GeometryEditService<PackedSceneUrlState>;
 let geometryEditOperationFactory: GeometryEditOperationFactory<PackedSceneUrlState>;
@@ -436,6 +437,7 @@ function recordPerfFrame(frameStart: number, projectionMs: number, renderMs: num
 }
 let transformController: TransformController;
 let viewportInteraction: ViewportInteractionController;
+let textureEditor: TextureEditorController;
 
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
@@ -516,9 +518,6 @@ let baseAxisMap: AxisMap = Array.from({ length: MAX_N }, (_, i) => i);
 let baseVisible = true;
 let baseSurface: SurfaceState = cloneSurface(DEFAULT_SURFACE);
 let baseMaterialId = 'mat_1';
-let materialSlots: SceneMaterialState[] = [{ id: baseMaterialId, name: 'Material 1', surface: cloneSurface(DEFAULT_SURFACE) }];
-let materialIdCounter = 2;
-let textureEditorMaterialId = baseMaterialId;
 let baseCellTopology: CellTopology | undefined;
 let baseSurfaceTopology: PrimitiveSurfaceTopology | undefined;
 keyboardCamera = new KeyboardCameraController({
@@ -532,52 +531,6 @@ keyboardCamera = new KeyboardCameraController({
     requestSceneUrlUpdate();
   },
 });
-function createMaterialId() {
-  return `mat_${materialIdCounter++}`;
-}
-
-function syncMaterialIdCounter() {
-  let max = 0;
-  for (const material of materialSlots) {
-    const match = /^mat_(\d+)$/.exec(material.id);
-    if (match) max = Math.max(max, Number.parseInt(match[1], 10));
-  }
-  materialIdCounter = Math.max(materialIdCounter, max + 1);
-}
-
-function createSceneMaterial(surface: SurfaceState, name?: string): SceneMaterialState {
-  const materialNumber = materialSlots.length + 1;
-  return {
-    id: createMaterialId(),
-    name: name?.trim() || `Material ${materialNumber}`,
-    surface: cloneSurface(normalizeSurface(surface)),
-  };
-}
-
-function setSceneMaterials(materials: SceneMaterialState[]) {
-  materialSlots = materials.length
-    ? materials.map((material, idx) => ({
-      id: material.id || `mat_${idx + 1}`,
-      name: material.name?.trim() || `Material ${idx + 1}`,
-      surface: cloneSurface(normalizeSurface(material.surface)),
-    }))
-    : [createSceneMaterial(DEFAULT_SURFACE, 'Material 1')];
-  syncMaterialIdCounter();
-}
-
-function materialSlotById(id: string | undefined) {
-  return materialSlots.find(material => material.id === id) ?? null;
-}
-
-function ensureMaterialSlot(id: string | undefined, fallbackSurface = DEFAULT_SURFACE, fallbackName?: string) {
-  const existing = materialSlotById(id);
-  if (existing) return existing;
-
-  const material = createSceneMaterial(fallbackSurface, fallbackName);
-  materialSlots.push(material);
-  return material;
-}
-
 function createSceneLightId() {
   return `light_${sceneLightIdCounter++}`;
 }
@@ -962,75 +915,8 @@ function setLightTargetForRuntime(runtime: SceneLightRuntime, target: THREE.Vect
   requestSceneUrlUpdate();
 }
 
-function objectLabelForMaterialList(idx: number) {
-  return sceneObjectStore.objectLabel(idx);
-}
-
 function objectMaterialId(idx: number) {
   return sceneObjectStore.objectMaterialId(idx);
-}
-
-function setObjectMaterialId(idx: number, materialId: string) {
-  const material = ensureMaterialSlot(materialId);
-  if (idx === BASE_SELECTION) {
-    baseMaterialId = material.id;
-    baseSurface = cloneSurface(material.surface);
-    rendererND.setSurface(baseSurface);
-    rendererND.refreshSurface();
-    return true;
-  }
-
-  const inst = extraInstances[idx];
-  if (!inst) return false;
-  inst.materialId = material.id;
-  inst.surface = cloneSurface(material.surface);
-  inst.renderer.setSurface(inst.surface);
-  inst.renderer.refreshSurface();
-  return true;
-}
-
-function materialUsageRows(materialId: string) {
-  return sceneObjectStore.materialUsageRows(materialId);
-}
-
-function referencedMaterialIds() {
-  return sceneObjectStore.referencedMaterialIds();
-}
-
-function reconcileSceneMaterials() {
-  if (!materialSlots.length) setSceneMaterials([createSceneMaterial(DEFAULT_SURFACE, 'Material 1')]);
-
-  if (M > 0 && !materialSlotById(baseMaterialId)) {
-    const matched = materialSlots.find(material => surfacesEqual(material.surface, baseSurface));
-    baseMaterialId = matched?.id ?? ensureMaterialSlot(undefined, baseSurface, 'Material 1').id;
-  }
-
-  extraInstances.forEach((inst, idx) => {
-    if (materialSlotById(inst.materialId)) return;
-    const matched = materialSlots.find(material => surfacesEqual(material.surface, inst.surface));
-    inst.materialId = matched?.id ?? ensureMaterialSlot(undefined, inst.surface, `Material ${idx + 2}`).id;
-  });
-
-  const used = referencedMaterialIds();
-  materialSlots = materialSlots.filter(material => used.has(material.id));
-  if (!materialSlots.length) {
-    const material = createSceneMaterial(DEFAULT_SURFACE, 'Material 1');
-    materialSlots = [material];
-    if (M > 0) baseMaterialId = material.id;
-  }
-}
-
-function sceneMaterialEntriesForTexture() {
-  reconcileSceneMaterials();
-  return materialSlots.map(material => {
-    const usage = materialUsageRows(material.id);
-    return {
-      id: material.id,
-      name: material.name,
-      surface: cloneSurface(material.surface),
-      objectLabels: usage.map(row => row.label),
-    };
-  });
 }
 
 function packCameraState(): PackedCamera {
@@ -1058,7 +944,7 @@ function sceneCodecDefaults(): SceneCodecDefaults {
   return {
     defaultCameraPosition: DEFAULT_CAMERA_POSITION,
     worldUp,
-    createMaterialId,
+    createMaterialId: () => sceneMaterialService.createMaterialId(),
     createSceneLightId,
     noSelection: NO_SELECTION,
     bloomIntensity: DEFAULT_BLOOM_INTENSITY,
@@ -1267,7 +1153,7 @@ async function loadSceneStateFile(file: File | null | undefined) {
 }
 
 function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
-  reconcileSceneMaterials();
+  sceneMaterialService.reconcile();
   return {
     N,
     X: new Float32Array(X),
@@ -1288,11 +1174,7 @@ function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
     baseOrigin: new Float32Array(baseOrigin),
     baseOrigN: baseOriginalN,
     baseVisible,
-    materials: materialSlots.map(material => ({
-      id: material.id,
-      name: material.name,
-      surface: cloneSurface(material.surface),
-    })),
+    materials: sceneMaterialService.materialsSnapshot(),
     baseMaterialId,
     baseSurface: cloneSurface(baseSurface),
     selectedInstance: selectionService.primary,
@@ -1374,28 +1256,16 @@ function applySnapshot(snap: SceneSnapshot<PrimitiveMode>) {
   PARAMS.primitive = snap.primitive;
   rebuildState(snap.N, snap.X, snap.E, snap.source, snap.baseOrigN, snap.baseAxisMap, snap.surfaceTopology, snap.cellTopology);
   if (snap.materials?.length) {
-    setSceneMaterials(snap.materials);
+    sceneMaterialService.setMaterials(snap.materials);
   } else {
-    const derivedMaterials: SceneMaterialState[] = [];
-    const addDerivedMaterial = (surface: SurfaceState | undefined, name: string, id?: string) => {
-      const normalized = normalizeSurface(surface);
-      const existing = id
-        ? derivedMaterials.find(material => material.id === id)
-        : derivedMaterials.find(material => surfacesEqual(material.surface, normalized));
-      if (existing) return existing.id;
-      const material = {
-        id: id || `mat_${derivedMaterials.length + 1}`,
-        name,
-        surface: normalized,
-      };
-      derivedMaterials.push(material);
-      return material.id;
-    };
-    snap.baseMaterialId = addDerivedMaterial(snap.baseSurface, 'Material 1', snap.baseMaterialId);
+    const derived = sceneMaterialService.deriveMaterialsFromSurfaces(
+      { surface: snap.baseSurface, materialId: snap.baseMaterialId },
+      snap.instances.map(instance => ({ surface: instance.surface, materialId: instance.materialId })),
+    );
+    snap.baseMaterialId = derived.baseMaterialId;
     snap.instances.forEach((instance, idx) => {
-      instance.materialId = addDerivedMaterial(instance.surface, `Material ${idx + 2}`, instance.materialId);
+      instance.materialId = derived.instanceMaterialIds[idx];
     });
-    setSceneMaterials(derivedMaterials);
   }
   if (snap.rotMatrix.length === rot.matrix.length) rot.matrix.set(snap.rotMatrix);
   baseLabel = snap.label;
@@ -1407,13 +1277,13 @@ function applySnapshot(snap: SceneSnapshot<PrimitiveMode>) {
   baseTransform.scale.copy(snap.baseTransform.scale);
   baseOrigin = cloneObjectOrigin(snap.baseOrigin, X, M, MAX_N);
   baseVisible = snap.baseVisible;
-  baseMaterialId = snap.baseMaterialId || materialSlots[0]?.id || baseMaterialId;
-  baseSurface = cloneSurface(materialSlotById(baseMaterialId)?.surface ?? normalizeSurface(snap.baseSurface));
+  baseMaterialId = snap.baseMaterialId || sceneMaterialService.defaultMaterialId() || baseMaterialId;
+  baseSurface = sceneMaterialService.surfaceForMaterialOrFallback(baseMaterialId, snap.baseSurface);
   rendererND.setSurface(baseSurface);
   extraInstances.push(...snap.instances.map(restoreInstanceSnapshot));
-  reconcileSceneMaterials();
-  if (M > 0) setObjectMaterialId(BASE_SELECTION, baseMaterialId);
-  extraInstances.forEach((inst, idx) => setObjectMaterialId(idx, inst.materialId));
+  sceneMaterialService.reconcile();
+  if (M > 0) sceneMaterialService.setObjectMaterialId(BASE_SELECTION, baseMaterialId);
+  extraInstances.forEach((inst, idx) => sceneMaterialService.setObjectMaterialId(idx, inst.materialId));
   setSceneLights((snap.lights ?? []).map(lightState => ({
     ...lightState,
     position: lightState.position.clone(),
@@ -1513,114 +1383,13 @@ function updateObjectList() {
   objectListController.update();
 }
 
-function getTextureMaterialTarget() {
-  reconcileSceneMaterials();
-  const hasObjectTarget = isGeometrySelectionIndex(selectionService.primary) && isSelectableObject(selectionService.primary);
-  const materialId = hasObjectTarget
-    ? objectMaterialId(selectionService.primary)
-    : (materialSlotById(textureEditorMaterialId)?.id ?? materialSlots[0]?.id ?? ensureMaterialSlot(undefined).id);
-  const material = ensureMaterialSlot(materialId);
-  textureEditorMaterialId = material.id;
-  const usage = materialUsageRows(material.id);
-  return {
-    materialId: material.id,
-    material: {
-      id: material.id,
-      name: material.name,
-      surface: cloneSurface(material.surface),
-      objectLabels: usage.map(row => row.label),
-    },
-    materials: sceneMaterialEntriesForTexture(),
-    canSplit: hasObjectTarget && usage.length > 1,
-    hasObjectTarget,
-  };
-}
-
-function assignMaterialToSelection(materialId: string, recordUndo: boolean) {
-  const material = materialSlotById(materialId);
-  if (!material) return false;
-
-  if (!isGeometrySelectionIndex(selectionService.primary) || !isSelectableObject(selectionService.primary)) {
-    textureEditorMaterialId = material.id;
-    textureEditor.updatePanel();
-    return true;
-  }
-
-  if (objectMaterialId(selectionService.primary) === material.id) return false;
-  if (recordUndo) pushUndoSnapshot();
-  const changed = setObjectMaterialId(selectionService.primary, material.id);
-  if (!changed) return false;
-  textureEditorMaterialId = material.id;
-  reconcileSceneMaterials();
-  updateObjectList();
-  textureEditor.updatePanel();
-  requestSceneUrlUpdate();
-  return true;
-}
-
-function renameSceneMaterial(materialId: string, name: string, recordUndo: boolean) {
-  const material = materialSlotById(materialId);
-  const clean = name.trim();
-  if (!material || !clean || material.name === clean) {
-    textureEditor.updatePanel();
-    return false;
-  }
-  if (recordUndo) pushUndoSnapshot();
-  material.name = clean;
-  textureEditor.updatePanel();
-  requestSceneUrlUpdate();
-  return true;
-}
-
-function splitSelectedMaterial(recordUndo: boolean) {
-  if (!isGeometrySelectionIndex(selectionService.primary) || !isSelectableObject(selectionService.primary)) return false;
-  const current = materialSlotById(objectMaterialId(selectionService.primary));
-  if (!current) return false;
-  const usage = materialUsageRows(current.id);
-  if (usage.length <= 1) return false;
-  if (recordUndo) pushUndoSnapshot();
-  const label = objectLabelForMaterialList(selectionService.primary);
-  const material = createSceneMaterial(current.surface, `${label} material`);
-  materialSlots.push(material);
-  const changed = setObjectMaterialId(selectionService.primary, material.id);
-  if (!changed) return false;
-  reconcileSceneMaterials();
-  updateObjectList();
-  textureEditor.updatePanel();
-  requestSceneUrlUpdate();
-  return true;
-}
-
-function applySurfaceToSelectionMaterial(surface: SurfaceState, recordUndo: boolean) {
-  const material = ensureMaterialSlot(
-    isGeometrySelectionIndex(selectionService.primary) && isSelectableObject(selectionService.primary) ? objectMaterialId(selectionService.primary) : textureEditorMaterialId,
-  );
-  textureEditorMaterialId = material.id;
-  const nextSurface = normalizeSurface(surface);
-  const changed = !surfacesEqual(material.surface, nextSurface);
-  if (changed && recordUndo) pushUndoSnapshot();
-
-  if (changed) {
-    material.surface = cloneSurface(nextSurface);
-    if (M > 0 && baseMaterialId === material.id) setObjectMaterialId(BASE_SELECTION, material.id);
-    extraInstances.forEach((inst, idx) => {
-      if (inst.materialId === material.id) setObjectMaterialId(idx, material.id);
-    });
-  }
-
-  if (changed) {
-    requestSceneUrlUpdate();
-  }
-  return changed;
-}
-
-const textureEditor = new TextureEditorController({
+textureEditor = new TextureEditorController({
   renderer,
-  getSurfaceTarget: getTextureMaterialTarget,
-  applySurfaceToTarget: applySurfaceToSelectionMaterial,
-  assignMaterialToTarget: assignMaterialToSelection,
-  renameMaterial: renameSceneMaterial,
-  splitMaterialForTarget: () => splitSelectedMaterial(true),
+  getSurfaceTarget: () => sceneMaterialService.getTextureMaterialTarget(),
+  applySurfaceToTarget: (surface, recordUndo) => sceneMaterialService.applySurfaceToSelectionMaterial(surface, recordUndo),
+  assignMaterialToTarget: (materialId, recordUndo) => sceneMaterialService.assignMaterialToSelection(materialId, recordUndo),
+  renameMaterial: (materialId, name, recordUndo) => sceneMaterialService.renameMaterial(materialId, name, recordUndo),
+  splitMaterialForTarget: () => sceneMaterialService.splitSelectedMaterial(true),
 });
 
 function removeSelectionOutlines() {
@@ -1879,7 +1648,7 @@ function addProductMeshFromSelection() {
   const verts = embedToMax(product.verts, product.dimension, axisMap);
   const origin = new Float32Array(MAX_N);
   const parentIdx = selected[0];
-  const parentMaterialId = objectMaterialId(parentIdx) || materialSlots[0]?.id || ensureMaterialSlot(undefined).id;
+  const parentMaterialId = objectMaterialId(parentIdx) || sceneMaterialService.defaultMaterialId();
   const parentTransform = getObjectTransform(parentIdx);
   const label = `Product #${extraInstances.length + 1}`;
 
@@ -1930,7 +1699,7 @@ function deleteSelected() {
   if (deleteLightIndices.length) selectionService.setLightId(sceneLights[0]?.state.id ?? '');
   if (keepBaseSelected) selectionService.setSnapshot(BASE_SELECTION, [BASE_SELECTION]);
   else selectionService.clear();
-  reconcileSceneMaterials();
+  sceneMaterialService.reconcile();
   projectAndRenderAll();
   sceneLightPanel.sync();
   updateObjectList();
@@ -1986,7 +1755,7 @@ function deleteSelectedEditCell() {
   }
 
   reconcileSelection();
-  reconcileSceneMaterials();
+  sceneMaterialService.reconcile();
   renderSync.refreshAfterGeometryChange(selectionService.primary);
 }
 
@@ -2012,6 +1781,46 @@ sceneObjectStore = new SceneObjectStore<SceneLightRuntime>({
   getInstances: () => extraInstances,
   getLights: () => sceneLights,
 });
+sceneMaterialService = new SceneMaterialService({
+  baseSelection: BASE_SELECTION,
+  getBase: () => ({
+    M,
+    materialId: baseMaterialId,
+    surface: baseSurface,
+  }),
+  setBaseMaterialId: materialId => {
+    baseMaterialId = materialId;
+  },
+  getInstances: () => extraInstances,
+  getSelectedIndex: () => selectionService.primary,
+  isGeometrySelectionIndex,
+  isSelectableObject,
+  objectMaterialId,
+  objectLabel: idx => sceneObjectStore.objectLabel(idx),
+  materialUsageRows: materialId => sceneObjectStore.materialUsageRows(materialId),
+  referencedMaterialIds: () => sceneObjectStore.referencedMaterialIds(),
+  applyMaterialToObject: (idx, material) => {
+    if (idx === BASE_SELECTION) {
+      baseMaterialId = material.id;
+      baseSurface = cloneSurface(material.surface);
+      rendererND.setSurface(baseSurface);
+      rendererND.refreshSurface();
+      return true;
+    }
+
+    const inst = extraInstances[idx];
+    if (!inst) return false;
+    inst.materialId = material.id;
+    inst.surface = cloneSurface(material.surface);
+    inst.renderer.setSurface(inst.surface);
+    inst.renderer.refreshSurface();
+    return true;
+  },
+  pushUndoSnapshot,
+  updateObjectList,
+  updateTexturePanel: () => textureEditor.updatePanel(),
+  requestSceneUrlUpdate,
+});
 const objectListController = new ObjectListController({
   getRows: () => sceneObjectStore.objectRows(),
   getSelectedIndex: () => selectionService.primary,
@@ -2033,7 +1842,7 @@ function restoreInstanceSnapshot(snap: InstanceSnapshot): Instance {
     snap.cellTopology,
   );
   instanceRenderer.build(snap.M, snap.E, snap.surfaceTopology, cellTopology);
-  const material = ensureMaterialSlot(snap.materialId, normalizeSurface(snap.surface), snap.label);
+  const material = sceneMaterialService.ensureMaterialSlot(snap.materialId, snap.surface, snap.label);
   const surface = cloneSurface(material.surface);
   instanceRenderer.setSurface(surface);
   instanceRenderer.setMode(PARAMS.renderMode);
@@ -2718,7 +2527,7 @@ function createPrimitiveData(kind: PrimitiveKind, dimension: number): InstanceGe
 }
 
 function insertInstance(data: InstanceGeometryData, offset: THREE.Vector3, label: string, materialId: string, syncMode = true) {
-  const material = ensureMaterialSlot(materialId);
+  const material = sceneMaterialService.ensureMaterialSlot(materialId);
   const inst = createSceneInstance({
     scene,
     projector,
@@ -2739,7 +2548,7 @@ function insertInstance(data: InstanceGeometryData, offset: THREE.Vector3, label
 }
 
 function addPrimitiveInstanceAt(kind: PrimitiveKind, label: string, offset: THREE.Vector3, syncMode = true) {
-  const materialId = materialSlots[0]?.id ?? ensureMaterialSlot(undefined, DEFAULT_SURFACE, 'Material 1').id;
+  const materialId = sceneMaterialService.defaultMaterialId('Material 1');
   insertInstance(createPrimitiveData(kind, PARAMS.N), offset, label, materialId, syncMode);
 }
 
@@ -2792,7 +2601,7 @@ function addInstanceAt(offset: THREE.Vector3, recordUndo = true) {
   }
   const materialId = M > 0 && baseVisible
     ? baseMaterialId
-    : (materialSlots[0]?.id ?? ensureMaterialSlot(undefined, DEFAULT_SURFACE, 'Material 1').id);
+    : sceneMaterialService.defaultMaterialId('Material 1');
   const label = `${data.kind} #${extraInstances.length + 1}`;
   insertInstance(data, offset, label, materialId);
 }
@@ -2835,13 +2644,13 @@ function rebuildState(
   baseOrigin = computeObjectOrigin(X, M, MAX_N, baseOrigin);
   baseOriginalN = localN ?? visibleDims();
   baseAxisMap = normalizeAxisMap(axisMap, baseOriginalN);
-  setSceneMaterials([{
+  sceneMaterialService.setMaterials([{
     id: 'mat_1',
     name: 'Material 1',
     surface: cloneSurface(DEFAULT_SURFACE),
   }]);
-  baseMaterialId = materialSlots[0]?.id ?? 'mat_1';
-  baseSurface = cloneSurface(materialSlotById(baseMaterialId)?.surface ?? DEFAULT_SURFACE);
+  baseMaterialId = sceneMaterialService.defaultMaterialId('Material 1');
+  baseSurface = sceneMaterialService.surfaceForMaterialOrFallback(baseMaterialId, DEFAULT_SURFACE);
   baseCellTopology = deriveCellTopologyForGeometry(PARAMS.primitive, baseOriginalN, M, E, surfaceTopology, cellTopology);
   baseSurfaceTopology = clonePrimitiveSurfaceTopology(surfaceTopology)
     ?? surfaceTopologyFromCellTopology(baseCellTopology);
