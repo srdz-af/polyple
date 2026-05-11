@@ -48,10 +48,9 @@ import { WelcomeSplashController, welcomeSplashElementsFromDocument } from '../u
 import { ViewportCaptureController, viewportCaptureElementsFromDocument } from '../viewport/ViewportCaptureController';
 import { HypercubeRenderer } from '../rendering/HypercubeRenderer';
 import { PerformanceOverlayController } from '../rendering/PerformanceOverlayController';
-import { RenderEffectsController, clamp01, clampSigned01, renderEffectsElementsFromDocument } from '../rendering/RenderEffectsController';
+import { RenderEffectsController, renderEffectsElementsFromDocument } from '../rendering/RenderEffectsController';
 import {
   KeyframeTimelineController,
-  normalizeAntialiasMode,
   type AntialiasMode,
   type AnimationKeyframeState,
   type AnimationTimelineState,
@@ -59,7 +58,6 @@ import {
 } from '../animation/KeyframeTimelineController';
 import { completeAxisOrder, interpolateAnimationState } from '../animation/animationInterpolation';
 import type { InstanceGeometryData } from '../scene/instanceFactory';
-import { DEFAULT_SCENE_STATE } from '../scene/defaultSceneState';
 import { DuplicatePlacementOperationFactory } from '../scene/DuplicatePlacementOperationFactory';
 import { GeometryEditOperationFactory } from '../scene/GeometryEditOperationFactory';
 import { GeometryEditService } from '../scene/GeometryEditService';
@@ -70,55 +68,19 @@ import { SceneMaterialService } from '../scene/SceneMaterialService';
 import { SceneObjectService } from '../scene/SceneObjectService';
 import { SceneObjectStore } from '../scene/SceneObjectStore';
 import { SceneSelectionService } from '../scene/SceneSelectionService';
-import { SceneHistory } from '../scene/SceneHistory';
 import { SceneLightService } from '../scene/SceneLightService';
+import { SceneStateService, byteLengthOfCellTopology, byteLengthOfSurfaceTopology } from '../scene/SceneStateService';
 import type { SceneLightRuntime } from '../scene/sceneLightRuntime';
 import {
   deriveCellTopologyForGeometry,
-  packCellTopologyForUrl,
-  packSurfaceTopology,
   surfaceTopologyForEditedCellTopology,
-  unpackCellTopology,
-  unpackSurfaceTopology,
-  type PackedCellTopology,
-  type PackedTopology,
 } from '../scene/topologyState';
 import {
   cloneTransformState,
-  finiteInteger,
-  finiteNumber,
-  isPackedSceneUrlState,
-  normalizeViewMode,
-  packBackgroundState,
-  packInstanceState,
-  packMaterialState,
-  packSceneLightState,
-  packSurfaceState,
-  packTimelineState,
-  packTransformState,
-  sanitizeSceneName,
-  unpackBackgroundState,
-  unpackSceneUrlSnapshot,
-  unpackTimelineState,
-  unpackVec3,
-  type PackedCamera,
   type PackedSceneUrlState,
   type PrimitiveMode,
-  type SceneCodecDefaults,
 } from '../scene/sceneStateCodec';
-import {
-  clearScenePayloadFromCurrentUrl,
-  createSceneUrlWithPayload,
-  decodeSceneUrlPayload,
-  encodeSceneUrlPayload,
-  packF32,
-  packU32,
-  readScenePayloadFromText,
-  readScenePayloadFromUrl,
-  unpackF32,
-  unpackU32,
-} from '../scene/sceneUrlState';
-import { DEFAULT_SURFACE, cloneSurface, normalizeSurface, type SurfaceState } from '../scene/surface';
+import { DEFAULT_SURFACE, cloneSurface, type SurfaceState } from '../scene/surface';
 import type {
   DataSource,
   Instance,
@@ -131,7 +93,6 @@ import type {
   TransformState,
 } from '../scene/types';
 import type { ExtraAxisGizmoState } from '../ui/ExtraAxisGizmoController';
-import { copyTextToClipboard, downloadTextFile, timestampedSceneFileName } from '../utils/fileExport';
 
 
 export class PolypleApp {
@@ -151,8 +112,7 @@ export class PolypleApp {
     const GRAIN_UPDATE_INTERVAL_FRAMES = 3;
     const GRAIN_TEXTURE_SCALE = 0.5;
     const MAX_UNDO_SNAPSHOT_BYTES = 64 * 1024 * 1024;
-    
-    let sceneUrlApplying = false;
+    let sceneStateService: SceneStateService;
     
     function requestSceneUrlUpdate() {
       // Scene URLs are exported explicitly from the save button.
@@ -169,7 +129,7 @@ export class PolypleApp {
     const welcomeSplashController = new WelcomeSplashController(
       welcomeSplashElementsFromDocument(),
       {
-        loadPayload: async payload => sanitizeSceneName((await loadSceneUrlPayload(payload, false)).sn),
+      loadPayload: payload => sceneStateService.loadPayloadSceneName(payload),
       },
     );
     const sceneFileControls = new SceneFileControlsController({
@@ -337,9 +297,8 @@ export class PolypleApp {
     const tmpN = new Float32Array(32);
     const tmpCenter = new THREE.Vector3();
     let setViewMode: (mode: ViewMode) => void;
-    let sceneHistory: SceneHistory<PackedSceneUrlState>;
+    
     let baseLabel = 'Hypercube';
-    let sceneName = '';
     const BASE_SELECTION = -1;
     const NO_SELECTION = -2;
     const LIGHT_SELECTION_BASE = -1000;
@@ -445,237 +404,20 @@ export class PolypleApp {
       return sceneObjectStore.objectMaterialId(idx);
     }
     
-    function packCameraState(): PackedCamera {
-      return [
-        camera.position.x, camera.position.y, camera.position.z,
-        controls.target.x, controls.target.y, controls.target.z,
-        camera.up.x, camera.up.y, camera.up.z,
-        camera.fov, camera.zoom,
-      ];
-    }
-    
-    function applyCameraState(state: PackedCamera | undefined) {
-      if (!state) return;
-      camera.position.copy(unpackVec3(state, DEFAULT_CAMERA_POSITION));
-      controls.target.copy(unpackVec3([state[3], state[4], state[5]], new THREE.Vector3()));
-      camera.up.copy(unpackVec3([state[6], state[7], state[8]], worldUp).normalize());
-      camera.fov = Math.max(1, Math.min(179, finiteNumber(state[9], camera.fov)));
-      camera.zoom = Math.max(0.01, Math.min(100, finiteNumber(state[10], camera.zoom)));
-      camera.updateProjectionMatrix();
-      controls.update();
-      updateAxisGizmo();
-    }
-    
-    function sceneCodecDefaults(): SceneCodecDefaults {
-      return {
-        defaultCameraPosition: DEFAULT_CAMERA_POSITION,
-        worldUp,
-        createMaterialId: () => sceneMaterialService.createMaterialId(),
-        createSceneLightId,
-        noSelection: NO_SELECTION,
-        bloomIntensity: DEFAULT_BLOOM_INTENSITY,
-        motionBlurIntensity: DEFAULT_MOTION_BLUR_INTENSITY,
-        colorHue: DEFAULT_COLOR_HUE,
-        colorSaturation: DEFAULT_COLOR_SATURATION,
-        colorBrightness: DEFAULT_COLOR_BRIGHTNESS,
-        colorContrast: DEFAULT_COLOR_CONTRAST,
-        grainIntensity: DEFAULT_GRAIN_INTENSITY,
-      };
-    }
-    
-    function captureSceneUrlState(sceneNameOverride = sceneName): PackedSceneUrlState {
-      const snap = captureSnapshot();
-      const editSelection = transformController.getEditSelection();
-      const packedSceneName = sanitizeSceneName(sceneNameOverride);
-      return {
-        v: 1,
-        sn: packedSceneName || undefined,
-        n: snap.N,
-        x: packF32(snap.X),
-        e: packU32(snap.E),
-        ct: packCellTopologyForUrl(snap.primitive, snap.source, snap.cellTopology),
-        st: packSurfaceTopology(snap.surfaceTopology),
-        m: snap.M,
-        ds: snap.source,
-        l: snap.label,
-        pn: snap.paramsN,
-        pk: snap.primitive,
-        rm: PARAMS.renderMode,
-        em: PARAMS.editMode ? 1 : 0,
-        fx: [
-          PARAMS.bloomIntensity,
-          PARAMS.motionBlurIntensity,
-          PARAMS.colorHue,
-          PARAMS.colorSaturation,
-          PARAMS.colorBrightness,
-          PARAMS.colorContrast,
-          PARAMS.grainIntensity,
-          PARAMS.antialiasMode === 'smaa' ? 1 : 0,
-        ],
-        r: packF32(snap.rotMatrix),
-        ax: [snap.axes.x, snap.axes.y, snap.axes.z],
-        ao: [...snap.axesOrder],
-        of: snap.axesOffset,
-        bam: [...snap.baseAxisMap],
-        bt: packTransformState(snap.baseTransform),
-        bo: packF32(snap.baseOrigin ? new Float32Array(snap.baseOrigin) : new Float32Array(MAX_N)),
-        bn: snap.baseOrigN,
-        bv: snap.baseVisible ? 1 : 0,
-        ma: snap.materials?.map(packMaterialState),
-        bm: snap.baseMaterialId,
-        bs: packSurfaceState(normalizeSurface(snap.baseSurface)),
-        si: snap.selectedInstance,
-        ss: [...(snap.selectedInstances ?? [])],
-        sv: transformController.getSelectedVertex(),
-        es: editSelection?.cellIds.length ? [editSelection.dimension, [...editSelection.cellIds]] : undefined,
-        i: snap.instances.map(packInstanceState),
-        c: packCameraState(),
-        bg: packBackgroundState(backgroundController.getUrlState()),
-        li: sceneLightService.getLightStates().map(packSceneLightState),
-        tl: animationTimeline ? packTimelineState(animationTimeline.getTimelineState()) : undefined,
-        pc: paneController.isCollapsed ? 1 : 0,
-        ag: axisController.getExtraAxisState(),
-      };
-    }
-    
-    async function applySceneUrlState(state: PackedSceneUrlState) {
-      sceneUrlApplying = true;
-      try {
-        sceneName = sanitizeSceneName(state.sn);
-        const viewMode = normalizeViewMode(state.rm);
-        PARAMS.renderMode = viewMode;
-        applySnapshot(unpackSceneUrlSnapshot(state, sceneCodecDefaults()));
-        setViewMode(viewMode);
-    
-        PARAMS.bloomIntensity = clamp01(finiteNumber(state.fx?.[0], DEFAULT_BLOOM_INTENSITY));
-        PARAMS.motionBlurIntensity = clamp01(finiteNumber(state.fx?.[1], DEFAULT_MOTION_BLUR_INTENSITY));
-        PARAMS.colorHue = clampSigned01(finiteNumber(state.fx?.[2], DEFAULT_COLOR_HUE));
-        PARAMS.colorSaturation = clampSigned01(finiteNumber(state.fx?.[3], DEFAULT_COLOR_SATURATION));
-        PARAMS.colorBrightness = clampSigned01(finiteNumber(state.fx?.[4], DEFAULT_COLOR_BRIGHTNESS));
-        PARAMS.colorContrast = clampSigned01(finiteNumber(state.fx?.[5], DEFAULT_COLOR_CONTRAST));
-        PARAMS.grainIntensity = clamp01(finiteNumber(state.fx?.[6], DEFAULT_GRAIN_INTENSITY));
-        PARAMS.antialiasMode = normalizeAntialiasMode(state.fx?.[7] === 1 ? 'smaa' : 'off');
-        renderEffects.sync();
-    
-        axisController.applyExtraAxisState(state.ag);
-        paneController.setCollapsed(state.pc === 1);
-        applyCameraState(state.c);
-        setEditMode(state.em === 1);
-        const packedEditSelection = Array.isArray(state.es) ? state.es : null;
-        if (packedEditSelection && PARAMS.editMode && isGeometrySelectionIndex(selectionService.primary)) {
-          const dimension = finiteInteger(packedEditSelection[0], 0);
-          const cellIds = Array.isArray(packedEditSelection[1])
-            ? packedEditSelection[1].map(cellId => finiteInteger(cellId, -1))
-            : [];
-          selectionService.restorePackedEditSelection(dimension, cellIds);
-        } else {
-          transformController.setSelectedVertex(finiteInteger(state.sv, -1));
-        }
-        const activeEditSelection = transformController.getEditSelection();
-        if (PARAMS.editMode && activeEditSelection && getObjectVisible(selectionService.primary)) {
-          updateVertexCloud(selectionService.primary);
-          if (transformController.getSelectedVertex() >= 0) placeVertexMarker(selectionService.primary, transformController.getSelectedVertex());
-        }
-    
-        animationTimeline?.applyTimelineState(state.tl ? unpackTimelineState(state.tl, sceneCodecDefaults()) : undefined, false);
-        await backgroundController.applyUrlState(unpackBackgroundState(state.bg));
-    
-        projectAndRenderAll();
-        updateAxisLegend();
-        renderAxisList();
-        updateObjectList();
-        updateSelectionOutline();
-        textureEditor.updatePanel();
-      } finally {
-        sceneUrlApplying = false;
-      }
-    }
-    
-    async function loadSceneUrlPayload(payload: string, clearUrlAfterLoad: boolean) {
-      const decoded = await decodeSceneUrlPayload(payload);
-      if (!isPackedSceneUrlState(decoded)) {
-        throw new Error('Invalid scene URL state.');
-      }
-      await applySceneUrlState(decoded);
-      if (clearUrlAfterLoad) clearScenePayloadFromCurrentUrl();
-      return decoded;
-    }
-    
-    async function applyDefaultSceneState() {
-      if (!isPackedSceneUrlState(DEFAULT_SCENE_STATE)) {
-        console.warn('Default scene state is invalid.');
-        return;
-      }
-      await applySceneUrlState(DEFAULT_SCENE_STATE);
+    function captureSceneUrlState(sceneNameOverride?: string): PackedSceneUrlState {
+      return sceneStateService.captureUrlState(sceneNameOverride);
     }
     
     async function initializeSceneUrlState(loadDefault = false) {
-      const payload = readScenePayloadFromUrl();
-      if (!payload) {
-        if (loadDefault) await applyDefaultSceneState();
-        return;
-      }
-    
-      try {
-        await loadSceneUrlPayload(payload, true);
-      } catch (err) {
-        console.warn('Unable to apply scene URL state', err);
-        clearScenePayloadFromCurrentUrl();
-      }
-    }
-    
-    function requestSceneNameForSave() {
-      const currentName = sanitizeSceneName(sceneName);
-      const value = window.prompt('Scene name (optional)', currentName || baseLabel || '');
-      if (value === null) return currentName;
-      sceneName = sanitizeSceneName(value);
-      return sceneName;
+      await sceneStateService.initializeFromUrlOrDefault(loadDefault);
     }
     
     async function saveSceneStateFile(sceneSaveButton: HTMLButtonElement | null) {
-      if (!sceneSaveButton) return;
-      const previousTitle = sceneSaveButton.title;
-      sceneSaveButton.disabled = true;
-      sceneSaveButton.title = 'Saving scene URL...';
-      try {
-        const nextSceneName = requestSceneNameForSave();
-        const payload = await encodeSceneUrlPayload(captureSceneUrlState(nextSceneName));
-        welcomeSplashController.rememberScene(payload, nextSceneName);
-        const sceneUrl = createSceneUrlWithPayload(payload);
-        downloadTextFile(sceneUrl, timestampedSceneFileName());
-        let copied = true;
-        try {
-          await copyTextToClipboard(sceneUrl);
-        } catch (err) {
-          copied = false;
-          console.warn('Unable to copy scene URL to clipboard', err);
-        }
-        sceneSaveButton.title = copied ? 'Scene URL copied and downloaded' : 'Scene URL downloaded';
-      } catch (err) {
-        console.warn('Unable to save scene URL state', err);
-        window.alert('Unable to save scene URL.');
-      } finally {
-        sceneSaveButton.disabled = false;
-        window.setTimeout(() => {
-          if (sceneSaveButton) sceneSaveButton.title = previousTitle;
-        }, 1600);
-      }
+      await sceneStateService.saveFile(sceneSaveButton);
     }
     
     async function loadSceneStateFile(file: File | null | undefined) {
-      if (!file) return false;
-      try {
-        const payload = readScenePayloadFromText(await file.text());
-        if (!payload) throw new Error('Scene file does not contain a valid scene URL.');
-        const state = await loadSceneUrlPayload(payload, false);
-        welcomeSplashController.rememberScene(payload, sanitizeSceneName(state.sn));
-        welcomeSplashController.hide();
-        return true;
-      } catch (err) {
-        console.warn('Unable to load scene URL state', err);
-        window.alert(err instanceof Error ? err.message : 'Unable to load scene URL.');
-        return false;
-      }
+      return sceneStateService.loadFile(file);
     }
     
     function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
@@ -726,18 +468,6 @@ export class PolypleApp {
       };
     }
     
-    function byteLengthOfCellTopology(topology?: CellTopology) {
-      if (!topology) return 0;
-      return topology.cells.reduce((sum, dim) => (
-        sum + (dim ? dim.offsets.byteLength + dim.vertices.byteLength : 0)
-      ), 0);
-    }
-    
-    function byteLengthOfSurfaceTopology(topology?: PrimitiveSurfaceTopology) {
-      if (!topology) return 0;
-      return topology.triangles.byteLength + topology.facetIds.byteLength;
-    }
-    
     function estimateUndoSnapshotBytes() {
       let bytes = 0;
       bytes += X.byteLength + E.byteLength + Y.byteLength + rot.matrix.byteLength;
@@ -754,23 +484,15 @@ export class PolypleApp {
     }
     
     function pushUndoSnapshot() {
-      if (sceneUrlApplying) return;
-      const estimatedBytes = estimateUndoSnapshotBytes();
-      if (estimatedBytes > MAX_UNDO_SNAPSHOT_BYTES) {
-        console.warn(
-          `Skipping undo snapshot because the scene is too large (${(estimatedBytes / 1024 / 1024).toFixed(1)} MB).`,
-        );
-        return;
-      }
-      sceneHistory.push();
+      sceneStateService.pushUndoSnapshot();
     }
     
     function undoSceneSnapshot() {
-      void sceneHistory.undo();
+      sceneStateService.undo();
     }
     
     function redoSceneSnapshot() {
-      void sceneHistory.redo();
+      sceneStateService.redo();
     }
     
     function applySnapshot(snap: SceneSnapshot<PrimitiveMode>) {
@@ -815,12 +537,6 @@ export class PolypleApp {
       selectObject(selectionService.primary, selectionService.primary !== NO_SELECTION);
       requestSceneUrlUpdate();
     }
-    
-    sceneHistory = new SceneHistory({
-      capture: captureSceneUrlState,
-      apply: applySceneUrlState,
-      maxEntries: 20,
-    });
     
     function getObjectVisible(idx: number) {
       return selectionService?.getObjectVisible(idx) ?? sceneObjectStore.getObjectVisible(idx);
@@ -1435,6 +1151,51 @@ export class PolypleApp {
       },
     });
     axisController.init();
+    sceneStateService = new SceneStateService({
+      params: PARAMS,
+      camera,
+      controls,
+      worldUp,
+      defaultCameraPosition: DEFAULT_CAMERA_POSITION,
+      maxUndoSnapshotBytes: MAX_UNDO_SNAPSHOT_BYTES,
+      noSelection: NO_SELECTION,
+      defaults: {
+        bloomIntensity: DEFAULT_BLOOM_INTENSITY,
+        motionBlurIntensity: DEFAULT_MOTION_BLUR_INTENSITY,
+        colorHue: DEFAULT_COLOR_HUE,
+        colorSaturation: DEFAULT_COLOR_SATURATION,
+        colorBrightness: DEFAULT_COLOR_BRIGHTNESS,
+        colorContrast: DEFAULT_COLOR_CONTRAST,
+        grainIntensity: DEFAULT_GRAIN_INTENSITY,
+      },
+      createMaterialId: () => sceneMaterialService.createMaterialId(),
+      createSceneLightId,
+      captureSnapshot,
+      applySnapshot,
+      estimateUndoSnapshotBytes,
+      getLights: () => sceneLightService.getLightStates(),
+      getTimeline: () => animationTimeline,
+      backgroundController,
+      renderEffects,
+      paneController,
+      welcomeSplashController,
+      axisController,
+      transformController,
+      selectionService,
+      isGeometrySelectionIndex,
+      getObjectVisible,
+      setViewMode: mode => setViewMode(mode),
+      setEditMode,
+      updateAxisGizmo,
+      projectAndRenderAll,
+      updateAxisLegend,
+      renderAxisList,
+      updateObjectList,
+      updateSelectionOutline,
+      updateTexturePanel: () => textureEditor.updatePanel(),
+      updateVertexCloud,
+      placeVertexMarker,
+    });
     projectionPipeline = new ProjectionPipeline({
       getN: () => N,
       getX: () => X,
@@ -1521,8 +1282,8 @@ export class PolypleApp {
         target.surfaceTopology = clonePrimitiveSurfaceTopology(state.surfaceTopology);
       },
       getObjectVisible,
-      isSceneApplying: () => sceneUrlApplying,
-      history: sceneHistory,
+      isSceneApplying: () => sceneStateService.isApplying(),
+      history: sceneStateService.history,
       renderSync,
     });
     
@@ -1537,7 +1298,7 @@ export class PolypleApp {
       },
       isGeometrySelectionIndex,
       captureUndoSnapshot: captureSceneUrlState,
-      pushUndoSnapshot: snapshot => sceneHistory.push(snapshot),
+      pushUndoSnapshot: snapshot => sceneStateService.history.push(snapshot),
       createLightDuplicate: (idx, position) => (
         sceneLightService.duplicateFromSelection(idx, position, duplicateLabel)
       ),
@@ -1913,7 +1674,7 @@ export class PolypleApp {
       }
       updateDimensionControl();
       baseLabel = source === 'custom' ? 'Custom' : 'Hypercube';
-      sceneName = '';
+      sceneStateService?.setSceneName('');
       updateObjectList();
       selectObject(BASE_SELECTION);
       updateAxisLegend();
@@ -2036,7 +1797,7 @@ export class PolypleApp {
     updateTransformActionButtons();
     paneController.syncToViewport(true);
     viewportInteraction.bind();
-    const startupScenePayload = readScenePayloadFromUrl();
+    const startupScenePayload = sceneStateService.hasUrlPayload();
     void backgroundSelectorReady
       .then(async () => {
         await initializeSceneUrlState(true);
