@@ -78,6 +78,7 @@ import { SceneFileControlsController } from './ui/SceneFileControlsController';
 import { SceneLightPanelController } from './ui/SceneLightPanelController';
 import { TextureEditorController } from './ui/TextureEditorController';
 import { ViewModeController } from './ui/ViewModeController';
+import { ViewportActionControlsController } from './ui/ViewportActionControlsController';
 import { WelcomeSplashController, welcomeSplashElementsFromDocument } from './ui/WelcomeSplashController';
 import { ViewportCaptureController, viewportCaptureElementsFromDocument } from './viewport/ViewportCaptureController';
 import { HypercubeRenderer } from './rendering/HypercubeRenderer';
@@ -267,13 +268,6 @@ function requestSceneUrlUpdate() {
 
 const app = document.getElementById('app')!;
 const ctxMenu = document.getElementById('context-menu') as HTMLDivElement | null;
-const editModeToggle = document.getElementById('edit-mode-toggle') as HTMLButtonElement | null;
-const mobileFullscreenToggle = document.getElementById('mobile-fullscreen-toggle') as HTMLButtonElement | null;
-const transformMoveButton = document.getElementById('transform-move-button') as HTMLButtonElement | null;
-const transformRotateButton = document.getElementById('transform-rotate-button') as HTMLButtonElement | null;
-const transformScaleButton = document.getElementById('transform-scale-button') as HTMLButtonElement | null;
-const cameraRecenterButton = document.getElementById('camera-recenter-button') as HTMLButtonElement | null;
-const focusResetButton = document.getElementById('focus-reset-button') as HTMLButtonElement | null;
 const modalOverlayController = new ModalOverlayController();
 const paneController = new PaneController();
 const sceneControlTabs = new SceneControlTabsController();
@@ -293,6 +287,13 @@ const sceneFileControls = new SceneFileControlsController({
   saveScene: button => saveSceneStateFile(button),
   loadSceneFile: loadSceneStateFile,
   hideWelcome: () => welcomeSplashController.hide(),
+});
+const viewportActionControls = new ViewportActionControlsController({
+  getEditMode: () => PARAMS.editMode,
+  setEditMode,
+  toggleTransformMode: mode => transformController.toggleTransformMode(mode),
+  recenterCamera: () => keyboardCamera.recenterCamera(),
+  resetFocus: () => keyboardCamera.resetFocus(),
 });
 
 function setSceneControlTab(tab: string) {
@@ -2993,9 +2994,7 @@ transformController = new TransformController({
   raycaster,
   ndc,
   vertexGeo,
-  moveButton: transformMoveButton,
-  rotateButton: transformRotateButton,
-  scaleButton: transformScaleButton,
+  ...viewportActionControls.transformButtonElements(),
   getParams: () => PARAMS,
   getN: () => N,
   getX: () => X,
@@ -3170,9 +3169,7 @@ function setNewPrimitiveDimension(value: number) {
 }
 
 function updateEditModeToggle() {
-  if (!editModeToggle) return;
-  editModeToggle.classList.toggle('active', PARAMS.editMode);
-  editModeToggle.setAttribute('aria-pressed', String(PARAMS.editMode));
+  viewportActionControls.syncEditMode();
 }
 
 function applyEditMode(active: boolean) {
@@ -3195,42 +3192,6 @@ function applyEditMode(active: boolean) {
 
 function setEditMode(active: boolean) {
   runImmediateViewportOperation('set-edit-mode', 'viewport', () => applyEditMode(active));
-}
-
-function fullscreenAvailable() {
-  return typeof document.documentElement.requestFullscreen === 'function'
-    && typeof document.exitFullscreen === 'function';
-}
-
-function updateMobileFullscreenToggle() {
-  if (!mobileFullscreenToggle) return;
-  if (!fullscreenAvailable()) {
-    mobileFullscreenToggle.hidden = true;
-    return;
-  }
-  const active = document.fullscreenElement != null;
-  const label = active ? 'Exit fullscreen' : 'Enter fullscreen';
-  const icon = mobileFullscreenToggle.querySelector('.material-symbols-rounded');
-  mobileFullscreenToggle.hidden = false;
-  mobileFullscreenToggle.classList.toggle('active', active);
-  mobileFullscreenToggle.setAttribute('aria-label', label);
-  mobileFullscreenToggle.title = label;
-  if (icon) icon.textContent = active ? 'fullscreen_exit' : 'fullscreen';
-}
-
-async function toggleMobileFullscreen() {
-  if (!fullscreenAvailable()) return;
-  try {
-    if (document.fullscreenElement) {
-      await document.exitFullscreen();
-    } else {
-      await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
-    }
-  } catch (err) {
-    console.warn('Fullscreen toggle failed', err);
-  } finally {
-    updateMobileFullscreenToggle();
-  }
 }
 
 function updateTransformActionButtons() {
@@ -3654,19 +3615,7 @@ sceneLightPanel.bind();
 editToolbar?.bind();
 dimensionControl.bind();
 sceneFileControls.bind();
-editModeToggle?.addEventListener('click', () => setEditMode(!PARAMS.editMode));
-mobileFullscreenToggle?.addEventListener('click', () => void toggleMobileFullscreen());
-document.addEventListener('fullscreenchange', updateMobileFullscreenToggle);
-updateMobileFullscreenToggle();
-[
-  { el: transformMoveButton, mode: 'move' as TransformMode },
-  { el: transformRotateButton, mode: 'rotate' as TransformMode },
-  { el: transformScaleButton, mode: 'scale' as TransformMode },
-].forEach(entry => {
-  entry.el?.addEventListener('click', () => transformController.toggleTransformMode(entry.mode));
-});
-cameraRecenterButton?.addEventListener('click', () => keyboardCamera.recenterCamera());
-focusResetButton?.addEventListener('click', () => keyboardCamera.resetFocus());
+viewportActionControls.bind();
 new KeyboardShortcutController({
   isModalOpen: () => modalOverlayController.isOpen(),
   getTransformMode: () => transformController.mode,
