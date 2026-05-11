@@ -6,7 +6,7 @@
 
 # Polyple
 
-Polyple is an interactive N-dimensional geometry editor and renderer built with **Three.js**. It lets you create high-dimensional objects, project them into 3D, edit their cells, animate projection/camera state, and share exact scenes through compact saved URLs.
+[Polyple](https://polyple.xyz/) is an interactive N-dimensional geometry editor and renderer built with **Three.js**. It lets you create high-dimensional objects, project them into 3D, edit their cells, animate projection/camera state, and share exact scenes through compact saved URLs.
 
 ![Polyple preview](public/preview.gif)
 
