@@ -86,6 +86,15 @@ import { RenderSyncService } from './scene/RenderSyncService';
 import { SceneObjectStore } from './scene/SceneObjectStore';
 import { SceneHistory } from './scene/SceneHistory';
 import {
+  cloneSceneLightState,
+  createSceneLightRuntime,
+  disposeSceneLightRuntime,
+  normalizeSceneLightState,
+  rebuildSceneLightRuntimeKind,
+  syncSceneLightRuntime,
+  type SceneLightRuntime,
+} from './scene/sceneLightRuntime';
+import {
   clearScenePayloadFromCurrentUrl,
   createSceneUrlWithPayload,
   decodeSceneUrlPayload,
@@ -116,18 +125,7 @@ import type { ExtraAxisGizmoState } from './ui/ExtraAxisGizmoController';
 import { safeLocalStorageGet, safeLocalStorageSet } from './utils/localStorage';
 
 type PrimitiveMode = PrimitiveKind;
-type SceneLightHelper = THREE.PointLightHelper | THREE.SpotLightHelper;
-type SceneLightMarker = THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
-type SceneLightDirectionLine = THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>;
 type SceneLightDragHandle = 'position' | 'target';
-type SceneLightRuntime = {
-  state: SceneLightState;
-  light: THREE.PointLight | THREE.SpotLight;
-  helper: SceneLightHelper;
-  marker: SceneLightMarker;
-  targetMarker: SceneLightMarker;
-  directionLine: SceneLightDirectionLine;
-};
 type PackedVec3 = [number, number, number];
 type PackedTransform = [
   number, number, number,
@@ -313,8 +311,6 @@ const SCENE_LIGHT_MARKER_RADIUS = 0.025;
 const SCENE_LIGHT_MARKER_PIXEL_DIAMETER = 11;
 const SELECTED_SCENE_LIGHT_MARKER_PIXEL_DIAMETER = 15;
 const SCENE_LIGHT_TARGET_PIXEL_DIAMETER = 10;
-const SCENE_SPOT_DIRECTION_ANGLE = Math.PI / 2;
-const SCENE_SPOT_DIRECTION_PENUMBRA = 0.08;
 const MAX_UNDO_SNAPSHOT_BYTES = 64 * 1024 * 1024;
 const SHADOW_MAP_SIZE_BY_QUALITY: Record<RenderQuality, number> = {
   full: 2048,
@@ -1270,134 +1266,14 @@ function syncSceneLightIdCounter() {
   sceneLightIdCounter = Math.max(sceneLightIdCounter, max + 1);
 }
 
-function normalizeSceneLightState(state: Partial<SceneLightState>): SceneLightState {
-  const kind: SceneLightKind = state.kind === 'directional' ? 'directional' : 'point';
-  const fallbackPosition = kind === 'point' ? new THREE.Vector3(1.8, 1.8, 1.8) : new THREE.Vector3(2, 3, 4);
-  const position = state.position?.clone() ?? fallbackPosition;
-  const target = state.target?.clone() ?? new THREE.Vector3();
-  if (kind === 'directional' && target.distanceToSquared(position) < 1e-8) {
-    target.copy(position).add(new THREE.Vector3(0, -1, 0));
-  }
+function sceneLightRuntimeOptions(selected = false) {
   return {
-    id: state.id?.trim() || createSceneLightId(),
-    kind,
-    label: state.label?.trim() || `${kind === 'point' ? 'Point' : 'Directional'} light`,
-    color: Math.max(0, Math.min(0xffffff, (state.color ?? 0xffffff) >>> 0)),
-    intensity: Math.max(0, finiteNumber(state.intensity, kind === 'point' ? 3 : 1)),
-    position,
-    target,
-    visible: state.visible !== false,
-    castShadow: state.castShadow === true,
+    scene,
+    markerGeometry: sceneLightMarkerGeometry,
+    createId: createSceneLightId,
+    shadowMapSize: currentShadowMapSize,
+    selected,
   };
-}
-
-function createSceneLightObject(state: SceneLightState) {
-  const object = state.kind === 'point'
-    ? new THREE.PointLight(state.color, state.intensity, 0, 2)
-    : new THREE.SpotLight(state.color, state.intensity, 0, SCENE_SPOT_DIRECTION_ANGLE, SCENE_SPOT_DIRECTION_PENUMBRA, 2);
-  object.name = state.id;
-  if (object instanceof THREE.SpotLight) {
-    object.target.position.copy(state.target);
-    scene.add(object.target);
-  }
-  scene.add(object);
-  return object;
-}
-
-function configureLightHelperMaterials(object: THREE.Object3D, color: number, opacity = 0.82) {
-  object.traverse(child => {
-    child.renderOrder = 42;
-    const material = (child as THREE.Line | THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
-    const materials = Array.isArray(material) ? material : (material ? [material] : []);
-    materials.forEach(entry => {
-      entry.depthTest = false;
-      entry.depthWrite = false;
-      entry.transparent = true;
-      entry.opacity = opacity;
-      if ('color' in entry && entry.color instanceof THREE.Color) entry.color.setHex(color);
-    });
-  });
-}
-
-function createSceneLightHelper(state: SceneLightState, lightObject: THREE.PointLight | THREE.SpotLight): SceneLightHelper {
-  const helper = lightObject instanceof THREE.PointLight
-    ? new THREE.PointLightHelper(lightObject, 0.25, state.color)
-    : new THREE.SpotLightHelper(lightObject, state.color);
-  helper.name = `${state.id}-helper`;
-  helper.visible = false;
-  configureLightHelperMaterials(helper, state.color);
-  scene.add(helper);
-  return helper;
-}
-
-function createSceneLightMarker(state: SceneLightState): SceneLightMarker {
-  const material = new THREE.MeshBasicMaterial({
-    color: state.color,
-    transparent: true,
-    opacity: 0.68,
-    depthTest: false,
-    depthWrite: false,
-  });
-  const marker = new THREE.Mesh(sceneLightMarkerGeometry, material);
-  marker.name = `${state.id}-marker`;
-  marker.renderOrder = 41;
-  marker.userData.sceneLightId = state.id;
-  marker.userData.sceneLightHandle = 'position';
-  marker.visible = false;
-  scene.add(marker);
-  return marker;
-}
-
-function createSceneLightTargetMarker(state: SceneLightState): SceneLightMarker {
-  const material = new THREE.MeshBasicMaterial({
-    color: state.color,
-    transparent: true,
-    opacity: 0.86,
-    depthTest: false,
-    depthWrite: false,
-    wireframe: true,
-  });
-  const marker = new THREE.Mesh(sceneLightMarkerGeometry, material);
-  marker.name = `${state.id}-target-marker`;
-  marker.renderOrder = 43;
-  marker.userData.sceneLightId = state.id;
-  marker.userData.sceneLightHandle = 'target';
-  marker.visible = false;
-  scene.add(marker);
-  return marker;
-}
-
-function createSceneLightDirectionLine(state: SceneLightState): SceneLightDirectionLine {
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-  const material = new THREE.LineBasicMaterial({
-    color: state.color,
-    transparent: true,
-    opacity: 0.72,
-    depthTest: false,
-    depthWrite: false,
-  });
-  const line = new THREE.Line(geometry, material);
-  line.name = `${state.id}-direction-line`;
-  line.renderOrder = 42;
-  line.visible = false;
-  scene.add(line);
-  return line;
-}
-
-function createSceneLightRuntime(state: SceneLightState): SceneLightRuntime {
-  const normalized = normalizeSceneLightState(state);
-  const lightObject = createSceneLightObject(normalized);
-  const runtime: SceneLightRuntime = {
-    state: normalized,
-    light: lightObject,
-    helper: createSceneLightHelper(normalized, lightObject),
-    marker: createSceneLightMarker(normalized),
-    targetMarker: createSceneLightTargetMarker(normalized),
-    directionLine: createSceneLightDirectionLine(normalized),
-  };
-  syncSceneLightRuntime(runtime);
-  return runtime;
 }
 
 function currentShadowMapSize() {
@@ -1411,108 +1287,20 @@ function syncRendererShadowState() {
   renderer.shadowMap.needsUpdate = enabled;
 }
 
-function syncSceneLightShadow(runtime: SceneLightRuntime) {
-  const shadowMapSize = currentShadowMapSize();
-  const enabled = runtime.state.visible && runtime.state.castShadow && shadowMapSize > 0;
-  runtime.light.castShadow = enabled;
-  if (!enabled) return;
-
-  runtime.light.shadow.mapSize.set(shadowMapSize, shadowMapSize);
-  runtime.light.shadow.bias = -0.00025;
-  runtime.light.shadow.normalBias = 0.02;
-  runtime.light.shadow.camera.near = runtime.light instanceof THREE.PointLight ? 0.05 : 0.1;
-  runtime.light.shadow.camera.far = 100;
-  if (runtime.light instanceof THREE.SpotLight) {
-    runtime.light.shadow.focus = 1;
-  }
-  runtime.light.shadow.camera.updateProjectionMatrix();
-  runtime.light.shadow.needsUpdate = true;
-}
-
-function syncSceneLightRuntime(runtime: SceneLightRuntime) {
-  const { state, light, helper, marker, targetMarker, directionLine } = runtime;
-  const lightIndex = sceneLights.indexOf(runtime);
-  const selected = lightIndex >= 0 && selectedInstances.includes(lightSelectionIndex(lightIndex));
-  light.name = state.id;
-  light.color.setHex(state.color);
-  light.intensity = state.intensity;
-  light.position.copy(state.position);
-  light.visible = state.visible;
-  if (light instanceof THREE.SpotLight) {
-    light.angle = SCENE_SPOT_DIRECTION_ANGLE;
-    light.penumbra = SCENE_SPOT_DIRECTION_PENUMBRA;
-    light.distance = 0;
-    light.decay = 2;
-    light.target.position.copy(state.target);
-    light.target.updateMatrixWorld();
-  }
-  marker.name = `${state.id}-marker`;
-  marker.userData.sceneLightId = state.id;
-  marker.userData.sceneLightHandle = 'position';
-  marker.position.copy(state.position);
-  marker.visible = state.visible;
-  marker.material.color.setHex(state.color);
-  marker.material.opacity = selected ? 1 : 0.68;
-
-  const showDirectionHandle = state.visible && selected && state.kind === 'directional';
-  targetMarker.name = `${state.id}-target-marker`;
-  targetMarker.userData.sceneLightId = state.id;
-  targetMarker.userData.sceneLightHandle = 'target';
-  targetMarker.position.copy(state.target);
-  targetMarker.visible = showDirectionHandle;
-  targetMarker.material.color.setHex(state.color);
-  targetMarker.material.opacity = showDirectionHandle ? 0.92 : 0;
-
-  directionLine.name = `${state.id}-direction-line`;
-  directionLine.visible = showDirectionHandle;
-  directionLine.material.color.setHex(state.color);
-  const positions = directionLine.geometry.getAttribute('position') as THREE.BufferAttribute;
-  positions.setXYZ(0, state.position.x, state.position.y, state.position.z);
-  positions.setXYZ(1, state.target.x, state.target.y, state.target.z);
-  positions.needsUpdate = true;
-
-  helper.name = `${state.id}-helper`;
-  helper.visible = state.visible && selected && state.kind === 'point';
-  configureLightHelperMaterials(helper, state.color, selected ? 0.92 : 0.72);
-  helper.update();
-  syncSceneLightShadow(runtime);
-}
-
 function syncSceneLightRuntimes() {
-  sceneLights.forEach(syncSceneLightRuntime);
+  sceneLights.forEach(runtime => {
+    const lightIndex = sceneLights.indexOf(runtime);
+    syncSceneLightRuntime(runtime, sceneLightRuntimeOptions(
+      lightIndex >= 0 && selectedInstances.includes(lightSelectionIndex(lightIndex)),
+    ));
+  });
   syncRendererShadowState();
 }
 
-function disposeSceneLightRuntime(runtime: SceneLightRuntime) {
-  scene.remove(runtime.helper);
-  runtime.helper.dispose();
-  scene.remove(runtime.marker);
-  runtime.marker.material.dispose();
-  scene.remove(runtime.targetMarker);
-  runtime.targetMarker.material.dispose();
-  scene.remove(runtime.directionLine);
-  runtime.directionLine.geometry.dispose();
-  runtime.directionLine.material.dispose();
-  scene.remove(runtime.light);
-  if (runtime.light instanceof THREE.SpotLight) scene.remove(runtime.light.target);
-  runtime.light.dispose();
-}
-
-function rebuildSceneLightRuntimeKind(runtime: SceneLightRuntime) {
-  scene.remove(runtime.helper);
-  runtime.helper.dispose();
-  scene.remove(runtime.light);
-  if (runtime.light instanceof THREE.SpotLight) scene.remove(runtime.light.target);
-  runtime.light.dispose();
-  runtime.light = createSceneLightObject(runtime.state);
-  runtime.helper = createSceneLightHelper(runtime.state, runtime.light);
-  syncSceneLightRuntime(runtime);
-}
-
 function setSceneLights(states: SceneLightState[]) {
-  sceneLights.splice(0).forEach(disposeSceneLightRuntime);
+  sceneLights.splice(0).forEach(runtime => disposeSceneLightRuntime(scene, runtime));
   states.forEach(state => {
-    sceneLights.push(createSceneLightRuntime(state));
+    sceneLights.push(createSceneLightRuntime(state, sceneLightRuntimeOptions(false)));
   });
   syncSceneLightIdCounter();
   if (!sceneLights.some(runtime => runtime.state.id === selectedSceneLightId)) {
@@ -1639,7 +1427,7 @@ function performRemoveSelectedSceneLight() {
   const removedSelection = lightSelectionIndex(index);
   const removedWasSelected = selectedInstances.includes(removedSelection);
   sceneLights.splice(index, 1);
-  disposeSceneLightRuntime(selected);
+  disposeSceneLightRuntime(scene, selected);
   selectedSceneLightId = sceneLights[Math.min(index, sceneLights.length - 1)]?.state.id ?? '';
   if (removedWasSelected) {
     selectedInstance = selectedSceneLightSelectionIndex();
@@ -1674,7 +1462,7 @@ function performUpdateSelectedSceneLight(mutator: (state: SceneLightState) => vo
     selectedInstances = [];
   }
   if (selected.state.kind !== previousKind) {
-    rebuildSceneLightRuntimeKind(selected);
+    rebuildSceneLightRuntimeKind(selected, sceneLightRuntimeOptions(false));
   }
   syncSceneLightRuntimes();
   syncSceneLightControls();
@@ -2323,14 +2111,6 @@ function unpackSceneLightState(state: PackedSceneLight | undefined, fallbackInde
     target: hasPackedTarget ? unpackVec3(raw[6] as PackedVec3, new THREE.Vector3()) : new THREE.Vector3(),
     visible: visibleFlag !== 0,
     castShadow: shadowFlag === 1,
-  });
-}
-
-function cloneSceneLightState(lightState: SceneLightState): SceneLightState {
-  return normalizeSceneLightState({
-    ...lightState,
-    position: lightState.position.clone(),
-    target: lightState.target?.clone() ?? new THREE.Vector3(),
   });
 }
 
@@ -3470,7 +3250,7 @@ function startDuplicatePlacement(position: THREE.Vector3): DuplicatePlacement | 
     state.label = duplicateLabel(state.label);
     state.position.copy(position);
     if (state.kind === 'directional') state.target.add(delta);
-    const runtime = createSceneLightRuntime(state);
+    const runtime = createSceneLightRuntime(state, sceneLightRuntimeOptions(false));
     sceneLights.push(runtime);
     selectedSceneLightId = state.id;
     selectObject(lightSelectionIndex(sceneLights.length - 1));
@@ -3538,7 +3318,7 @@ function cancelDuplicatePlacement(token: unknown) {
     const idx = sceneLights.indexOf(placement.lightRuntime);
     if (idx >= 0) {
       sceneLights.splice(idx, 1);
-      disposeSceneLightRuntime(placement.lightRuntime);
+      disposeSceneLightRuntime(scene, placement.lightRuntime);
     }
   }
   if (placement.instance) {
@@ -3706,7 +3486,7 @@ function deleteSelected() {
     const runtime = sceneLights[idx];
     if (!runtime) continue;
     sceneLights.splice(idx, 1);
-    disposeSceneLightRuntime(runtime);
+    disposeSceneLightRuntime(scene, runtime);
   }
   if (deleteLightIndices.length) selectedSceneLightId = sceneLights[0]?.state.id ?? '';
   selectedInstance = keepBaseSelected ? BASE_SELECTION : NO_SELECTION;
@@ -5746,7 +5526,7 @@ function addSceneLightAt(kind: SceneLightKind, position: THREE.Vector3) {
     position: position.clone(),
     target,
   });
-  sceneLights.push(createSceneLightRuntime(state));
+  sceneLights.push(createSceneLightRuntime(state, sceneLightRuntimeOptions(false)));
   selectedSceneLightId = state.id;
   selectObject(lightSelectionIndex(sceneLights.length - 1));
   setSceneControlTab('lights');
