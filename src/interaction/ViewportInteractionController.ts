@@ -43,6 +43,10 @@ const INSET_INITIAL_AMOUNT = 0.18;
 const INSET_POINTER_SCALE = 0.0025;
 const BEVEL_POINTER_SCALE = 0.004;
 const EXTRUSION_POINTER_SCALE = 0.01;
+const OPERATION_HANDLE_BASE_LENGTH = 42;
+const OPERATION_HANDLE_MAX_EXTRA_LENGTH = 58;
+const OPERATION_HANDLE_DOT_SIZE = 10;
+const OPERATION_HANDLE_LINE_WIDTH = 2;
 
 type CellPickCandidate = {
   cellId: number;
@@ -154,6 +158,11 @@ export class ViewportInteractionController {
   private readonly pointerLockStart = { x: this.lastPointer.x, y: this.lastPointer.y };
   private readonly pointerLockPoint = { clientX: this.lastPointer.x, clientY: this.lastPointer.y };
   private virtualCursorEl: HTMLDivElement | null = null;
+  private scalarEditHandle: {
+    root: HTMLDivElement;
+    line: HTMLDivElement;
+    dot: HTMLDivElement;
+  } | null = null;
 
   constructor(private readonly options: ViewportInteractionControllerOptions) {}
 
@@ -186,17 +195,23 @@ export class ViewportInteractionController {
   }
 
   private startViewportOperation(operation: ViewportOperation) {
+    const usesPointerLock = Boolean(operation.usesPointerLock && this.canUseOperationPointerLock());
     const cleanup = operation.cleanup;
     const wrapped: ViewportOperation = {
       ...operation,
+      usesPointerLock,
       cleanup: () => {
-        if (operation.usesPointerLock) this.releaseOperationPointerLock();
+        if (usesPointerLock) this.releaseOperationPointerLock();
         cleanup?.();
       },
     };
     const started = this.operationManager.start(wrapped);
-    if (started && operation.usesPointerLock) this.requestOperationPointerLock();
+    if (started && usesPointerLock) this.requestOperationPointerLock();
     return started;
+  }
+
+  private canUseOperationPointerLock() {
+    return window.matchMedia('(hover: hover) and (pointer: fine)').matches;
   }
 
   private requestOperationPointerLock() {
@@ -302,6 +317,137 @@ export class ViewportInteractionController {
     this.virtualCursorEl.style.top = `${y}px`;
   }
 
+  private ensureScalarEditHandle() {
+    if (this.scalarEditHandle) return this.scalarEditHandle;
+    const root = document.createElement('div');
+    const line = document.createElement('div');
+    const dot = document.createElement('div');
+    root.setAttribute('aria-hidden', 'true');
+    Object.assign(root.style, {
+      position: 'fixed',
+      inset: '0',
+      zIndex: '2147483646',
+      pointerEvents: 'none',
+      display: 'none',
+    });
+    Object.assign(line.style, {
+      position: 'fixed',
+      left: '0px',
+      top: '0px',
+      width: '1px',
+      height: `${OPERATION_HANDLE_LINE_WIDTH}px`,
+      background: 'rgba(255, 255, 255, 0.92)',
+      boxShadow: '0 0 2px rgba(25, 23, 15, 0.9)',
+      transformOrigin: '0 50%',
+      borderRadius: '999px',
+    });
+    Object.assign(dot.style, {
+      position: 'fixed',
+      left: '0px',
+      top: '0px',
+      width: `${OPERATION_HANDLE_DOT_SIZE}px`,
+      height: `${OPERATION_HANDLE_DOT_SIZE}px`,
+      background: 'rgba(255, 255, 255, 0.98)',
+      boxShadow: '0 0 2px rgba(25, 23, 15, 0.95), 0 0 5px rgba(25, 23, 15, 0.45)',
+      borderRadius: '50%',
+      transform: 'translate(-50%, -50%)',
+    });
+    root.append(line, dot);
+    document.body.append(root);
+    this.scalarEditHandle = { root, line, dot };
+    return this.scalarEditHandle;
+  }
+
+  private hideScalarEditHandle() {
+    if (this.scalarEditHandle) this.scalarEditHandle.root.style.display = 'none';
+  }
+
+  private updateScalarEditHandle(kind: string, amount: number) {
+    const geometry = this.scalarEditHandleGeometry(kind, amount);
+    if (!geometry) {
+      this.hideScalarEditHandle();
+      return;
+    }
+    const handle = this.ensureScalarEditHandle();
+    const dx = geometry.end.x - geometry.start.x;
+    const dy = geometry.end.y - geometry.start.y;
+    const length = Math.hypot(dx, dy);
+    if (!Number.isFinite(length) || length < 1) {
+      this.hideScalarEditHandle();
+      return;
+    }
+
+    handle.root.style.display = 'block';
+    handle.line.style.left = `${geometry.start.x}px`;
+    handle.line.style.top = `${geometry.start.y - (OPERATION_HANDLE_LINE_WIDTH / 2)}px`;
+    handle.line.style.width = `${length}px`;
+    handle.line.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+    handle.dot.style.left = `${geometry.end.x}px`;
+    handle.dot.style.top = `${geometry.end.y}px`;
+  }
+
+  private scalarEditHandleGeometry(kind: string, amount: number) {
+    const selection = this.options.transformController.getEditSelection();
+    if (!selection?.vertices.length) return null;
+    const instIdx = this.options.getSelectedInstance();
+    const target = instIdx === this.options.baseSelection
+      ? { positions: this.options.getRendererND().positions, count: this.options.getM() }
+      : (() => {
+        const inst = this.options.getExtraInstances()[instIdx];
+        return inst ? { positions: inst.renderer.positions, count: inst.M } : null;
+      })();
+    if (!target || target.count <= 0 || !this.options.getParams().editMode) return null;
+
+    const center = new THREE.Vector3();
+    let centerCount = 0;
+    for (const vertex of selection.vertices) {
+      if (vertex < 0 || vertex >= target.count) continue;
+      const pIdx = vertex * 3;
+      center.x += target.positions[pIdx];
+      center.y += target.positions[pIdx + 1];
+      center.z += target.positions[pIdx + 2];
+      centerCount++;
+    }
+    if (!centerCount) return null;
+    center.multiplyScalar(1 / centerCount);
+
+    const objectCenter = new THREE.Vector3();
+    for (let vertex = 0; vertex < target.count; vertex++) {
+      const pIdx = vertex * 3;
+      objectCenter.x += target.positions[pIdx];
+      objectCenter.y += target.positions[pIdx + 1];
+      objectCenter.z += target.positions[pIdx + 2];
+    }
+    objectCenter.multiplyScalar(1 / target.count);
+
+    const rect = this.options.renderer.domElement.getBoundingClientRect();
+    const start = this.projectWorldToClient(center, rect);
+    if (!start) return null;
+    const objectScreen = this.projectWorldToClient(objectCenter, rect);
+    let direction = objectScreen ? start.clone().sub(objectScreen) : new THREE.Vector2(0, -1);
+    if (!Number.isFinite(direction.x) || !Number.isFinite(direction.y) || direction.lengthSq() < 16) {
+      direction = kind === 'edit-inset' ? new THREE.Vector2(1, 0) : new THREE.Vector2(0, -1);
+    }
+    direction.normalize();
+
+    if (amount < 0) direction.multiplyScalar(-1);
+    const normalizedAmount = kind === 'edit-extrusion'
+      ? Math.min(1, Math.abs(amount) / 2.4)
+      : Math.min(1, Math.abs(amount));
+    const length = OPERATION_HANDLE_BASE_LENGTH + (normalizedAmount * OPERATION_HANDLE_MAX_EXTRA_LENGTH);
+    const end = start.clone().add(direction.multiplyScalar(length));
+    return { start, end };
+  }
+
+  private projectWorldToClient(point: THREE.Vector3, rect: DOMRect) {
+    this.tmpVec.copy(point).project(this.options.camera);
+    if (!Number.isFinite(this.tmpVec.x) || !Number.isFinite(this.tmpVec.y) || !Number.isFinite(this.tmpVec.z)) return null;
+    return new THREE.Vector2(
+      rect.left + ((this.tmpVec.x * 0.5 + 0.5) * rect.width),
+      rect.top + ((-this.tmpVec.y * 0.5 + 0.5) * rect.height),
+    );
+  }
+
   showAddObjectMenuAtLastPointer(replaceActive = false) {
     if (!this.prepareOperationStart(replaceActive)) return;
     const menu = this.options.contextMenuEl;
@@ -354,6 +500,14 @@ export class ViewportInteractionController {
       const max = options.max ?? Number.POSITIVE_INFINITY;
       return Math.max(min, Math.min(max, value));
     };
+    const applyAmount = (nextAmount: number, force = false) => {
+      const clamped = clampAmount(nextAmount);
+      if (!force && Math.abs(clamped - amount) < (options.epsilon ?? 0.0005)) return true;
+      amount = clamped;
+      options.updateAmount(amount);
+      this.updateScalarEditHandle(options.kind, amount);
+      return true;
+    };
 
     const started = this.startViewportOperation({
       kind: options.kind,
@@ -367,22 +521,23 @@ export class ViewportInteractionController {
         const dx = point.clientX - startX;
         const dy = startY - point.clientY;
         const baseAmount = options.signed ? 0 : (options.initialAmount ?? 0);
-        const nextAmount = clampAmount(baseAmount + ((dx + dy) * options.scale));
-        if (Math.abs(nextAmount - amount) < (options.epsilon ?? 0.0005)) return true;
-        amount = nextAmount;
-        options.updateAmount(amount);
-        return true;
+        return applyAmount(baseAmount + ((dx + dy) * options.scale));
       },
       updateWheel: options.updateWheel
-        ? ev => options.updateWheel?.(ev, amount)
+        ? ev => {
+          const handled = options.updateWheel?.(ev, amount);
+          this.updateScalarEditHandle(options.kind, amount);
+          return handled;
+        }
         : undefined,
       commit: options.commit,
       cancel: options.cancel,
       cleanup: () => {
+        this.hideScalarEditHandle();
         if (this.options.contextMenuEl) this.options.contextMenuEl.style.display = 'none';
       },
     });
-    if (started) options.updateAmount(amount);
+    if (started) applyAmount(amount, true);
     return started;
   }
 
