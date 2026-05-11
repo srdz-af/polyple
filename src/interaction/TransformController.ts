@@ -1476,11 +1476,15 @@ export class TransformController {
     return true;
   }
 
-  handleGizmoPointerMove(ev: PointerEvent, setLastPointer: (point: { x: number; y: number }) => void) {
+  handleGizmoPointerMove(
+    ev: PointerEvent,
+    setLastPointer: (point: { x: number; y: number }) => void,
+    point: { x: number; y: number } = { x: ev.clientX, y: ev.clientY },
+  ) {
     if (!this.gizmoDrag.active || ev.pointerId !== this.gizmoDrag.pointerId) return false;
     ev.preventDefault();
-    setLastPointer({ x: ev.clientX, y: ev.clientY });
-    this.applyPointer(ev.clientX, ev.clientY, ev.ctrlKey);
+    setLastPointer(point);
+    this.applyPointer(point.x, point.y, ev.ctrlKey);
     return true;
   }
 

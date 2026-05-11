@@ -7,6 +7,7 @@ type KeyboardShortcutControllerOptions = {
   isModalOpen: () => boolean;
   isEditMode: () => boolean;
   getTransformMode: () => TransformMode;
+  isOperationActive: () => boolean;
   handleTransformConstraintKey: (key: string) => boolean;
   keyboardCamera: KeyboardCameraController;
   setViewMode: (mode: ViewMode) => void;
@@ -18,19 +19,20 @@ type KeyboardShortcutControllerOptions = {
   insertKeyframe: () => void;
   removeLastKeyframe: () => void;
   toggleEditMode: () => void;
-  startTransformFromPointer: (mode: TransformMode) => void;
-  extrudeEditSelectionFromPointer: () => void;
-  insetEditSelectionFromPointer: () => void;
-  startBevelEditSelection: (kind?: 'vertex' | 'edge', inward?: boolean) => void;
+  startTransformFromPointer: (mode: TransformMode, replaceActive?: boolean) => void;
+  extrudeEditSelectionFromPointer: (replaceActive?: boolean) => void;
+  insetEditSelectionFromPointer: (replaceActive?: boolean) => void;
+  startBevelEditSelection: (kind?: 'vertex' | 'edge', inward?: boolean, replaceActive?: boolean) => void;
   selectAllEditCells: () => void;
-  showAddObjectMenuAtPointer: () => void;
-  duplicateSelectionFromPointer: () => void;
+  showAddObjectMenuAtPointer: (replaceActive?: boolean) => void;
+  duplicateSelectionFromPointer: (replaceActive?: boolean) => void;
   deleteOrConfirmSelection: () => void;
   hasSelection: () => boolean;
   undo: () => void;
   redo: () => void;
   togglePerfOverlay: () => void;
   setEditCellDimension: (dimension: EditCellDimension) => void;
+  changePrimitiveDimension: (delta: number) => void;
 };
 
 export class KeyboardShortcutController {
@@ -69,9 +71,25 @@ export class KeyboardShortcutController {
   private handleGeneralShortcut(ev: KeyboardEvent) {
     if (this.options.isModalOpen()) return;
     if (isTextEntryTarget(ev.target)) return;
+    if (ev.defaultPrevented) return;
     const key = ev.key.toLowerCase();
     const hasSystemMod = ev.ctrlKey || ev.metaKey || ev.altKey;
     const transformMode = this.options.getTransformMode();
+    const operationActive = this.options.isOperationActive();
+    const canReplaceOperation = transformMode === 'none' || operationActive;
+
+    if (!hasSystemMod && transformMode === 'none') {
+      if (ev.key === '+' || ev.key === '=' || ev.code === 'NumpadAdd') {
+        ev.preventDefault();
+        this.options.changePrimitiveDimension(1);
+        return;
+      }
+      if (ev.key === '-' || ev.key === '_' || ev.code === 'NumpadSubtract') {
+        ev.preventDefault();
+        this.options.changePrimitiveDimension(-1);
+        return;
+      }
+    }
 
     if (!hasSystemMod && !ev.shiftKey && transformMode === 'none' && this.options.isEditMode()) {
       const dimension = viewModeShortcutIndex(ev);
@@ -104,34 +122,34 @@ export class KeyboardShortcutController {
       return;
     }
 
-    if (!hasSystemMod && !ev.shiftKey && transformMode === 'none' && this.options.isEditMode() && key === 'e') {
+    if (!hasSystemMod && !ev.shiftKey && canReplaceOperation && this.options.isEditMode() && key === 'e') {
       ev.preventDefault();
-      this.options.extrudeEditSelectionFromPointer();
+      this.options.extrudeEditSelectionFromPointer(operationActive);
       return;
     }
-    if (!hasSystemMod && !ev.shiftKey && transformMode === 'none' && this.options.isEditMode() && key === 'i') {
+    if (!hasSystemMod && !ev.shiftKey && canReplaceOperation && this.options.isEditMode() && key === 'i') {
       ev.preventDefault();
-      this.options.insetEditSelectionFromPointer();
+      this.options.insetEditSelectionFromPointer(operationActive);
       return;
     }
-    if (!hasSystemMod && !ev.shiftKey && transformMode === 'none' && this.options.isEditMode() && key === 'b') {
+    if (!hasSystemMod && !ev.shiftKey && canReplaceOperation && this.options.isEditMode() && key === 'b') {
       ev.preventDefault();
-      this.options.startBevelEditSelection('edge');
+      this.options.startBevelEditSelection('edge', false, operationActive);
       return;
     }
-    if (!hasSystemMod && ev.shiftKey && transformMode === 'none' && this.options.isEditMode() && key === 'b') {
+    if (!hasSystemMod && ev.shiftKey && canReplaceOperation && this.options.isEditMode() && key === 'b') {
       ev.preventDefault();
-      this.options.startBevelEditSelection('vertex');
+      this.options.startBevelEditSelection('vertex', false, operationActive);
       return;
     }
-    if (!ev.ctrlKey && !ev.metaKey && ev.altKey && !ev.shiftKey && transformMode === 'none' && this.options.isEditMode() && key === 'b') {
+    if (!ev.ctrlKey && !ev.metaKey && ev.altKey && !ev.shiftKey && canReplaceOperation && this.options.isEditMode() && key === 'b') {
       ev.preventDefault();
-      this.options.startBevelEditSelection('edge', true);
+      this.options.startBevelEditSelection('edge', true, operationActive);
       return;
     }
-    if (!ev.ctrlKey && !ev.metaKey && ev.altKey && ev.shiftKey && transformMode === 'none' && this.options.isEditMode() && key === 'b') {
+    if (!ev.ctrlKey && !ev.metaKey && ev.altKey && ev.shiftKey && canReplaceOperation && this.options.isEditMode() && key === 'b') {
       ev.preventDefault();
-      this.options.startBevelEditSelection('vertex', true);
+      this.options.startBevelEditSelection('vertex', true, operationActive);
       return;
     }
 
@@ -184,22 +202,23 @@ export class KeyboardShortcutController {
     }
     if (hasSystemMod) return;
 
-    if (transformMode !== 'none') return;
+    if (transformMode !== 'none' && !operationActive) return;
     if (!ev.shiftKey && (key === 'g' || key === 'r' || key === 's')) {
       ev.preventDefault();
       const modeMap: Record<'g' | 'r' | 's', TransformMode> = { g: 'move', r: 'rotate', s: 'scale' };
-      this.options.startTransformFromPointer(modeMap[key as 'g' | 'r' | 's']);
+      this.options.startTransformFromPointer(modeMap[key as 'g' | 'r' | 's'], operationActive);
       return;
     }
+    if (transformMode !== 'none') return;
     if (key === 'a' && ev.shiftKey) {
       ev.preventDefault();
-      this.options.showAddObjectMenuAtPointer();
+      this.options.showAddObjectMenuAtPointer(operationActive);
       return;
     }
-    if (key === 'd' && ev.shiftKey) {
+    if (key === 'd' && ev.shiftKey && !this.options.isEditMode()) {
       ev.preventDefault();
       if (!this.options.hasSelection()) return;
-      this.options.duplicateSelectionFromPointer();
+      this.options.duplicateSelectionFromPointer(operationActive);
       return;
     }
     if (!ev.shiftKey && key === 'x') {

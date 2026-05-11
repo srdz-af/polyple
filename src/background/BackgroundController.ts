@@ -390,16 +390,6 @@ export class BackgroundController {
   }
 
   syncForRenderMode() {
-    const plainOnly = this.getRenderMode() !== 'solid';
-    if (plainOnly) {
-      if (this.activeBackgroundKey !== PLAIN_BACKGROUND_KEY) {
-        void this.setActiveBackground(PLAIN_BACKGROUND_KEY);
-        return;
-      }
-      this.updateSwatchUI();
-      return;
-    }
-
     if (this.activeBackgroundKey == null) {
       void this.setActiveBackground(PLAIN_BACKGROUND_KEY);
       return;

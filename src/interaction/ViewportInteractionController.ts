@@ -29,6 +29,8 @@ type EditBevelToken = unknown;
 
 const OBJECT_FOCUS_DOUBLE_CLICK_MS = 220;
 const OBJECT_FOCUS_DOUBLE_CLICK_MAX_DIST = 8;
+const OBJECT_VERTEX_PICK_RADIUS = 24;
+const OBJECT_EDGE_PICK_RADIUS = 12;
 const CELL_CENTER_PICK_RADIUS = 16;
 const CELL_CENTER_FALLBACK_RADIUS = 48;
 const CELL_CYCLE_MAX_DIST = 10;
@@ -123,6 +125,9 @@ export class ViewportInteractionController {
   private transformGizmoEndEvent: PointerEvent | null = null;
   private lastBevelSmoothness = BEVEL_MIN_SMOOTHNESS;
   private suppressNextContextMenu = false;
+  private pointerLockReleaseRequested = false;
+  private readonly pointerLockStart = { x: this.lastPointer.x, y: this.lastPointer.y };
+  private readonly pointerLockPoint = { clientX: this.lastPointer.x, clientY: this.lastPointer.y };
 
   constructor(private readonly options: ViewportInteractionControllerOptions) {}
 
@@ -140,13 +145,84 @@ export class ViewportInteractionController {
     window.addEventListener('pointerup', ev => this.handleWindowPointerUp(ev));
     window.addEventListener('pointercancel', ev => this.handleWindowPointerCancel(ev));
     window.addEventListener('blur', () => this.handleWindowBlur());
+    document.addEventListener('pointerlockchange', () => this.handlePointerLockChange());
   }
 
   cancelAxisShiftDrag() {
     if (this.operationManager.isKind('axis-shift')) this.operationManager.finish(false);
   }
 
-  showAddObjectMenuAtLastPointer() {
+  private prepareOperationStart(replaceActive = false) {
+    if (!this.operationManager.isActive()) return true;
+    if (!replaceActive) return false;
+    this.operationManager.finish(false);
+    return !this.operationManager.isActive();
+  }
+
+  private startViewportOperation(operation: ViewportOperation) {
+    const cleanup = operation.cleanup;
+    const wrapped: ViewportOperation = {
+      ...operation,
+      cleanup: () => {
+        if (operation.usesPointerLock) this.releaseOperationPointerLock();
+        cleanup?.();
+      },
+    };
+    const started = this.operationManager.start(wrapped);
+    if (started && operation.usesPointerLock) this.requestOperationPointerLock();
+    return started;
+  }
+
+  private requestOperationPointerLock() {
+    const canvas = this.options.renderer.domElement;
+    this.pointerLockStart.x = this.lastPointer.x;
+    this.pointerLockStart.y = this.lastPointer.y;
+    this.pointerLockPoint.clientX = this.lastPointer.x;
+    this.pointerLockPoint.clientY = this.lastPointer.y;
+    if (document.pointerLockElement === canvas) return;
+    try {
+      const lockResult = canvas.requestPointerLock();
+      if (lockResult instanceof Promise) lockResult.catch(() => undefined);
+    } catch {
+      // Pointer lock is a progressive enhancement; normal bounded dragging remains available.
+    }
+  }
+
+  private releaseOperationPointerLock() {
+    const canvas = this.options.renderer.domElement;
+    if (document.pointerLockElement !== canvas) return;
+    this.pointerLockReleaseRequested = true;
+    this.lastPointer = { x: this.pointerLockStart.x, y: this.pointerLockStart.y };
+    try {
+      document.exitPointerLock();
+    } catch {
+      this.pointerLockReleaseRequested = false;
+    }
+  }
+
+  private handlePointerLockChange() {
+    const canvas = this.options.renderer.domElement;
+    if (document.pointerLockElement === canvas) return;
+    if (this.pointerLockReleaseRequested) {
+      this.pointerLockReleaseRequested = false;
+      return;
+    }
+    if (this.operationManager.current?.usesPointerLock) this.operationManager.finish(false);
+  }
+
+  private operationPointerPoint(ev: PointerEvent) {
+    if (document.pointerLockElement === this.options.renderer.domElement && this.operationManager.current?.usesPointerLock) {
+      this.pointerLockPoint.clientX += ev.movementX || 0;
+      this.pointerLockPoint.clientY += ev.movementY || 0;
+      return this.pointerLockPoint;
+    }
+    this.pointerLockPoint.clientX = ev.clientX;
+    this.pointerLockPoint.clientY = ev.clientY;
+    return this.pointerLockPoint;
+  }
+
+  showAddObjectMenuAtLastPointer(replaceActive = false) {
+    if (!this.prepareOperationStart(replaceActive)) return;
     const menu = this.options.contextMenuEl;
     if (!menu) return;
     menu.replaceChildren();
@@ -162,16 +238,17 @@ export class ViewportInteractionController {
     menu.style.display = 'grid';
   }
 
-  startTransformFromLastPointer(mode: TransformMode) {
-    if (this.operationManager.isActive()) return;
+  startTransformFromLastPointer(mode: TransformMode, replaceActive = false) {
+    if (!this.prepareOperationStart(replaceActive)) return;
     this.options.transformController.startFromPointer(mode, this.lastPointer);
     if (!this.options.transformController.isActive()) return;
-    if (!this.operationManager.start({
+    if (!this.startViewportOperation({
       kind: 'transform',
       scope: this.options.getParams().editMode ? 'edit' : 'object',
       blocksCamera: true,
       blocksSelection: true,
       blocksContextMenu: true,
+      usesPointerLock: true,
       updatePointer: (point, pointerEvent) => {
         this.lastPointer = { x: point.clientX, y: point.clientY };
         this.options.transformController.applyPointer(point.clientX, point.clientY, !!pointerEvent?.ctrlKey);
@@ -187,8 +264,8 @@ export class ViewportInteractionController {
     }
   }
 
-  startEditExtrusionFromLastPointer() {
-    if (this.operationManager.isActive()) return;
+  startEditExtrusionFromLastPointer(replaceActive = false) {
+    if (!this.prepareOperationStart(replaceActive)) return;
     if (!this.options.getParams().editMode) return;
     if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
     const token = this.options.extrudeSelectedEditCell();
@@ -198,12 +275,13 @@ export class ViewportInteractionController {
       this.options.cancelEditExtrusion(token);
       return;
     }
-    if (!this.operationManager.start({
+    if (!this.startViewportOperation({
       kind: 'edit-extrusion',
       scope: 'edit',
       blocksCamera: true,
       blocksSelection: true,
       blocksContextMenu: true,
+      usesPointerLock: true,
       commit: () => {
         this.options.commitEditExtrusion(token);
         this.options.transformController.finish(true);
@@ -218,8 +296,8 @@ export class ViewportInteractionController {
     }
   }
 
-  startEditInsetFromLastPointer() {
-    if (this.operationManager.isActive()) return;
+  startEditInsetFromLastPointer(replaceActive = false) {
+    if (!this.prepareOperationStart(replaceActive)) return;
     if (!this.options.getParams().editMode) return;
     if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
     const token = this.options.startEditInset();
@@ -227,12 +305,13 @@ export class ViewportInteractionController {
     let amount = INSET_INITIAL_AMOUNT;
     const startX = this.lastPointer.x;
     const startY = this.lastPointer.y;
-    this.operationManager.start({
+    this.startViewportOperation({
       kind: 'edit-inset',
       scope: 'edit',
       blocksCamera: true,
       blocksSelection: true,
       blocksContextMenu: true,
+      usesPointerLock: true,
       updatePointer: point => {
         this.lastPointer = { x: point.clientX, y: point.clientY };
         const dx = point.clientX - startX;
@@ -252,8 +331,8 @@ export class ViewportInteractionController {
     this.options.updateEditInset(token, INSET_INITIAL_AMOUNT);
   }
 
-  startEditBevelFromLastPointer(kind: 'vertex' | 'edge' = 'edge', inward = false) {
-    if (this.operationManager.isActive()) return;
+  startEditBevelFromLastPointer(kind: 'vertex' | 'edge' = 'edge', inward = false, replaceActive = false) {
+    if (!this.prepareOperationStart(replaceActive)) return;
     if (!this.options.getParams().editMode) return;
     if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
     let smoothness = this.lastBevelSmoothness;
@@ -262,12 +341,13 @@ export class ViewportInteractionController {
     let amount = 0;
     const startX = this.lastPointer.x;
     const startY = this.lastPointer.y;
-    this.operationManager.start({
+    this.startViewportOperation({
       kind: 'edit-bevel',
       scope: 'edit',
       blocksCamera: true,
       blocksSelection: true,
       blocksContextMenu: true,
+      usesPointerLock: true,
       updatePointer: point => {
         this.lastPointer = { x: point.clientX, y: point.clientY };
         const dx = point.clientX - startX;
@@ -303,8 +383,9 @@ export class ViewportInteractionController {
     });
   }
 
-  startDuplicateFromLastPointer() {
-    if (this.operationManager.isActive() || this.options.getParams().editMode) return;
+  startDuplicateFromLastPointer(replaceActive = false) {
+    if (!this.prepareOperationStart(replaceActive)) return;
+    if (this.options.getParams().editMode) return;
     if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
     const point = this.pickPointOnTargetPlane({ clientX: this.lastPointer.x, clientY: this.lastPointer.y });
     const token = this.options.startDuplicatePlacement(point);
@@ -312,12 +393,13 @@ export class ViewportInteractionController {
     if (this.options.contextMenuEl) this.options.contextMenuEl.style.display = 'none';
     const prevControlsEnabled = this.options.controls.enabled;
     this.options.controls.enabled = false;
-    this.operationManager.start({
+    this.startViewportOperation({
       kind: 'duplicate-placement',
       scope: 'object',
       blocksCamera: true,
       blocksSelection: true,
       blocksContextMenu: true,
+      usesPointerLock: true,
       updatePointer: point => {
         this.lastPointer = { x: point.clientX, y: point.clientY };
         this.options.moveDuplicatePlacement(token, this.pickPointOnTargetPlane(point));
@@ -340,11 +422,11 @@ export class ViewportInteractionController {
   }
 
   startOperation(operation: ViewportOperation) {
-    return this.operationManager.start(operation);
+    return this.startViewportOperation(operation);
   }
 
   updateActiveOperationPointer(ev: PointerEvent) {
-    return this.operationManager.updatePointer(ev, ev);
+    return this.operationManager.updatePointer(this.operationPointerPoint(ev), ev);
   }
 
   finishOperation(commit: boolean) {
@@ -397,7 +479,7 @@ export class ViewportInteractionController {
     menu.style.left = `${x}px`;
     menu.style.top = `${y}px`;
     menu.style.display = 'block';
-    this.operationManager.start({
+    this.startViewportOperation({
       kind: 'delete-confirm',
       scope: this.options.getParams().editMode ? 'edit' : 'object',
       blocksSelection: true,
@@ -409,17 +491,35 @@ export class ViewportInteractionController {
   }
 
   private runImmediateOperation(kind: string, scope: 'edit' | 'object' | 'viewport' | 'light' | 'axis', commit: () => void) {
-    if (!this.operationManager.start({ kind, scope, commit })) return;
+    if (!this.startViewportOperation({ kind, scope, commit })) return;
     this.operationManager.finish(true);
   }
 
+  private suppressContextMenuIfRightClick(ev: PointerEvent | MouseEvent) {
+    if (ev.button === 2) this.suppressNextContextMenu = true;
+  }
+
+  private consumeOperationPointerEvent(ev: PointerEvent) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+  }
+
+  private finishOperationFromPointer(ev: PointerEvent, commit: boolean) {
+    this.suppressContextMenuIfRightClick(ev);
+    const finished = this.operationManager.finish(commit);
+    if (finished) this.consumeOperationPointerEvent(ev);
+    return finished;
+  }
+
   private handleTransformPointerMove(ev: PointerEvent) {
-    this.lastPointer = { x: ev.clientX, y: ev.clientY };
-    if (this.operationManager.updatePointer(ev, ev)) return;
+    const point = this.operationPointerPoint(ev);
+    this.lastPointer = { x: point.clientX, y: point.clientY };
+    if (this.operationManager.updatePointer(point, ev)) return;
     if (this.options.transformController.isGizmoDragging()) return;
     if (!this.options.transformController.isActive()) return;
     ev.preventDefault();
-    this.options.transformController.applyPointer(ev.clientX, ev.clientY, ev.ctrlKey);
+    this.options.transformController.applyPointer(point.clientX, point.clientY, ev.ctrlKey);
   }
 
   private handleContextMenu(ev: MouseEvent) {
@@ -573,17 +673,19 @@ export class ViewportInteractionController {
     if (this.operationManager.isActive()) return;
     ev.preventDefault();
     ev.stopPropagation();
-    let lastX = ev.clientX;
+    this.lastPointer = { x: ev.clientX, y: ev.clientY };
+    let lastX = this.lastPointer.x;
     let accum = 0;
     const prevZoom = this.options.controls.enableZoom;
     const prevPan = this.options.controls.enablePan;
     this.options.controls.enableZoom = false;
     this.options.controls.enablePan = false;
-    this.operationManager.start({
+    this.startViewportOperation({
       kind: 'axis-shift',
       scope: 'axis',
       blocksCamera: true,
-      updatePointer: (_point, pointerEvent) => {
+      usesPointerLock: true,
+      updatePointer: (point, pointerEvent) => {
         if (!pointerEvent) return false;
         if ((pointerEvent.buttons & 4) === 0) {
           this.operationManager.finish(true);
@@ -591,8 +693,9 @@ export class ViewportInteractionController {
         }
 
         pointerEvent.preventDefault();
-        const dx = pointerEvent.clientX - lastX;
-        lastX = pointerEvent.clientX;
+        this.lastPointer = { x: point.clientX, y: point.clientY };
+        const dx = point.clientX - lastX;
+        lastX = point.clientX;
         accum += dx;
         const threshold = 35;
         let steps = 0;
@@ -620,26 +723,29 @@ export class ViewportInteractionController {
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
 
     if (this.operationManager.isKind('duplicate-placement')) {
-      if (ev.button === 0) this.operationManager.finish(true);
-      else if (ev.button === 2) this.operationManager.finish(false);
-      ev.preventDefault();
-      ev.stopPropagation();
+      if (ev.button === 0) this.finishOperationFromPointer(ev, true);
+      else if (ev.button === 2) this.finishOperationFromPointer(ev, false);
       return;
     }
 
     if (ev.button === 0 && this.options.transformController.handleGizmoPointerDown(ev)) {
       this.transformGizmoPrevControlsEnabled = this.options.controls.enabled;
       this.options.controls.enabled = false;
-      if (!this.operationManager.start({
+      if (!this.startViewportOperation({
         kind: 'transform-gizmo',
         scope: this.options.getParams().editMode ? 'edit' : 'object',
         blocksCamera: true,
         blocksSelection: true,
         blocksContextMenu: true,
         usesPointerCapture: true,
-        updatePointer: (_point, pointerEvent) => (
+        usesPointerLock: true,
+        updatePointer: (point, pointerEvent) => (
           pointerEvent
-            ? this.options.transformController.handleGizmoPointerMove(pointerEvent, point => { this.lastPointer = point; })
+            ? this.options.transformController.handleGizmoPointerMove(
+              pointerEvent,
+              nextPoint => { this.lastPointer = nextPoint; },
+              { x: point.clientX, y: point.clientY },
+            )
             : false
         ),
         commit: () => {
@@ -663,19 +769,23 @@ export class ViewportInteractionController {
     if (this.options.transformController.isActive()) {
       if (ev.button === 0) {
         if (this.operationManager.isKind('edit-extrusion')) {
-          this.operationManager.finish(true);
+          this.finishOperationFromPointer(ev, true);
         } else if (this.operationManager.isKind('transform')) {
-          this.operationManager.finish(true);
+          this.finishOperationFromPointer(ev, true);
         } else {
           this.options.pushUndoSnapshot();
           this.options.transformController.finish(true);
+          this.consumeOperationPointerEvent(ev);
         }
       } else if (ev.button === 2) {
-        if (this.operationManager.isKind('edit-extrusion')) this.operationManager.finish(false);
-        else if (this.operationManager.isKind('transform')) this.operationManager.finish(false);
-        else this.options.transformController.finish(false);
+        this.suppressContextMenuIfRightClick(ev);
+        if (this.operationManager.isKind('edit-extrusion')) this.finishOperationFromPointer(ev, false);
+        else if (this.operationManager.isKind('transform')) this.finishOperationFromPointer(ev, false);
+        else {
+          this.options.transformController.finish(false);
+          this.consumeOperationPointerEvent(ev);
+        }
       }
-      ev.preventDefault();
       return;
     }
 
@@ -699,20 +809,16 @@ export class ViewportInteractionController {
     if (!this.operationManager.isKind('edit-bevel') && !this.operationManager.isKind('edit-inset')) return;
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
     if (ev.button === 0) {
-      this.operationManager.finish(true);
+      this.finishOperationFromPointer(ev, true);
     } else if (ev.button === 2) {
-      this.suppressNextContextMenu = true;
-      this.operationManager.finish(false);
+      this.finishOperationFromPointer(ev, false);
     } else {
       return;
     }
-    ev.preventDefault();
-    ev.stopPropagation();
-    ev.stopImmediatePropagation();
   }
 
   private handleWindowPointerMove(ev: PointerEvent) {
-    if (this.operationManager.updatePointer(ev, ev)) return;
+    if (this.operationManager.updatePointer(this.operationPointerPoint(ev), ev)) return;
   }
 
   private handleWindowPointerUp(ev: PointerEvent) {
@@ -794,47 +900,28 @@ export class ViewportInteractionController {
     const M = this.options.getM();
     const extraInstances = this.options.getExtraInstances();
 
-    const screenBounds = (positions: Float32Array, count: number) => {
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
-      for (let i = 0; i < count; i++) {
-        const pIdx = i * 3;
-        this.tmpVec.set(positions[pIdx], positions[pIdx + 1], positions[pIdx + 2]).project(this.options.camera);
-        const sx = (this.tmpVec.x * 0.5 + 0.5) * w;
-        const sy = (-this.tmpVec.y * 0.5 + 0.5) * h;
-        if (sx < minX) minX = sx;
-        if (sx > maxX) maxX = sx;
-        if (sy < minY) minY = sy;
-        if (sy > maxY) maxY = sy;
-      }
-      return { minX, maxX, minY, maxY };
-    };
-
-    const candidates: { instIdx: number; contains: boolean; area: number; }[] = [];
+    const candidates: {
+      instIdx: number;
+      containsSurface: boolean;
+      distance2: number;
+      area: number;
+    }[] = [];
     if (M > 0 && this.options.getBaseVisible()) {
-      const box = screenBounds(rendererND.positions, M);
-      const contains = mx >= box.minX && mx <= box.maxX && my >= box.minY && my <= box.maxY;
-      const area = (box.maxX - box.minX) * (box.maxY - box.minY);
-      candidates.push({ instIdx: this.options.baseSelection, contains, area });
+      const hit = this.objectScreenHit(rendererND, M, mx, my, w, h);
+      if (hit.hit) candidates.push({ instIdx: this.options.baseSelection, ...hit });
     }
     extraInstances.forEach((inst, idx) => {
       if (!inst.visible) return;
-      const box = screenBounds(inst.renderer.positions, inst.M);
-      const contains = mx >= box.minX && mx <= box.maxX && my >= box.minY && my <= box.maxY;
-      const area = (box.maxX - box.minX) * (box.maxY - box.minY);
-      candidates.push({ instIdx: idx, contains, area });
+      const hit = this.objectScreenHit(inst.renderer, inst.M, mx, my, w, h);
+      if (hit.hit) candidates.push({ instIdx: idx, ...hit });
     });
 
-    let bestInst = this.options.baseSelection;
-    const containing = candidates.filter(candidate => candidate.contains && isFinite(candidate.area));
-    if (containing.length) {
-      containing.sort((a, b) => a.area - b.area);
-      bestInst = containing[0].instIdx;
-    } else {
-      bestInst = this.nearestInstanceByVertex(mx, my, w, h);
-    }
+    candidates.sort((a, b) => {
+      if (a.containsSurface !== b.containsSurface) return a.containsSurface ? -1 : 1;
+      if (a.containsSurface && b.containsSurface) return a.area - b.area;
+      return a.distance2 - b.distance2;
+    });
+    const bestInst = candidates[0]?.instIdx ?? this.options.noSelection;
 
     if (bestInst === this.options.noSelection) {
       if (this.options.getParams().editMode && ev.shiftKey) return this.options.noSelection;
@@ -849,6 +936,89 @@ export class ViewportInteractionController {
     }
     if (editMode) this.selectNearestEditElement(bestInst, mx, my, w, h, ev.shiftKey, ev.altKey);
     return bestInst;
+  }
+
+  private objectScreenHit(
+    renderer: HypercubeRenderer,
+    count: number,
+    mx: number,
+    my: number,
+    width: number,
+    height: number,
+  ) {
+    const positions = renderer.positions;
+    const screen = new Float32Array(count * 2);
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let nearestVertexDist2 = Number.POSITIVE_INFINITY;
+    let nearestEdgeDist2 = Number.POSITIVE_INFINITY;
+
+    for (let i = 0; i < count; i++) {
+      const pIdx = i * 3;
+      this.tmpVec.set(positions[pIdx], positions[pIdx + 1], positions[pIdx + 2]).project(this.options.camera);
+      const sx = (this.tmpVec.x * 0.5 + 0.5) * width;
+      const sy = (-this.tmpVec.y * 0.5 + 0.5) * height;
+      const sIdx = i * 2;
+      screen[sIdx] = sx;
+      screen[sIdx + 1] = sy;
+      if (!Number.isFinite(sx) || !Number.isFinite(sy)) continue;
+      if (sx < minX) minX = sx;
+      if (sx > maxX) maxX = sx;
+      if (sy < minY) minY = sy;
+      if (sy > maxY) maxY = sy;
+      const dx = sx - mx;
+      const dy = sy - my;
+      nearestVertexDist2 = Math.min(nearestVertexDist2, (dx * dx) + (dy * dy));
+    }
+
+    const point = this.tmpVec2.set(mx, my);
+    const a = new THREE.Vector2();
+    const b = new THREE.Vector2();
+    const c = new THREE.Vector2();
+    let containsSurface = false;
+    const surface = renderer.getSurfaceTopologyForSelection();
+    if (surface) {
+      const triangles = surface.triangles;
+      for (let i = 0; i + 2 < triangles.length; i += 3) {
+        const ia = triangles[i] * 2;
+        const ib = triangles[i + 1] * 2;
+        const ic = triangles[i + 2] * 2;
+        if (ia + 1 >= screen.length || ib + 1 >= screen.length || ic + 1 >= screen.length) continue;
+        a.set(screen[ia], screen[ia + 1]);
+        b.set(screen[ib], screen[ib + 1]);
+        c.set(screen[ic], screen[ic + 1]);
+        if (!Number.isFinite(a.x + a.y + b.x + b.y + c.x + c.y)) continue;
+        if (this.pointInTriangle(point, a, b, c)) {
+          containsSurface = true;
+          break;
+        }
+      }
+    }
+
+    if (!containsSurface) {
+      const edges = renderer.allEdges;
+      for (let i = 0; i + 1 < edges.length; i += 2) {
+        const ia = edges[i] * 2;
+        const ib = edges[i + 1] * 2;
+        if (ia + 1 >= screen.length || ib + 1 >= screen.length) continue;
+        a.set(screen[ia], screen[ia + 1]);
+        b.set(screen[ib], screen[ib + 1]);
+        if (!Number.isFinite(a.x + a.y + b.x + b.y)) continue;
+        nearestEdgeDist2 = Math.min(nearestEdgeDist2, this.distancePointToSegmentSquared(point, a, b));
+      }
+    }
+
+    const vertexRadius2 = OBJECT_VERTEX_PICK_RADIUS * OBJECT_VERTEX_PICK_RADIUS;
+    const edgeRadius2 = OBJECT_EDGE_PICK_RADIUS * OBJECT_EDGE_PICK_RADIUS;
+    const distance2 = Math.min(nearestVertexDist2, nearestEdgeDist2);
+    return {
+      hit: containsSurface || nearestVertexDist2 <= vertexRadius2 || nearestEdgeDist2 <= edgeRadius2,
+      containsSurface,
+      distance2,
+      area: (maxX - minX) * (maxY - minY),
+    };
   }
 
   private isObjectFocusDoubleClick(ev: PointerEvent, instIdx: number) {

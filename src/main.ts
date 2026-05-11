@@ -1764,7 +1764,8 @@ function startSceneLightDrag(runtime: SceneLightRuntime, handle: SceneLightDragH
     blocksSelection: true,
     blocksContextMenu: true,
     usesPointerCapture: true,
-    updatePointer: (_point, pointerEvent) => (pointerEvent ? updateSceneLightDrag(pointerEvent) : false),
+    usesPointerLock: true,
+    updatePointer: (point, pointerEvent) => (pointerEvent ? updateSceneLightDrag(pointerEvent, point) : false),
     commit: () => {
       endSceneLightDrag(null, true);
     },
@@ -1776,15 +1777,15 @@ function startSceneLightDrag(runtime: SceneLightRuntime, handle: SceneLightDragH
   }
 }
 
-function updateSceneLightDrag(ev: PointerEvent) {
+function updateSceneLightDrag(ev: PointerEvent, point: { clientX: number; clientY: number } = ev) {
   if (!sceneLightDrag.active || ev.pointerId !== sceneLightDrag.pointerId) return false;
   const runtime = sceneLights.find(entry => entry.state.id === sceneLightDrag.lightId);
   if (!runtime) return false;
 
   const rect = renderer.domElement.getBoundingClientRect();
   ndc.set(
-    ((ev.clientX - rect.left) / rect.width) * 2 - 1,
-    -((ev.clientY - rect.top) / rect.height) * 2 + 1,
+    ((point.clientX - rect.left) / rect.width) * 2 - 1,
+    -((point.clientY - rect.top) / rect.height) * 2 + 1,
   );
   raycaster.setFromCamera(ndc, camera);
   const hit = raycaster.ray.intersectPlane(sceneLightDrag.plane, tmpVec);
@@ -6033,6 +6034,7 @@ focusResetButton?.addEventListener('click', () => keyboardCamera.resetFocus());
 new KeyboardShortcutController({
   isModalOpen: () => modalOverlayController.isOpen(),
   getTransformMode: () => transformController.mode,
+  isOperationActive: () => viewportInteraction.isOperationActive(),
   isEditMode: () => PARAMS.editMode,
   handleTransformConstraintKey,
   keyboardCamera,
@@ -6045,19 +6047,20 @@ new KeyboardShortcutController({
   insertKeyframe: insertKeyframeOperation,
   removeLastKeyframe: removeKeyframeOperation,
   toggleEditMode: () => setEditMode(!PARAMS.editMode),
-  startTransformFromPointer: mode => viewportInteraction.startTransformFromLastPointer(mode),
-  extrudeEditSelectionFromPointer: () => viewportInteraction.startEditExtrusionFromLastPointer(),
-  insetEditSelectionFromPointer: () => viewportInteraction.startEditInsetFromLastPointer(),
-  startBevelEditSelection: (kind, inward) => viewportInteraction.startEditBevelFromLastPointer(kind, inward),
+  startTransformFromPointer: (mode, replaceActive) => viewportInteraction.startTransformFromLastPointer(mode, replaceActive),
+  extrudeEditSelectionFromPointer: replaceActive => viewportInteraction.startEditExtrusionFromLastPointer(replaceActive),
+  insetEditSelectionFromPointer: replaceActive => viewportInteraction.startEditInsetFromLastPointer(replaceActive),
+  startBevelEditSelection: (kind, inward, replaceActive) => viewportInteraction.startEditBevelFromLastPointer(kind, inward, replaceActive),
   selectAllEditCells,
-  showAddObjectMenuAtPointer: () => viewportInteraction.showAddObjectMenuAtLastPointer(),
-  duplicateSelectionFromPointer: () => viewportInteraction.startDuplicateFromLastPointer(),
+  showAddObjectMenuAtPointer: replaceActive => viewportInteraction.showAddObjectMenuAtLastPointer(replaceActive),
+  duplicateSelectionFromPointer: replaceActive => viewportInteraction.startDuplicateFromLastPointer(replaceActive),
   deleteOrConfirmSelection: () => viewportInteraction.deleteOrConfirmSelection(),
   hasSelection: hasActiveSelection,
   undo: undoSceneSnapshot,
   redo: redoSceneSnapshot,
   togglePerfOverlay,
   setEditCellDimension,
+  changePrimitiveDimension: delta => setNewPrimitiveDimension(PARAMS.N + delta),
 }).bind();
 
 updateTransformActionButtons();

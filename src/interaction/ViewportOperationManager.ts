@@ -12,6 +12,7 @@ export type ViewportOperation = {
   blocksSelection?: boolean;
   blocksContextMenu?: boolean;
   usesPointerCapture?: boolean;
+  usesPointerLock?: boolean;
   updatePointer?: (point: ViewportPointerPoint, ev?: PointerEvent) => boolean | void;
   updateWheel?: (ev: WheelEvent) => boolean | void;
   commit?: () => void;
