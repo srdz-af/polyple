@@ -22,6 +22,10 @@ type LightMenuOption = {
   kind: SceneLightKind;
 };
 
+export function viewportContextMenuFromDocument() {
+  return document.getElementById('context-menu') as HTMLDivElement | null;
+}
+
 type DuplicatePlacementToken = unknown;
 type EditExtrusionToken = unknown;
 type EditInsetToken = unknown;

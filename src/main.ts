@@ -65,7 +65,7 @@ import { BackgroundController, backgroundElementsFromDocument, type BackgroundUr
 import { KeyboardCameraController } from './controls/KeyboardCameraController';
 import { KeyboardShortcutController } from './interaction/KeyboardShortcutController';
 import { TransformController } from './interaction/TransformController';
-import { ViewportInteractionController } from './interaction/ViewportInteractionController';
+import { ViewportInteractionController, viewportContextMenuFromDocument } from './interaction/ViewportInteractionController';
 import { createBidirectionalAxes, createFadingGrid } from './viewport/grid';
 import { AxisGizmoController } from './ui/AxisGizmoController';
 import { DimensionControlController } from './ui/DimensionControlController';
@@ -267,7 +267,6 @@ function requestSceneUrlUpdate() {
 }
 
 const app = document.getElementById('app')!;
-const ctxMenu = document.getElementById('context-menu') as HTMLDivElement | null;
 const modalOverlayController = new ModalOverlayController();
 const paneController = new PaneController();
 const sceneControlTabs = new SceneControlTabsController();
@@ -3321,7 +3320,7 @@ viewportInteraction = new ViewportInteractionController({
   controls,
   raycaster,
   ndc,
-  contextMenuEl: ctxMenu,
+  contextMenuEl: viewportContextMenuFromDocument(),
   keyboardCamera,
   transformController,
   primitiveMenuOptions,
