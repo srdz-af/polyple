@@ -2,6 +2,7 @@ import { VIEW_MODES, type ViewMode } from '../constants';
 import { viewModeShortcutIndex, type KeyboardCameraController } from '../controls/KeyboardCameraController';
 import type { EditCellDimension, TransformMode } from '../scene/types';
 import { isPlainTextEditTarget, isTextEntryTarget } from '../ui/domTargets';
+import type { EditOperationRequest } from './ViewportInteractionController';
 
 type KeyboardShortcutControllerOptions = {
   isModalOpen: () => boolean;
@@ -20,9 +21,7 @@ type KeyboardShortcutControllerOptions = {
   removeLastKeyframe: () => void;
   toggleEditMode: () => void;
   startTransformFromPointer: (mode: TransformMode, replaceActive?: boolean) => void;
-  extrudeEditSelectionFromPointer: (replaceActive?: boolean) => void;
-  insetEditSelectionFromPointer: (replaceActive?: boolean) => void;
-  startBevelEditSelection: (kind?: 'vertex' | 'edge', inward?: boolean, replaceActive?: boolean) => void;
+  startEditOperationFromPointer: (request: EditOperationRequest, replaceActive?: boolean) => void;
   selectAllEditCells: () => void;
   showAddObjectMenuAtPointer: (replaceActive?: boolean) => void;
   duplicateSelectionFromPointer: (replaceActive?: boolean) => void;
@@ -124,32 +123,32 @@ export class KeyboardShortcutController {
 
     if (!hasSystemMod && !ev.shiftKey && canReplaceOperation && this.options.isEditMode() && key === 'e') {
       ev.preventDefault();
-      this.options.extrudeEditSelectionFromPointer(operationActive);
+      this.options.startEditOperationFromPointer({ type: 'extrude' }, operationActive);
       return;
     }
     if (!hasSystemMod && !ev.shiftKey && canReplaceOperation && this.options.isEditMode() && key === 'i') {
       ev.preventDefault();
-      this.options.insetEditSelectionFromPointer(operationActive);
+      this.options.startEditOperationFromPointer({ type: 'inset' }, operationActive);
       return;
     }
     if (!hasSystemMod && !ev.shiftKey && canReplaceOperation && this.options.isEditMode() && key === 'b') {
       ev.preventDefault();
-      this.options.startBevelEditSelection('edge', false, operationActive);
+      this.options.startEditOperationFromPointer({ type: 'bevel', kind: 'edge' }, operationActive);
       return;
     }
     if (!hasSystemMod && ev.shiftKey && canReplaceOperation && this.options.isEditMode() && key === 'b') {
       ev.preventDefault();
-      this.options.startBevelEditSelection('vertex', false, operationActive);
+      this.options.startEditOperationFromPointer({ type: 'bevel', kind: 'vertex' }, operationActive);
       return;
     }
     if (!ev.ctrlKey && !ev.metaKey && ev.altKey && !ev.shiftKey && canReplaceOperation && this.options.isEditMode() && key === 'b') {
       ev.preventDefault();
-      this.options.startBevelEditSelection('edge', true, operationActive);
+      this.options.startEditOperationFromPointer({ type: 'bevel', kind: 'edge', inward: true }, operationActive);
       return;
     }
     if (!ev.ctrlKey && !ev.metaKey && ev.altKey && ev.shiftKey && canReplaceOperation && this.options.isEditMode() && key === 'b') {
       ev.preventDefault();
-      this.options.startBevelEditSelection('vertex', true, operationActive);
+      this.options.startEditOperationFromPointer({ type: 'bevel', kind: 'vertex', inward: true }, operationActive);
       return;
     }
 

@@ -27,6 +27,10 @@ export function viewportContextMenuFromDocument() {
 }
 
 export type EditOperationMode = 'grouped' | 'individual';
+export type EditOperationRequest =
+  | { type: 'extrude' }
+  | { type: 'inset' }
+  | { type: 'bevel'; kind?: 'vertex' | 'edge'; inward?: boolean };
 export type ViewportAmountOperation = Omit<ViewportOperation, 'updatePointer' | 'updateWheel'> & {
   updateAmount: (amount: number) => void;
   updateWheel?: (ev: WheelEvent, amount: number) => boolean | void;
@@ -595,6 +599,18 @@ export class ViewportInteractionController {
       operation.cancel?.();
       operation.cleanup?.();
     }
+  }
+
+  startEditOperationFromLastPointer(request: EditOperationRequest, replaceActive = false) {
+    if (request.type === 'extrude') {
+      this.startEditExtrusionFromLastPointer(replaceActive);
+      return;
+    }
+    if (request.type === 'inset') {
+      this.startEditInsetFromLastPointer(replaceActive);
+      return;
+    }
+    this.startEditBevelFromLastPointer(request.kind ?? 'edge', request.inward ?? false, replaceActive);
   }
 
   startDuplicateFromLastPointer(replaceActive = false) {
