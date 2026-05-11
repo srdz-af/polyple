@@ -182,6 +182,7 @@ type PackedInstanceState = {
 };
 type PackedSceneUrlState = {
   v: 1;
+  sn?: string;
   n: number;
   x: string;
   e: string;
@@ -712,6 +713,11 @@ const sceneRedoButton = document.getElementById('scene-redo-button') as HTMLButt
 const sceneSaveButton = document.getElementById('scene-save-button') as HTMLButtonElement | null;
 const sceneLoadButton = document.getElementById('scene-load-button') as HTMLButtonElement | null;
 const sceneLoadInput = document.getElementById('scene-load-input') as HTMLInputElement | null;
+const welcomeSplash = document.getElementById('welcome-splash') as HTMLDivElement | null;
+const welcomeLoadSceneButton = document.getElementById('welcome-load-scene-button') as HTMLButtonElement | null;
+const welcomeCloseButton = document.getElementById('welcome-close-button') as HTMLButtonElement | null;
+const welcomeDontShowInput = document.getElementById('welcome-dont-show') as HTMLInputElement | null;
+const welcomeRecentList = document.getElementById('welcome-recent-list') as HTMLDivElement | null;
 const sceneLightSelect = document.getElementById('scene-light-select') as HTMLSelectElement | null;
 const sceneLightAddPointButton = document.getElementById('scene-light-add-point') as HTMLButtonElement | null;
 const sceneLightAddDirectionalButton = document.getElementById('scene-light-add-directional') as HTMLButtonElement | null;
@@ -721,6 +727,10 @@ const sceneLightShadowValue = document.getElementById('scene-light-shadow-value'
 const sceneLightColorInput = document.getElementById('scene-light-color') as HTMLInputElement | null;
 const sceneLightColorValue = document.getElementById('scene-light-color-value') as HTMLOutputElement | null;
 const sceneLightIntensityInput = document.getElementById('scene-light-intensity') as HTMLInputElement | null;
+const WELCOME_SPLASH_HIDDEN_KEY = 'polyple.welcomeSplashHidden';
+const RECENT_SCENE_PAYLOADS_KEY = 'polyple.recentScenePayloads';
+const MAX_RECENT_SCENES = 5;
+type RecentSceneEntry = { payload: string; name: string };
 const sceneControlTabButtons = Array.from(document.querySelectorAll('[data-scene-control-tab]')) as HTMLButtonElement[];
 const sceneControlPanels = Array.from(document.querySelectorAll('[data-scene-control-panel]')) as HTMLElement[];
 const modalOverlayController = new ModalOverlayController();
@@ -1043,6 +1053,7 @@ const tmpCenter = new THREE.Vector3();
 let setViewMode: (mode: ViewMode) => void;
 let sceneHistory: SceneHistory<PackedSceneUrlState>;
 let baseLabel = 'Hypercube';
+let sceneName = '';
 const BASE_SELECTION = -1;
 const NO_SELECTION = -2;
 const LIGHT_SELECTION_BASE = -1000;
@@ -2467,11 +2478,18 @@ function unpackInstanceState(instance: PackedInstanceState): InstanceSnapshot {
   };
 }
 
-function captureSceneUrlState(): PackedSceneUrlState {
+function sanitizeSceneName(value: unknown) {
+  if (typeof value !== 'string') return '';
+  return value.trim().replace(/\s+/gu, ' ').slice(0, 80);
+}
+
+function captureSceneUrlState(sceneNameOverride = sceneName): PackedSceneUrlState {
   const snap = captureSnapshot();
   const editSelection = transformController.getEditSelection();
+  const packedSceneName = sanitizeSceneName(sceneNameOverride);
   return {
     v: 1,
+    sn: packedSceneName || undefined,
     n: snap.N,
     x: packF32(snap.X),
     e: packU32(snap.E),
@@ -2566,6 +2584,7 @@ function isPackedSceneUrlState(value: unknown): value is PackedSceneUrlState {
 async function applySceneUrlState(state: PackedSceneUrlState) {
   sceneUrlApplying = true;
   try {
+    sceneName = sanitizeSceneName(state.sn);
     const viewMode = normalizeViewMode(state.rm);
     PARAMS.renderMode = viewMode;
     applySnapshot(unpackSceneUrlSnapshot(state));
@@ -2622,6 +2641,7 @@ async function loadSceneUrlPayload(payload: string, clearUrlAfterLoad: boolean) 
   }
   await applySceneUrlState(decoded);
   if (clearUrlAfterLoad) clearScenePayloadFromCurrentUrl();
+  return decoded;
 }
 
 async function applyDefaultSceneState() {
@@ -2647,13 +2667,158 @@ async function initializeSceneUrlState(loadDefault = false) {
   }
 }
 
+function normalizeRecentSceneEntry(value: unknown): RecentSceneEntry | null {
+  if (typeof value === 'string') {
+    const payload = readScenePayloadFromText(value);
+    return payload ? { payload, name: '' } : null;
+  }
+  if (typeof value !== 'object' || value === null) return null;
+  const raw = value as { p?: unknown; payload?: unknown; n?: unknown; name?: unknown };
+  const payloadSource = typeof raw.p === 'string' ? raw.p : raw.payload;
+  const payload = typeof payloadSource === 'string' ? readScenePayloadFromText(payloadSource) : null;
+  if (!payload) return null;
+  return {
+    payload,
+    name: sanitizeSceneName(typeof raw.n === 'string' ? raw.n : raw.name),
+  };
+}
+
+function packedSceneName(state: PackedSceneUrlState | null | undefined) {
+  return sanitizeSceneName(state?.sn);
+}
+
+function readRecentSceneEntries() {
+  try {
+    const raw = window.localStorage.getItem(RECENT_SCENE_PAYLOADS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    const seen = new Set<string>();
+    const entries: RecentSceneEntry[] = [];
+    for (const value of parsed) {
+      const entry = normalizeRecentSceneEntry(value);
+      if (!entry || seen.has(entry.payload)) continue;
+      seen.add(entry.payload);
+      entries.push(entry);
+      if (entries.length >= MAX_RECENT_SCENES) break;
+    }
+    return entries;
+  } catch {
+    return [];
+  }
+}
+
+function writeRecentSceneEntries(entries: RecentSceneEntry[]) {
+  try {
+    window.localStorage.setItem(RECENT_SCENE_PAYLOADS_KEY, JSON.stringify(entries.slice(0, MAX_RECENT_SCENES).map(entry => ({
+      p: entry.payload,
+      n: entry.name || undefined,
+    }))));
+  } catch (err) {
+    console.warn('Unable to store recent scene list', err);
+  }
+}
+
+function rememberRecentScenePayload(payload: string, name = '') {
+  const normalizedPayload = readScenePayloadFromText(payload);
+  if (!normalizedPayload) return;
+  const normalizedName = sanitizeSceneName(name);
+  const existing = readRecentSceneEntries().find(entry => entry.payload === normalizedPayload);
+  const entries = readRecentSceneEntries().filter(entry => entry.payload !== normalizedPayload);
+  entries.unshift({ payload: normalizedPayload, name: normalizedName || existing?.name || '' });
+  writeRecentSceneEntries(entries);
+  renderWelcomeRecentScenes();
+}
+
+function shortScenePayload(payload: string) {
+  if (payload.length <= 22) return payload;
+  return `${payload.slice(0, 11)}...${payload.slice(-8)}`;
+}
+
+function renderWelcomeRecentScenes() {
+  if (!welcomeRecentList) return;
+  welcomeRecentList.textContent = '';
+  const entries = readRecentSceneEntries();
+  if (!entries.length) {
+    const empty = document.createElement('div');
+    empty.id = 'welcome-recent-empty';
+    empty.textContent = 'No saved scenes yet.';
+    welcomeRecentList.appendChild(empty);
+    return;
+  }
+
+  entries.forEach((entry, idx) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'welcome-recent-scene';
+    const name = entry.name || `Scene ${idx + 1}`;
+    button.title = `Load ${name}`;
+    button.setAttribute('aria-label', `Load ${name}`);
+
+    const label = document.createElement('span');
+    label.textContent = name;
+    const hash = document.createElement('span');
+    hash.textContent = shortScenePayload(entry.payload);
+    button.append(label, hash);
+    button.addEventListener('click', () => {
+      void loadRecentScenePayload(entry.payload);
+    });
+    welcomeRecentList.appendChild(button);
+  });
+}
+
+function shouldShowWelcomeSplash() {
+  try {
+    return window.localStorage.getItem(WELCOME_SPLASH_HIDDEN_KEY) !== '1';
+  } catch {
+    return true;
+  }
+}
+
+function hideWelcomeSplash(persistPreference = false) {
+  if (persistPreference || welcomeDontShowInput?.checked) {
+    try {
+      window.localStorage.setItem(WELCOME_SPLASH_HIDDEN_KEY, '1');
+    } catch (err) {
+      console.warn('Unable to store welcome splash preference', err);
+    }
+  }
+  if (welcomeSplash) welcomeSplash.hidden = true;
+}
+
+function showWelcomeSplashIfNeeded() {
+  if (!welcomeSplash || !shouldShowWelcomeSplash()) return;
+  renderWelcomeRecentScenes();
+  welcomeSplash.hidden = false;
+}
+
+async function loadRecentScenePayload(payload: string) {
+  try {
+    const state = await loadSceneUrlPayload(payload, false);
+    rememberRecentScenePayload(payload, packedSceneName(state));
+    hideWelcomeSplash();
+  } catch (err) {
+    console.warn('Unable to load recent scene URL state', err);
+    window.alert('Unable to load recent scene.');
+  }
+}
+
+function requestSceneNameForSave() {
+  const currentName = sanitizeSceneName(sceneName);
+  const value = window.prompt('Scene name (optional)', currentName || baseLabel || '');
+  if (value === null) return currentName;
+  sceneName = sanitizeSceneName(value);
+  return sceneName;
+}
+
 async function saveSceneStateFile() {
   if (!sceneSaveButton) return;
   const previousTitle = sceneSaveButton.title;
   sceneSaveButton.disabled = true;
   sceneSaveButton.title = 'Saving scene URL...';
   try {
-    const payload = await encodeSceneUrlPayload(captureSceneUrlState());
+    const nextSceneName = requestSceneNameForSave();
+    const payload = await encodeSceneUrlPayload(captureSceneUrlState(nextSceneName));
+    rememberRecentScenePayload(payload, nextSceneName);
     const sceneUrl = createSceneUrlWithPayload(payload);
     downloadTextFile(sceneUrl, sceneStateFileName());
     let copied = true;
@@ -2676,14 +2841,18 @@ async function saveSceneStateFile() {
 }
 
 async function loadSceneStateFile(file: File | null | undefined) {
-  if (!file) return;
+  if (!file) return false;
   try {
     const payload = readScenePayloadFromText(await file.text());
     if (!payload) throw new Error('Scene file does not contain a valid scene URL.');
-    await loadSceneUrlPayload(payload, false);
+    const state = await loadSceneUrlPayload(payload, false);
+    rememberRecentScenePayload(payload, packedSceneName(state));
+    hideWelcomeSplash();
+    return true;
   } catch (err) {
     console.warn('Unable to load scene URL state', err);
     window.alert(err instanceof Error ? err.message : 'Unable to load scene URL.');
+    return false;
   } finally {
     if (sceneLoadInput) sceneLoadInput.value = '';
   }
@@ -6815,6 +6984,7 @@ function rebuildState(
   }
   updateDimensionControl();
   baseLabel = source === 'custom' ? 'Custom' : 'Hypercube';
+  sceneName = '';
   updateObjectList();
   selectObject(BASE_SELECTION);
   updateAxisLegend();
@@ -6906,6 +7076,11 @@ sceneUndoButton?.addEventListener('click', () => undoSceneSnapshot());
 sceneRedoButton?.addEventListener('click', () => redoSceneSnapshot());
 sceneSaveButton?.addEventListener('click', () => void saveSceneStateFile());
 sceneLoadButton?.addEventListener('click', () => sceneLoadInput?.click());
+welcomeLoadSceneButton?.addEventListener('click', () => sceneLoadInput?.click());
+welcomeCloseButton?.addEventListener('click', () => hideWelcomeSplash());
+welcomeSplash?.addEventListener('click', ev => {
+  if (ev.target === welcomeSplash) hideWelcomeSplash();
+});
 sceneLoadInput?.addEventListener('change', () => {
   void loadSceneStateFile(sceneLoadInput.files?.[0]);
 });
@@ -6977,8 +7152,12 @@ window.addEventListener('blur', () => {
   if (viewportInteraction.isOperationKind('scene-light-drag')) viewportInteraction.finishOperation(false);
 });
 viewportInteraction.bind();
+const startupScenePayload = readScenePayloadFromUrl();
 void backgroundSelectorReady
-  .then(() => initializeSceneUrlState(true))
+  .then(async () => {
+    await initializeSceneUrlState(true);
+    if (!startupScenePayload) showWelcomeSplashIfNeeded();
+  })
   .catch(err => {
     console.warn('Unable to initialize scene URL state', err);
   });
