@@ -58,7 +58,7 @@ import {
   type RenderQuality,
 } from '../animation/KeyframeTimelineController';
 import { completeAxisOrder, interpolateAnimationState } from '../animation/animationInterpolation';
-import { createSceneInstance, type InstanceGeometryData } from '../scene/instanceFactory';
+import type { InstanceGeometryData } from '../scene/instanceFactory';
 import { DEFAULT_SCENE_STATE } from '../scene/defaultSceneState';
 import { DuplicatePlacementOperationFactory } from '../scene/DuplicatePlacementOperationFactory';
 import { GeometryEditOperationFactory } from '../scene/GeometryEditOperationFactory';
@@ -67,6 +67,7 @@ import { cloneObjectOrigin, computeObjectOrigin, type ObjectOrigin } from '../sc
 import { ProjectionPipeline } from '../scene/ProjectionPipeline';
 import { RenderSyncService } from '../scene/RenderSyncService';
 import { SceneMaterialService } from '../scene/SceneMaterialService';
+import { SceneObjectService } from '../scene/SceneObjectService';
 import { SceneObjectStore } from '../scene/SceneObjectStore';
 import { SceneSelectionService } from '../scene/SceneSelectionService';
 import { SceneHistory } from '../scene/SceneHistory';
@@ -260,6 +261,7 @@ export class PolypleApp {
     let renderSync: RenderSyncService;
     let sceneLightService: SceneLightService;
     let sceneMaterialService: SceneMaterialService;
+    let sceneObjectService: SceneObjectService;
     let sceneObjectStore: SceneObjectStore<SceneLightRuntime>;
     let geometryEditService: GeometryEditService<PackedSceneUrlState>;
     let geometryEditOperationFactory: GeometryEditOperationFactory<PackedSceneUrlState>;
@@ -1288,6 +1290,39 @@ export class PolypleApp {
       updateTexturePanel: () => textureEditor.updatePanel(),
       requestSceneUrlUpdate,
     });
+    sceneObjectService = new SceneObjectService({
+      scene,
+      instances: extraInstances,
+      materialService: sceneMaterialService,
+      getProjector: () => projector,
+      getRenderMode: () => PARAMS.renderMode,
+      getPrimitiveKind: () => PARAMS.primitive,
+      getPrimitiveDimension: () => PARAMS.N,
+      currentAxisMap,
+      getBaseInstanceData: () => {
+        if (M <= 0 || !baseVisible) return null;
+        return {
+          verts: new Float32Array(X),
+          edges: new Uint32Array(E),
+          cellTopology: cloneCellTopology(baseCellTopology),
+          surfaceTopology: clonePrimitiveSurfaceTopology(baseSurfaceTopology),
+          V: M,
+          kind: PARAMS.primitive,
+          axisMap: [...baseAxisMap],
+          originalN: baseOriginalN || PARAMS.N,
+          origin: new Float32Array(baseOrigin),
+        };
+      },
+      getBaseMaterialId: () => baseMaterialId,
+      defaultMaterialName: 'Material 1',
+      pushUndoSnapshot,
+      projectAndRenderAll,
+      setViewMode: mode => setViewMode?.(mode),
+      updateObjectList,
+      requestSceneUrlUpdate,
+      clearSelection: () => selectionService.clear(),
+      clearSelectionOutlines: removeSelectionOutlines,
+    });
     const objectListController = new ObjectListController({
       getRows: () => sceneObjectStore.objectRows(),
       getSelectedIndex: () => selectionService.primary,
@@ -1299,40 +1334,7 @@ export class PolypleApp {
     });
     
     function restoreInstanceSnapshot(snap: InstanceSnapshot): Instance {
-      const instanceRenderer = new HypercubeRenderer(scene);
-      const cellTopology = deriveCellTopologyForGeometry(
-        snap.kind,
-        snap.originalN,
-        snap.M,
-        snap.E,
-        snap.surfaceTopology,
-        snap.cellTopology,
-      );
-      instanceRenderer.build(snap.M, snap.E, snap.surfaceTopology, cellTopology);
-      const material = sceneMaterialService.ensureMaterialSlot(snap.materialId, snap.surface, snap.label);
-      const surface = cloneSurface(material.surface);
-      instanceRenderer.setSurface(surface);
-      instanceRenderer.setMode(PARAMS.renderMode);
-    
-      return {
-        renderer: instanceRenderer,
-        Y: new Float32Array(3 * snap.M),
-        X: new Float32Array(snap.X),
-        E: new Uint32Array(snap.E),
-        cellTopology: cloneCellTopology(cellTopology),
-        surfaceTopology: clonePrimitiveSurfaceTopology(snap.surfaceTopology),
-        M: snap.M,
-        offset: snap.offset.clone(),
-        label: snap.label,
-        kind: snap.kind,
-        transform: cloneTransformState(snap.transform),
-        origin: cloneObjectOrigin(snap.origin, snap.X, snap.M, MAX_N),
-        originalN: snap.originalN,
-        axisMap: normalizeAxisMap(snap.axisMap, snap.originalN),
-        visible: snap.visible,
-        materialId: material.id,
-        surface,
-      };
+      return sceneObjectService.restoreInstanceSnapshot(snap);
     }
     
     const rendererND = new HypercubeRenderer(scene);
@@ -1929,46 +1931,15 @@ export class PolypleApp {
     });
     
     function createPrimitiveData(kind: PrimitiveKind, dimension: number): InstanceGeometryData {
-      const data = buildPrimitive(kind, dimension);
-      const axisMap = currentAxisMap(dimension);
-      const verts = embedToMax(data.verts, dimension, axisMap);
-      return {
-        verts,
-        edges: data.edges,
-        cellTopology: cloneCellTopology(data.cellTopology),
-        surfaceTopology: clonePrimitiveSurfaceTopology(data.surfaceTopology),
-        V: data.V,
-        kind,
-        axisMap,
-        originalN: dimension,
-        origin: computeObjectOrigin(verts, data.V, MAX_N),
-      };
+      return sceneObjectService.createPrimitiveData(kind, dimension);
     }
     
     function insertInstance(data: InstanceGeometryData, offset: THREE.Vector3, label: string, materialId: string, syncMode = true) {
-      const material = sceneMaterialService.ensureMaterialSlot(materialId);
-      const inst = createSceneInstance({
-        scene,
-        projector,
-        data,
-        offset,
-        label,
-        materialId: material.id,
-        surface: material.surface,
-        renderMode: PARAMS.renderMode,
-        projectionN: MAX_N,
-      });
-      extraInstances.push(inst);
-      projectAndRenderAll();
-      if (syncMode && setViewMode) setViewMode(PARAMS.renderMode);
-      updateObjectList();
-      requestSceneUrlUpdate();
-      return inst;
+      return sceneObjectService.insertInstance(data, offset, label, materialId, syncMode);
     }
     
     function addPrimitiveInstanceAt(kind: PrimitiveKind, label: string, offset: THREE.Vector3, syncMode = true) {
-      const materialId = sceneMaterialService.defaultMaterialId('Material 1');
-      insertInstance(createPrimitiveData(kind, PARAMS.N), offset, label, materialId, syncMode);
+      sceneObjectService.addPrimitiveInstanceAt(kind, label, offset, syncMode);
     }
     
     function addSceneLightAt(kind: SceneLightKind, position: THREE.Vector3) {
@@ -1976,35 +1947,11 @@ export class PolypleApp {
     }
     
     function clearExtraInstances() {
-      removeSelectionOutlines();
-      extraInstances.forEach(inst => inst.renderer.destroy());
-      extraInstances.length = 0;
-      selectionService.clear();
+      sceneObjectService.clearExtraInstances();
     }
     
     function addInstanceAt(offset: THREE.Vector3, recordUndo = true) {
-      if (recordUndo) pushUndoSnapshot();
-      let data: InstanceGeometryData;
-      if (M > 0 && baseVisible) {
-        data = {
-          verts: new Float32Array(X),
-          edges: new Uint32Array(E),
-          cellTopology: cloneCellTopology(baseCellTopology),
-          surfaceTopology: clonePrimitiveSurfaceTopology(baseSurfaceTopology),
-          V: M,
-          kind: PARAMS.primitive,
-          axisMap: [...baseAxisMap],
-          originalN: baseOriginalN || PARAMS.N,
-          origin: new Float32Array(baseOrigin),
-        };
-      } else {
-        data = createPrimitiveData(PARAMS.primitive, PARAMS.N);
-      }
-      const materialId = M > 0 && baseVisible
-        ? baseMaterialId
-        : sceneMaterialService.defaultMaterialId('Material 1');
-      const label = `${data.kind} #${extraInstances.length + 1}`;
-      insertInstance(data, offset, label, materialId);
+      sceneObjectService.addInstanceAt(offset, recordUndo);
     }
     
     function rebuildState(
