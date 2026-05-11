@@ -112,6 +112,7 @@ type ViewportInteractionControllerOptions = {
     mode?: EditOperationMode,
     setSmoothness?: (smoothness: number) => void,
   ) => ViewportAmountOperation | null;
+  createSceneLightDragOperation?: (ev: PointerEvent) => ViewportOperation | null;
   insertKeyframe: () => void;
   removeLastKeyframe: () => void;
   deleteSelected: () => void;
@@ -166,6 +167,7 @@ export class ViewportInteractionController {
     canvas.addEventListener('pointermove', ev => this.handleTransformPointerMove(ev));
     canvas.addEventListener('contextmenu', ev => this.handleContextMenu(ev));
     canvas.addEventListener('mousedown', ev => this.handleMiddleMouseDown(ev), { capture: true });
+    canvas.addEventListener('pointerdown', ev => this.handleSceneLightPointerDown(ev), { capture: true });
     canvas.addEventListener('pointerdown', ev => this.handlePointerDown(ev));
     canvas.addEventListener('wheel', ev => this.handleWheel(ev), { passive: false, capture: true });
 
@@ -635,18 +637,6 @@ export class ViewportInteractionController {
     return this.operationManager.isKind(kind);
   }
 
-  startOperation(operation: ViewportOperation) {
-    return this.startViewportOperation(operation);
-  }
-
-  updateActiveOperationPointer(ev: PointerEvent) {
-    return this.operationManager.updatePointer(this.operationPointerPoint(ev), ev);
-  }
-
-  finishOperation(commit: boolean) {
-    return this.operationManager.finish(commit);
-  }
-
   handleTransformConstraintKey(key: string) {
     const transformController = this.options.transformController;
     if (!transformController.isActive()) return false;
@@ -704,9 +694,10 @@ export class ViewportInteractionController {
     });
   }
 
-  private runImmediateOperation(kind: string, scope: 'edit' | 'object' | 'viewport' | 'light' | 'axis', commit: () => void) {
-    if (!this.startViewportOperation({ kind, scope, commit })) return;
+  runImmediateOperation(kind: string, scope: 'edit' | 'object' | 'viewport' | 'light' | 'axis', commit: () => void) {
+    if (!this.startViewportOperation({ kind, scope, commit })) return false;
     this.operationManager.finish(true);
+    return true;
   }
 
   private suppressContextMenuIfRightClick(ev: PointerEvent | MouseEvent) {
@@ -1019,6 +1010,20 @@ export class ViewportInteractionController {
     }
   }
 
+  private handleSceneLightPointerDown(ev: PointerEvent) {
+    if (this.operationManager.isActive()) return;
+    const operation = this.options.createSceneLightDragOperation?.(ev);
+    if (!operation) return;
+    if (!this.startViewportOperation(operation)) {
+      operation.cancel?.();
+      operation.cleanup?.();
+      return;
+    }
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+  }
+
   private handleWindowPointerDown(ev: PointerEvent) {
     if (
       !this.operationManager.isKind('edit-bevel')
@@ -1040,6 +1045,11 @@ export class ViewportInteractionController {
   }
 
   private handleWindowPointerUp(ev: PointerEvent) {
+    if (this.operationManager.isKind('scene-light-drag')) {
+      this.operationManager.finish(true);
+      ev.preventDefault();
+      return;
+    }
     if (this.operationManager.isKind('duplicate-placement') && ev.button === 0) {
       this.operationManager.finish(true);
       ev.preventDefault();
@@ -1055,6 +1065,11 @@ export class ViewportInteractionController {
   }
 
   private handleWindowPointerCancel(ev: PointerEvent) {
+    if (this.operationManager.isKind('scene-light-drag')) {
+      this.operationManager.finish(false);
+      ev.preventDefault();
+      return;
+    }
     if (
       this.operationManager.isKind('edit-bevel')
       || this.operationManager.isKind('edit-inset')
@@ -1086,6 +1101,7 @@ export class ViewportInteractionController {
   private handleWindowBlur() {
     if (this.operationManager.hasScope('edit')) this.operationManager.finish(false);
     if (this.operationManager.isKind('transform')) this.operationManager.finish(false);
+    if (this.operationManager.isKind('scene-light-drag')) this.operationManager.finish(false);
     if (this.operationManager.isKind('duplicate-placement')) this.operationManager.finish(false);
     if (this.operationManager.isKind('transform-gizmo')) this.operationManager.finish(false);
     if (this.operationManager.isKind('axis-shift')) this.operationManager.finish(false);

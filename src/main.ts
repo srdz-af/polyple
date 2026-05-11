@@ -24,39 +24,12 @@ import {
 } from './geometry/projectionUtils';
 import { buildProductMesh, type ProductMeshFactor } from './geometry/productMesh';
 import {
-  BEVEL_MAX_AMOUNT,
-  appendDimensionMajorDuplicateVertices,
-  batchEdgeBevelDistance,
-  buildBeveledEdgeData,
-  buildBeveledVertexData,
   compactDimensionMajorVertices,
-  edgeListFromCellTopology,
-  findEdgeWithOrigins,
-  initialVertexOrigins,
-  remapOriginsAfterEdgeBevel,
-  remapOriginsAfterVertexBevel,
 } from './geometry/bevelGeometry';
-import {
-  INSET_MAX_AMOUNT,
-  cellVertexSignature,
-  collectEditBevelTargets,
-  extrusionDirectionsForCells,
-  findCellIdByVertexSignature,
-  selectedCellComponentSignatures,
-  writeInsetVertices,
-} from './geometry/editOperationGeometry';
 import {
   buildGeneratedCellTopology,
   cloneCellTopology,
-  bevelEdge,
-  bevelSelectedEdges,
-  bevelVertices,
   deleteCellAndPrune,
-  extrudeCell,
-  extrudeCells,
-  insetCell,
-  insetCells,
-  getCellVertices,
   surfaceTopologyFromCellTopology,
   type CellTopology,
 } from './geometry/cellTopology';
@@ -64,8 +37,8 @@ import { BackgroundController, backgroundElementsFromDocument, type BackgroundUr
 import { KeyboardCameraController } from './controls/KeyboardCameraController';
 import { KeyboardShortcutController } from './interaction/KeyboardShortcutController';
 import { TransformController } from './interaction/TransformController';
-import { ViewportInteractionController, viewportContextMenuFromDocument, type ViewportAmountOperation } from './interaction/ViewportInteractionController';
-import type { ViewportOperation, ViewportPointerPoint } from './interaction/ViewportOperationManager';
+import { ViewportInteractionController, viewportContextMenuFromDocument } from './interaction/ViewportInteractionController';
+import type { ViewportOperation } from './interaction/ViewportOperationManager';
 import { createBidirectionalAxes, createFadingGrid } from './viewport/grid';
 import { AxisGizmoController } from './ui/AxisGizmoController';
 import { DimensionControlController } from './ui/DimensionControlController';
@@ -96,7 +69,9 @@ import {
 import { completeAxisOrder, interpolateAnimationState } from './animation/animationInterpolation';
 import { createSceneInstance, type InstanceGeometryData } from './scene/instanceFactory';
 import { DEFAULT_SCENE_STATE } from './scene/defaultSceneState';
-import { GeometryEditService, type EditGeometrySnapshot } from './scene/GeometryEditService';
+import { DuplicatePlacementOperationFactory } from './scene/DuplicatePlacementOperationFactory';
+import { GeometryEditOperationFactory } from './scene/GeometryEditOperationFactory';
+import { GeometryEditService } from './scene/GeometryEditService';
 import { cloneObjectOrigin, computeObjectOrigin, type ObjectOrigin } from './scene/objectOrigin';
 import { ProjectionPipeline } from './scene/ProjectionPipeline';
 import { RenderSyncService } from './scene/RenderSyncService';
@@ -117,7 +92,6 @@ import {
   packCellTopologyForUrl,
   packSurfaceTopology,
   surfaceTopologyForEditedCellTopology,
-  surfaceTopologyFromPositionedCellTopology,
   unpackCellTopology,
   unpackSurfaceTopology,
   type PackedCellTopology,
@@ -175,68 +149,6 @@ import type { ExtraAxisGizmoState } from './ui/ExtraAxisGizmoController';
 import { copyTextToClipboard, downloadTextFile, timestampedSceneFileName } from './utils/fileExport';
 type SceneLightDragHandle = 'position' | 'target';
 
-type DuplicatePlacement = {
-  undoSnapshot: PackedSceneUrlState;
-  originalSelectedInstance: number;
-  originalSelectedInstances: number[];
-  instance?: Instance;
-  lightRuntime?: SceneLightRuntime;
-};
-type EditExtrusionToken = {
-  undoSnapshot: PackedSceneUrlState;
-  mode: EditOperationMode;
-  instIdx: number;
-  dimension: number;
-  cellId: number;
-  cellIds: number[];
-  amount: number;
-  extrudeGroups: Array<{
-    sourceVertices: number[];
-    capVertices: number[];
-    directions: Float64Array[];
-  }>;
-  original: EditBevelGeometrySnapshot;
-};
-type EditInsetToken = {
-  undoSnapshot: PackedSceneUrlState;
-  mode: EditOperationMode;
-  instIdx: number;
-  dimension: number;
-  cellId: number;
-  cellIds: number[];
-  vertices: number[];
-  sourceVertices: number[];
-  insetVertices: number[];
-  insetGroups: Array<{
-    sourceVertices: number[];
-    insetVertices: number[];
-    cellVertices: number[][];
-  }>;
-  amount: number;
-  original: EditBevelGeometrySnapshot;
-};
-type EditBevelGeometrySnapshot = EditGeometrySnapshot;
-type EditBevelToken = {
-  undoSnapshot: PackedSceneUrlState;
-  mode: EditOperationMode;
-  kind: 'vertex' | 'edge';
-  inward: boolean;
-  instIdx: number;
-  dimension: number;
-  cellId: number;
-  cellIds: number[];
-  vertices: number[];
-  targetVertices: number[];
-  targetEdges: Array<[number, number]>;
-  targetEdgeIds: number[];
-  amount: number;
-  smoothness: number;
-  applied: boolean;
-  original: EditBevelGeometrySnapshot;
-};
-
-type EditOperationMode = 'grouped' | 'individual';
-
 const DEFAULT_BLOOM_INTENSITY = 0;
 const DEFAULT_MOTION_BLUR_INTENSITY = 0;
 const DEFAULT_COLOR_HUE = 0;
@@ -254,8 +166,6 @@ const SCENE_LIGHT_MARKER_PIXEL_DIAMETER = 11;
 const SELECTED_SCENE_LIGHT_MARKER_PIXEL_DIAMETER = 15;
 const SCENE_LIGHT_TARGET_PIXEL_DIAMETER = 10;
 const MAX_UNDO_SNAPSHOT_BYTES = 64 * 1024 * 1024;
-const BEVEL_MIN_SMOOTHNESS = 1;
-const BEVEL_MAX_SMOOTHNESS = 32;
 const SHADOW_MAP_SIZE_BY_QUALITY: Record<RenderQuality, number> = {
   full: 2048,
   high: 1024,
@@ -414,6 +324,8 @@ let projectionPipeline: ProjectionPipeline | null = null;
 let renderSync: RenderSyncService;
 let sceneObjectStore: SceneObjectStore<SceneLightRuntime>;
 let geometryEditService: GeometryEditService<PackedSceneUrlState>;
+let geometryEditOperationFactory: GeometryEditOperationFactory<PackedSceneUrlState>;
+let duplicatePlacementFactory: DuplicatePlacementOperationFactory<PackedSceneUrlState, Instance, SceneLightRuntime>;
 let selectionService: SceneSelectionService<SceneLightRuntime>;
 let editToolbar: EditToolbarController | null = null;
 let projectionDirty = true;
@@ -791,15 +703,6 @@ const sceneLightPanel = new SceneLightPanelController({
   syncRuntimes: syncSceneLightRuntimes,
 });
 
-function runImmediateViewportOperation(kind: string, scope: 'edit' | 'object' | 'viewport' | 'light' | 'axis', commit: () => void) {
-  if (!viewportInteraction) {
-    commit();
-    return;
-  }
-  if (!viewportInteraction.startOperation({ kind, scope, commit })) return;
-  viewportInteraction.finishOperation(true);
-}
-
 function performRemoveSelectedSceneLight() {
   const selected = selectedSceneLightRuntime();
   if (!selected) return;
@@ -818,7 +721,8 @@ function performRemoveSelectedSceneLight() {
 }
 
 function removeSelectedSceneLight() {
-  runImmediateViewportOperation('remove-scene-light', 'light', performRemoveSelectedSceneLight);
+  if (viewportInteraction) viewportInteraction.runImmediateOperation('remove-scene-light', 'light', performRemoveSelectedSceneLight);
+  else performRemoveSelectedSceneLight();
 }
 
 function performUpdateSelectedSceneLight(mutator: (state: SceneLightState) => void) {
@@ -843,7 +747,9 @@ function performUpdateSelectedSceneLight(mutator: (state: SceneLightState) => vo
 }
 
 function updateSelectedSceneLight(mutator: (state: SceneLightState) => void) {
-  runImmediateViewportOperation('update-scene-light', 'light', () => performUpdateSelectedSceneLight(mutator));
+  const commit = () => performUpdateSelectedSceneLight(mutator);
+  if (viewportInteraction) viewportInteraction.runImmediateOperation('update-scene-light', 'light', commit);
+  else commit();
 }
 
 function setSelectedSceneLightKind(kind: SceneLightKind) {
@@ -900,26 +806,20 @@ function pickSceneLightHandle(ev: PointerEvent) {
   return { runtime, handle };
 }
 
-function handleSceneLightPointerDown(ev: PointerEvent) {
-  if (viewportInteraction?.isOperationActive()) return;
-  if (ev.button !== 0 || PARAMS.editMode || transformController.isActive() || transformController.isGizmoDragging()) return;
-  const hit = pickSceneLightHandle(ev);
-  if (!hit) return;
+function createSceneLightDragOperation(ev: PointerEvent): ViewportOperation | null {
+  if (ev.button !== 0 || PARAMS.editMode || transformController.isActive() || transformController.isGizmoDragging()) return null;
+  const lightHit = pickSceneLightHandle(ev);
+  if (!lightHit) return null;
 
-  selectionService.setLightId(hit.runtime.state.id);
+  selectionService.setLightId(lightHit.runtime.state.id);
   selectObject(selectedSceneLightSelectionIndex());
-  startSceneLightDrag(hit.runtime, hit.handle, ev);
-  ev.preventDefault();
-  ev.stopPropagation();
-  ev.stopImmediatePropagation();
-}
-
-function startSceneLightDrag(runtime: SceneLightRuntime, handle: SceneLightDragHandle, ev: PointerEvent) {
+  const runtime = lightHit.runtime;
+  const handle = lightHit.handle;
   const dragPoint = handle === 'target' ? runtime.state.target : runtime.state.position;
   camera.getWorldDirection(tmpVec).normalize();
   sceneLightDrag.plane.setFromNormalAndCoplanarPoint(tmpVec, dragPoint);
   raycaster.setFromCamera(ndc, camera);
-  const hit = raycaster.ray.intersectPlane(sceneLightDrag.plane, tmpVec);
+  const planeHit = raycaster.ray.intersectPlane(sceneLightDrag.plane, tmpVec);
   sceneLightDrag.active = true;
   sceneLightDrag.moved = false;
   sceneLightDrag.pointerId = ev.pointerId;
@@ -928,14 +828,14 @@ function startSceneLightDrag(runtime: SceneLightRuntime, handle: SceneLightDragH
   sceneLightDrag.controlsEnabled = controls.enabled;
   sceneLightDrag.startPosition.copy(runtime.state.position);
   sceneLightDrag.startTarget.copy(runtime.state.target);
-  sceneLightDrag.startHit.copy(hit ?? dragPoint);
+  sceneLightDrag.startHit.copy(planeHit ?? dragPoint);
   controls.enabled = false;
   try {
     renderer.domElement.setPointerCapture(ev.pointerId);
   } catch {
     // Window handlers still keep the drag alive if pointer capture is unavailable.
   }
-  if (!viewportInteraction?.startOperation({
+  return {
     kind: 'scene-light-drag',
     scope: 'light',
     blocksCamera: true,
@@ -950,9 +850,16 @@ function startSceneLightDrag(runtime: SceneLightRuntime, handle: SceneLightDragH
     cancel: () => {
       endSceneLightDrag(null, false);
     },
-  })) {
-    cancelSceneLightDrag();
-  }
+    cleanup: () => {
+      try {
+        if (renderer.domElement.hasPointerCapture(sceneLightDrag.pointerId)) {
+          renderer.domElement.releasePointerCapture(sceneLightDrag.pointerId);
+        }
+      } catch {
+        // Pointer capture release is best-effort.
+      }
+    },
+  };
 }
 
 function updateSceneLightDrag(ev: PointerEvent, point: { clientX: number; clientY: number } = ev) {
@@ -1875,138 +1782,6 @@ function moveObjectOriginToWorldPosition(idx: number, position: THREE.Vector3) {
   return true;
 }
 
-function startDuplicatePlacement(position: THREE.Vector3): DuplicatePlacement | null {
-  if (PARAMS.editMode || selectionService.primary === NO_SELECTION) return null;
-  const undoSnapshot = captureSceneUrlState();
-  const originalSelectedInstance = selectionService.primary;
-  const originalSelectedInstances = [...selectionService.items];
-
-  const lightRuntime = sceneLightRuntimeForSelection(selectionService.primary);
-  if (lightRuntime) {
-    const state = cloneSceneLightState(lightRuntime.state);
-    const delta = position.clone().sub(state.position);
-    state.id = createSceneLightId();
-    state.label = duplicateLabel(state.label);
-    state.position.copy(position);
-    if (state.kind === 'directional') state.target.add(delta);
-    const runtime = createSceneLightRuntime(state, sceneLightRuntimeOptions(false));
-    sceneLights.push(runtime);
-    selectionService.setLightId(state.id);
-    selectObject(lightSelectionIndex(sceneLights.length - 1));
-    updateObjectList();
-    sceneLightPanel.sync();
-    return {
-      undoSnapshot,
-      originalSelectedInstance,
-      originalSelectedInstances,
-      lightRuntime: runtime,
-    };
-  }
-
-  if (!isGeometrySelectionIndex(selectionService.primary)) return null;
-  const snapshot = instanceSnapshotForSelection(selectionService.primary);
-  if (!snapshot) return null;
-  const instance = restoreInstanceSnapshot(snapshot);
-  extraInstances.push(instance);
-  const duplicateIndex = extraInstances.length - 1;
-  projectAndRenderAll();
-  selectObject(duplicateIndex);
-  moveObjectOriginToWorldPosition(duplicateIndex, position);
-  updateObjectList();
-  textureEditor.updatePanel();
-  return {
-    undoSnapshot,
-    originalSelectedInstance,
-    originalSelectedInstances,
-    instance,
-  };
-}
-
-function moveDuplicatePlacement(token: unknown, position: THREE.Vector3) {
-  const placement = token as DuplicatePlacement | null;
-  if (!placement) return;
-  if (placement.lightRuntime) {
-    const idx = sceneLights.indexOf(placement.lightRuntime);
-    if (idx >= 0) moveObjectOriginToWorldPosition(lightSelectionIndex(idx), position);
-    return;
-  }
-  if (placement.instance) {
-    const idx = extraInstances.indexOf(placement.instance);
-    if (idx >= 0) moveObjectOriginToWorldPosition(idx, position);
-  }
-}
-
-function restoreSelectionAfterDuplicate(placement: DuplicatePlacement) {
-  selectionService.setSnapshot(placement.originalSelectedInstance, placement.originalSelectedInstances);
-  const selectedLight = sceneLightRuntimeForSelection(selectionService.primary);
-  if (selectedLight) selectionService.setLightId(selectedLight.state.id);
-  else selectionService.ensureSelectedLightId();
-  updateObjectList();
-  updateSelectionOutline();
-  sceneLightPanel.sync();
-  textureEditor.updatePanel();
-  updateTransformActionButtons();
-}
-
-function cancelDuplicatePlacement(token: unknown) {
-  const placement = token as DuplicatePlacement | null;
-  if (!placement) return;
-  if (placement.lightRuntime) {
-    const idx = sceneLights.indexOf(placement.lightRuntime);
-    if (idx >= 0) {
-      sceneLights.splice(idx, 1);
-      disposeSceneLightRuntime(scene, placement.lightRuntime);
-    }
-  }
-  if (placement.instance) {
-    const idx = extraInstances.indexOf(placement.instance);
-    if (idx >= 0) {
-      placement.instance.renderer.destroy();
-      extraInstances.splice(idx, 1);
-    }
-  }
-  restoreSelectionAfterDuplicate(placement);
-  projectAndRenderAll();
-}
-
-function commitDuplicatePlacement(token: unknown) {
-  const placement = token as DuplicatePlacement | null;
-  if (!placement) return;
-  sceneHistory.push(placement.undoSnapshot);
-  updateObjectList();
-  updateSelectionOutline();
-  sceneLightPanel.sync();
-  textureEditor.updatePanel();
-  requestSceneUrlUpdate();
-}
-
-function createDuplicatePlacementOperation(
-  position: THREE.Vector3,
-  pickPosition: (point: ViewportPointerPoint) => THREE.Vector3,
-): ViewportOperation | null {
-  const token = startDuplicatePlacement(position);
-  if (!token) return null;
-  const prevControlsEnabled = controls.enabled;
-  controls.enabled = false;
-  return {
-    kind: 'duplicate-placement',
-    scope: 'object',
-    blocksCamera: true,
-    blocksSelection: true,
-    blocksContextMenu: true,
-    usesPointerLock: true,
-    updatePointer: point => {
-      moveDuplicatePlacement(token, pickPosition(point));
-      return true;
-    },
-    commit: () => commitDuplicatePlacement(token),
-    cancel: () => cancelDuplicatePlacement(token),
-    cleanup: () => {
-      controls.enabled = prevControlsEnabled;
-    },
-  };
-}
-
 function recalculateObjectOrigin(idx: number) {
   const origin = getObjectOrigin(idx);
   if (!origin) return;
@@ -2219,577 +1994,6 @@ function selectedGeometryDimension() {
   if (!isGeometrySelectionIndex(selectionService.primary)) return 0;
   if (selectionService.primary === BASE_SELECTION) return baseOriginalN || PARAMS.N;
   return extraInstances[selectionService.primary]?.originalN ?? 0;
-}
-
-function normalizeEditOperationMode(mode: EditOperationMode | undefined): EditOperationMode {
-  return mode === 'individual' ? 'individual' : 'grouped';
-}
-
-function extrudeSelectedEditCell(mode: EditOperationMode = 'grouped'): EditExtrusionToken | null {
-  if (!PARAMS.editMode || !isGeometrySelectionIndex(selectionService.primary) || !getObjectVisible(selectionService.primary)) return null;
-  const selection = transformController.getEditSelection();
-  if (!selection || selection.cellId < 0) return null;
-
-  const objectDimension = selectedGeometryDimension();
-  if (selection.dimension + 1 > objectDimension) return null;
-
-  const targetIsBase = selectionService.primary === BASE_SELECTION;
-  const target = targetIsBase ? null : extraInstances[selectionService.primary];
-  const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
-  const selectedCellIds = selection.cellIds.length ? selection.cellIds : [selection.cellId];
-  const operationMode = normalizeEditOperationMode(mode);
-  const selectedCellSignatureGroups = selectedCellComponentSignatures(topology, selection.dimension, selectedCellIds, operationMode);
-  if (!selectedCellSignatureGroups.length) return null;
-  const original = captureEditGeometrySnapshot(selectionService.primary);
-  if (!original) return null;
-
-  const undoSnapshot = captureSceneUrlState();
-  transformController.clearEditSelection();
-  const capSignatures: string[] = [];
-  const extrudeGroups: EditExtrusionToken['extrudeGroups'] = [];
-  for (const signatureGroup of selectedCellSignatureGroups) {
-    const currentTopology = targetIsBase ? baseCellTopology : target?.cellTopology;
-    const currentVertexCount = targetIsBase ? M : (target?.M ?? 0);
-    const currentData = targetIsBase ? X : target?.X;
-    const cellIds = signatureGroup
-      .map(signature => findCellIdByVertexSignature(currentTopology, selection.dimension, signature))
-      .filter(cellId => cellId >= 0);
-    if (!cellIds.length || !currentData) continue;
-    const groupCellVertices = cellIds.map(cellId => getCellVertices(currentTopology, selection.dimension, cellId));
-    const extrusion = operationMode === 'grouped'
-      ? extrudeCells(currentTopology, selection.dimension, cellIds, currentVertexCount)
-      : extrudeCell(currentTopology, selection.dimension, cellIds[0], currentVertexCount);
-    if (!extrusion) continue;
-    const directions = extrusionDirectionsForCells(
-      currentData,
-      currentVertexCount,
-      extrusion.sourceVertices,
-      groupCellVertices,
-    );
-
-    if (targetIsBase) {
-      X = appendDimensionMajorDuplicateVertices(X, M, extrusion.sourceVertices);
-      M = extrusion.vertexCount;
-      Y = new Float32Array(3 * M);
-      E = new Uint32Array(extrusion.edges);
-      baseCellTopology = extrusion.topology;
-      baseSurfaceTopology = surfaceTopologyForEditedCellTopology(baseCellTopology);
-      const capCellIds = 'capCellIds' in extrusion ? extrusion.capCellIds : [extrusion.capCellId];
-      capCellIds.forEach(capCellId => {
-        capSignatures.push(cellVertexSignature(getCellVertices(baseCellTopology, selection.dimension, capCellId)));
-      });
-    } else if (target) {
-      target.X = appendDimensionMajorDuplicateVertices(target.X, target.M, extrusion.sourceVertices);
-      target.M = extrusion.vertexCount;
-      target.Y = new Float32Array(3 * target.M);
-      target.E = new Uint32Array(extrusion.edges);
-      target.cellTopology = extrusion.topology;
-      target.surfaceTopology = surfaceTopologyForEditedCellTopology(target.cellTopology);
-      const capCellIds = 'capCellIds' in extrusion ? extrusion.capCellIds : [extrusion.capCellId];
-      capCellIds.forEach(capCellId => {
-        capSignatures.push(cellVertexSignature(getCellVertices(target.cellTopology, selection.dimension, capCellId)));
-      });
-    }
-    extrudeGroups.push({
-      sourceVertices: extrusion.sourceVertices,
-      capVertices: extrusion.capVertices,
-      directions,
-    });
-  }
-  if (!capSignatures.length) {
-    restoreEditGeometrySnapshot(selectionService.primary, original);
-    return null;
-  }
-
-  renderSync.rebuildGeometryRenderer(selectionService.primary);
-
-  projectAndRenderAll();
-  const nextTopology = targetIsBase ? baseCellTopology : target?.cellTopology;
-  transformController.setSelectedEditCells(
-    selection.dimension,
-    capSignatures.map(signature => findCellIdByVertexSignature(nextTopology, selection.dimension, signature)).filter(cellId => cellId >= 0),
-    nextTopology,
-  );
-  transformController.updateVertexCloud(selectionService.primary);
-  updateSelectionOutline();
-  updateTransformActionButtons();
-  return {
-    undoSnapshot,
-    mode: operationMode,
-    instIdx: selectionService.primary,
-    dimension: selection.dimension,
-    cellId: selection.cellId,
-    cellIds: [...selection.cellIds],
-    amount: 0,
-    extrudeGroups,
-    original,
-  };
-}
-
-function isEditExtrusionToken(token: unknown): token is EditExtrusionToken {
-  return typeof token === 'object'
-    && token !== null
-    && 'undoSnapshot' in token
-    && 'instIdx' in token
-    && 'dimension' in token
-    && 'extrudeGroups' in token
-    && 'original' in token;
-}
-
-function updateEditExtrusion(token: unknown, amount: number) {
-  if (!isEditExtrusionToken(token)) return;
-  token.amount = amount;
-  const targetIsBase = token.instIdx === BASE_SELECTION;
-  const target = targetIsBase ? null : extraInstances[token.instIdx];
-  const data = targetIsBase ? X : target?.X;
-  const vertexCount = targetIsBase ? M : (target?.M ?? 0);
-  if (!data || vertexCount <= 0) return;
-  const dimension = Math.floor(data.length / vertexCount);
-  const originalVertexCount = token.original.M;
-  const originalDimension = Math.floor(token.original.X.length / Math.max(1, originalVertexCount));
-  if (dimension <= 0 || originalDimension !== dimension) return;
-
-  for (const group of token.extrudeGroups) {
-    group.sourceVertices.forEach((sourceVertex, idx) => {
-      const capVertex = group.capVertices[idx];
-      const direction = group.directions[idx];
-      if (sourceVertex < 0 || sourceVertex >= originalVertexCount || capVertex < 0 || capVertex >= vertexCount || !direction) return;
-      for (let dim = 0; dim < dimension; dim++) {
-        const source = token.original.X[(dim * originalVertexCount) + sourceVertex] ?? 0;
-        data[(dim * vertexCount) + capVertex] = source + ((direction[dim] ?? 0) * token.amount);
-      }
-    });
-  }
-
-  if (targetIsBase) rendererND.refreshSurface();
-  else target?.renderer.refreshSurface();
-  projectAndRenderAll();
-  if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
-}
-
-function commitEditExtrusion(token: unknown) {
-  if (!isEditExtrusionToken(token)) return;
-  geometryEditService.commit(token.undoSnapshot, token.instIdx);
-}
-
-function cancelEditExtrusion(token: unknown) {
-  if (!isEditExtrusionToken(token)) return;
-  restoreEditGeometrySnapshot(token.instIdx, token.original);
-  restoreTokenEditSelection(token);
-  projectAndRenderAll();
-  if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
-  updateSelectionOutline();
-  updateTransformActionButtons();
-}
-
-function createEditExtrusionOperation(mode: EditOperationMode = 'grouped'): ViewportAmountOperation | null {
-  const token = extrudeSelectedEditCell(mode);
-  if (!token) return null;
-  return {
-    kind: 'edit-extrusion',
-    scope: 'edit',
-    updateAmount: amount => updateEditExtrusion(token, amount),
-    commit: () => commitEditExtrusion(token),
-    cancel: () => cancelEditExtrusion(token),
-  };
-}
-
-function captureEditGeometrySnapshot(instIdx: number): EditBevelGeometrySnapshot | null {
-  return geometryEditService.captureSnapshot(instIdx);
-}
-
-function restoreEditGeometrySnapshot(instIdx: number, original: EditBevelGeometrySnapshot) {
-  geometryEditService.restoreSnapshot(instIdx, original);
-}
-
-function captureEditBevelTargetSnapshot(instIdx: number): EditBevelGeometrySnapshot | null {
-  return captureEditGeometrySnapshot(instIdx);
-}
-
-function restoreEditBevelTarget(token: EditBevelToken) {
-  restoreEditGeometrySnapshot(token.instIdx, token.original);
-}
-
-function restoreTokenEditSelection(token: {
-  instIdx: number;
-  dimension: number;
-  cellId: number;
-  cellIds: number[];
-}) {
-  const topology = token.instIdx === BASE_SELECTION
-    ? baseCellTopology
-    : extraInstances[token.instIdx]?.cellTopology;
-  const cellIds = token.cellIds.length ? token.cellIds : [token.cellId];
-  transformController.setSelectedEditCells(token.dimension, cellIds, topology);
-}
-
-function startEditInset(mode: EditOperationMode = 'grouped'): EditInsetToken | null {
-  if (!PARAMS.editMode || !isGeometrySelectionIndex(selectionService.primary) || !getObjectVisible(selectionService.primary)) return null;
-  const selection = transformController.getEditSelection();
-  if (!selection || selection.cellId < 0 || selection.dimension < 1) return null;
-
-  const targetIsBase = selectionService.primary === BASE_SELECTION;
-  const target = targetIsBase ? null : extraInstances[selectionService.primary];
-  const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
-  const selectedCellIds = selection.cellIds.length ? selection.cellIds : [selection.cellId];
-  const operationMode = normalizeEditOperationMode(mode);
-  const selectedCellSignatureGroups = selectedCellComponentSignatures(topology, selection.dimension, selectedCellIds, operationMode);
-  if (!selectedCellSignatureGroups.length) return null;
-  const original = captureEditGeometrySnapshot(selectionService.primary);
-  if (!original) return null;
-
-  const undoSnapshot = captureSceneUrlState();
-  transformController.clearEditSelection();
-  const insetGroups: EditInsetToken['insetGroups'] = [];
-  const insetSignatures: string[] = [];
-  const allSourceVertices: number[] = [];
-  const allInsetVertices: number[] = [];
-  for (const signatureGroup of selectedCellSignatureGroups) {
-    const currentTopology = targetIsBase ? baseCellTopology : target?.cellTopology;
-    const currentVertexCount = targetIsBase ? M : (target?.M ?? 0);
-    const cellIds = signatureGroup
-      .map(signature => findCellIdByVertexSignature(currentTopology, selection.dimension, signature))
-      .filter(cellId => cellId >= 0);
-    if (!cellIds.length) continue;
-    const groupCellVertices = cellIds.map(cellId => getCellVertices(currentTopology, selection.dimension, cellId));
-    const inset = operationMode === 'grouped'
-      ? insetCells(currentTopology, selection.dimension, cellIds, currentVertexCount)
-      : insetCell(currentTopology, selection.dimension, cellIds[0], currentVertexCount);
-    if (!inset) continue;
-
-    if (targetIsBase) {
-      X = appendDimensionMajorDuplicateVertices(X, M, inset.sourceVertices);
-      M = inset.vertexCount;
-      Y = new Float32Array(3 * M);
-      E = new Uint32Array(inset.edges);
-      baseCellTopology = inset.topology;
-      baseSurfaceTopology = surfaceTopologyForEditedCellTopology(baseCellTopology);
-      const insetCellIds = 'insetCellIds' in inset ? inset.insetCellIds : [inset.insetCellId];
-      insetCellIds.forEach(insetCellId => {
-        insetSignatures.push(cellVertexSignature(getCellVertices(baseCellTopology, selection.dimension, insetCellId)));
-      });
-    } else if (target) {
-      target.X = appendDimensionMajorDuplicateVertices(target.X, target.M, inset.sourceVertices);
-      target.M = inset.vertexCount;
-      target.Y = new Float32Array(3 * target.M);
-      target.E = new Uint32Array(inset.edges);
-      target.cellTopology = inset.topology;
-      target.surfaceTopology = surfaceTopologyForEditedCellTopology(target.cellTopology);
-      const insetCellIds = 'insetCellIds' in inset ? inset.insetCellIds : [inset.insetCellId];
-      insetCellIds.forEach(insetCellId => {
-        insetSignatures.push(cellVertexSignature(getCellVertices(target.cellTopology, selection.dimension, insetCellId)));
-      });
-    }
-    insetGroups.push({
-      sourceVertices: inset.sourceVertices,
-      insetVertices: inset.insetVertices,
-      cellVertices: groupCellVertices,
-    });
-    allSourceVertices.push(...inset.sourceVertices);
-    allInsetVertices.push(...inset.insetVertices);
-  }
-  if (!insetGroups.length) {
-    restoreEditGeometrySnapshot(selectionService.primary, original);
-    return null;
-  }
-
-  renderSync.rebuildGeometryRenderer(selectionService.primary);
-
-  projectAndRenderAll();
-  const nextTopology = targetIsBase ? baseCellTopology : target?.cellTopology;
-  const insetCellIds = insetSignatures
-    .map(signature => findCellIdByVertexSignature(nextTopology, selection.dimension, signature))
-    .filter(cellId => cellId >= 0);
-  transformController.setSelectedEditCells(selection.dimension, insetCellIds, nextTopology);
-  transformController.updateVertexCloud(selectionService.primary);
-  updateSelectionOutline();
-  updateTransformActionButtons();
-
-  return {
-    undoSnapshot,
-    mode: operationMode,
-    instIdx: selectionService.primary,
-    dimension: selection.dimension,
-    cellId: insetCellIds[0] ?? -1,
-    cellIds: [...selection.cellIds],
-    vertices: [...selection.vertices],
-    sourceVertices: allSourceVertices,
-    insetVertices: allInsetVertices,
-    insetGroups,
-    amount: 0,
-    original,
-  };
-}
-
-function isEditInsetToken(token: unknown): token is EditInsetToken {
-  return typeof token === 'object'
-    && token !== null
-    && 'undoSnapshot' in token
-    && 'sourceVertices' in token
-    && 'insetVertices' in token
-    && 'original' in token;
-}
-
-function updateEditInset(token: unknown, amount: number) {
-  if (!isEditInsetToken(token)) return;
-  token.amount = Math.max(0, Math.min(INSET_MAX_AMOUNT, amount));
-  const targetIsBase = token.instIdx === BASE_SELECTION;
-  const target = targetIsBase ? null : extraInstances[token.instIdx];
-  const data = targetIsBase ? X : target?.X;
-  const vertexCount = targetIsBase ? M : (target?.M ?? 0);
-  if (!data || vertexCount <= 0) return;
-  const groups = token.insetGroups?.length
-    ? token.insetGroups
-    : [{ sourceVertices: token.sourceVertices, insetVertices: token.insetVertices, cellVertices: [] }];
-  groups.forEach(group => {
-    writeInsetVertices(
-      data,
-      token.original.X,
-      vertexCount,
-      token.original.M,
-      group.sourceVertices,
-      group.insetVertices,
-      token.amount,
-      group.cellVertices,
-    );
-  });
-  if (targetIsBase) rendererND.refreshSurface();
-  else target?.renderer.refreshSurface();
-  projectAndRenderAll();
-  if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
-}
-
-function commitEditInset(token: unknown) {
-  if (!isEditInsetToken(token)) return;
-  geometryEditService.commit(token.undoSnapshot, token.instIdx);
-}
-
-function cancelEditInset(token: unknown) {
-  if (!isEditInsetToken(token)) return;
-  restoreEditGeometrySnapshot(token.instIdx, token.original);
-  restoreTokenEditSelection(token);
-  projectAndRenderAll();
-  if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
-  updateSelectionOutline();
-  updateTransformActionButtons();
-}
-
-function createEditInsetOperation(mode: EditOperationMode = 'grouped'): ViewportAmountOperation | null {
-  const token = startEditInset(mode);
-  if (!token) return null;
-  return {
-    kind: 'edit-inset',
-    scope: 'edit',
-    updateAmount: amount => updateEditInset(token, amount),
-    commit: () => commitEditInset(token),
-    cancel: () => cancelEditInset(token),
-  };
-}
-
-function startEditBevel(
-  smoothness: number,
-  kind: 'vertex' | 'edge' = 'edge',
-  inward = false,
-  mode: EditOperationMode = 'grouped',
-): EditBevelToken | null {
-  if (!PARAMS.editMode || !isGeometrySelectionIndex(selectionService.primary) || !getObjectVisible(selectionService.primary)) return null;
-  const selection = transformController.getEditSelection();
-  if (!selection || selection.cellId < 0 || !selection.vertices.length) return null;
-  const targetIsBase = selectionService.primary === BASE_SELECTION;
-  const target = targetIsBase ? null : extraInstances[selectionService.primary];
-  const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
-  const operationMode = normalizeEditOperationMode(mode);
-  const targets = collectEditBevelTargets(topology, selection, kind, operationMode);
-  if (!targets) return null;
-  const original = captureEditBevelTargetSnapshot(selectionService.primary);
-  if (!original) return null;
-  return {
-    undoSnapshot: captureSceneUrlState(),
-    mode: operationMode,
-    kind,
-    inward,
-    instIdx: selectionService.primary,
-    dimension: selection.dimension,
-    cellId: selection.cellId,
-    cellIds: [...selection.cellIds],
-    vertices: [...selection.vertices],
-    targetVertices: targets.targetVertices,
-    targetEdges: targets.targetEdges,
-    targetEdgeIds: targets.targetEdgeIds,
-    amount: 0,
-    smoothness: Math.max(1, Math.floor(smoothness)),
-    applied: false,
-    original,
-  };
-}
-
-function isEditBevelToken(token: unknown): token is EditBevelToken {
-  return typeof token === 'object'
-    && token !== null
-    && 'kind' in token
-    && 'inward' in token
-    && 'instIdx' in token
-    && 'dimension' in token
-    && 'cellId' in token
-    && 'amount' in token
-    && 'smoothness' in token;
-}
-
-function applyEditBevelPreview(token: EditBevelToken) {
-  restoreEditBevelTarget(token);
-  if (token.cellId < 0 || token.amount <= 0) {
-    token.applied = false;
-    projectAndRenderAll();
-    if (PARAMS.editMode && getObjectVisible(token.instIdx)) updateVertexCloud(token.instIdx);
-    return;
-  }
-
-  const targetIsBase = token.instIdx === BASE_SELECTION;
-  const target = targetIsBase ? null : extraInstances[token.instIdx];
-  const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
-  const oldVertexCount = targetIsBase ? M : (target?.M ?? 0);
-  const oldX = targetIsBase ? X : target?.X;
-  if (!oldX || oldVertexCount <= 0) return;
-
-  let currentTopology = topology;
-  let currentX = oldX;
-  let currentVertexCount = oldVertexCount;
-  let currentOrigins = initialVertexOrigins(oldVertexCount);
-  const sharedEdgeDistance = token.kind === 'edge'
-    ? batchEdgeBevelDistance(oldX, oldVertexCount, token.targetEdges, token.amount)
-    : undefined;
-  let appliedAny = false;
-
-  if (token.kind === 'vertex') {
-    const bevel = bevelVertices(currentTopology, token.targetVertices, currentVertexCount, token.smoothness);
-    if (!bevel) return;
-    const sourceVertex = token.targetVertices[0] ?? -1;
-    const nextX = buildBeveledVertexData(currentX, currentVertexCount, sourceVertex, bevel, token.amount, token.inward);
-    currentOrigins = remapOriginsAfterVertexBevel(currentOrigins, sourceVertex, bevel);
-    currentTopology = bevel.topology;
-    currentX = nextX;
-    currentVertexCount = bevel.vertexCount;
-    appliedAny = true;
-  } else if (token.targetEdgeIds.length > 1) {
-    const bevel = bevelSelectedEdges(currentTopology, token.targetEdgeIds, currentVertexCount, token.smoothness);
-    if (!bevel) return;
-    const nextX = buildBeveledEdgeData(currentX, currentVertexCount, bevel, token.amount, sharedEdgeDistance, token.inward);
-    currentOrigins = remapOriginsAfterEdgeBevel(currentOrigins, bevel);
-    currentTopology = bevel.topology;
-    currentX = nextX;
-    currentVertexCount = bevel.vertexCount;
-    appliedAny = true;
-  } else {
-    for (const [originA, originB] of token.targetEdges) {
-      const currentEdge = findEdgeWithOrigins(
-        currentTopology,
-        currentOrigins,
-        originA,
-        originB,
-        currentX,
-        currentVertexCount,
-      );
-      if (currentEdge < 0) continue;
-      const bevel = bevelEdge(currentTopology, currentEdge, currentVertexCount, token.smoothness);
-      if (!bevel) continue;
-      const nextX = buildBeveledEdgeData(currentX, currentVertexCount, bevel, token.amount, sharedEdgeDistance, token.inward);
-      currentOrigins = remapOriginsAfterEdgeBevel(currentOrigins, bevel);
-      currentTopology = bevel.topology;
-      currentX = nextX;
-      currentVertexCount = bevel.vertexCount;
-      appliedAny = true;
-    }
-  }
-  if (!appliedAny || !currentTopology) return;
-
-  const nextSurfaceTopology = surfaceTopologyFromPositionedCellTopology(currentTopology, currentX, currentVertexCount)
-    ?? surfaceTopologyForEditedCellTopology(currentTopology);
-
-  transformController.clearEditSelection();
-  if (targetIsBase) {
-    X = new Float32Array(currentX);
-    M = currentVertexCount;
-    Y = new Float32Array(3 * M);
-    E = new Uint32Array(edgeListFromCellTopology(currentTopology));
-    baseCellTopology = currentTopology;
-    baseSurfaceTopology = nextSurfaceTopology;
-    renderSync.rebuildBaseRenderer();
-  } else if (target) {
-    target.X = new Float32Array(currentX);
-    target.M = currentVertexCount;
-    target.Y = new Float32Array(3 * target.M);
-    target.E = new Uint32Array(edgeListFromCellTopology(currentTopology));
-    target.cellTopology = currentTopology;
-    target.surfaceTopology = nextSurfaceTopology;
-    renderSync.rebuildInstanceRenderer(target);
-  }
-
-  token.applied = true;
-  renderSync.refreshAfterGeometryChange(token.instIdx, { dirtyUrl: false });
-}
-
-function updateEditBevel(token: unknown, amount: number, smoothness: number) {
-  if (!isEditBevelToken(token)) return;
-  token.amount = Math.max(0, Math.min(BEVEL_MAX_AMOUNT, amount));
-  token.smoothness = Math.max(1, Math.floor(smoothness));
-  applyEditBevelPreview(token);
-}
-
-function commitEditBevel(token: unknown) {
-  if (!isEditBevelToken(token)) return;
-  if (!token.applied) {
-    restoreEditBevelTarget(token);
-    renderSync.refreshAfterGeometryChange(token.instIdx, { dirtyUrl: false });
-    return;
-  }
-  geometryEditService.commit(token.undoSnapshot, token.instIdx);
-}
-
-function cancelEditBevel(token: unknown) {
-  if (!isEditBevelToken(token)) return;
-  restoreEditBevelTarget(token);
-  const topology = token.instIdx === BASE_SELECTION
-    ? baseCellTopology
-    : extraInstances[token.instIdx]?.cellTopology;
-  if (token.cellIds.length && topology) transformController.setSelectedEditCells(token.dimension, token.cellIds, topology);
-  else transformController.setSelectedEditElement(token.dimension, token.vertices, token.cellId);
-  renderSync.refreshAfterGeometryChange(token.instIdx, { dirtyUrl: false });
-}
-
-function createEditBevelOperation(
-  smoothness: number,
-  kind: 'vertex' | 'edge' = 'edge',
-  inward = false,
-  mode: EditOperationMode = 'grouped',
-  setSmoothness?: (smoothness: number) => void,
-): ViewportAmountOperation | null {
-  let currentSmoothness = Math.max(BEVEL_MIN_SMOOTHNESS, Math.floor(smoothness));
-  const token = startEditBevel(currentSmoothness, kind, inward, mode);
-  if (!token) return null;
-  return {
-    kind: 'edit-bevel',
-    scope: 'edit',
-    updateAmount: amount => updateEditBevel(token, amount, currentSmoothness),
-    updateWheel: (ev, amount) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      ev.stopImmediatePropagation();
-
-      const step = ev.deltaY < 0 ? 1 : -1;
-      const nextSmoothness = Math.max(
-        BEVEL_MIN_SMOOTHNESS,
-        Math.min(BEVEL_MAX_SMOOTHNESS, currentSmoothness + step),
-      );
-      if (nextSmoothness === currentSmoothness) return true;
-
-      currentSmoothness = nextSmoothness;
-      setSmoothness?.(currentSmoothness);
-      updateEditBevel(token, amount, currentSmoothness);
-      return true;
-    },
-    commit: () => commitEditBevel(token),
-    cancel: () => cancelEditBevel(token),
-  };
 }
 
 const extraInstances: Instance[] = [];
@@ -3066,20 +2270,6 @@ selectionService = new SceneSelectionService<SceneLightRuntime>({
   updateTransformActionButtons,
   requestSceneUrlUpdate,
 });
-editToolbar = new EditToolbarController({
-  getEditMode: () => PARAMS.editMode,
-  getObjectVisible: () => getObjectVisible(selectionService.primary),
-  getObjectDimension: selectedObjectDimension,
-  getTopology: selectedObjectCellTopology,
-  getActiveCellDimension: () => transformController.getEditCellDimension(),
-  setCellDimension: setEditCellDimension,
-  canStartBevel: () => canStartEditBevel('edge'),
-  canStartInset: canStartEditInset,
-  canStartExtrude: canStartEditExtrusion,
-  startBevel: () => viewportInteraction.startEditBevelFromLastPointer('edge', false, true),
-  startInset: () => viewportInteraction.startEditInsetFromLastPointer(true),
-  startExtrude: () => viewportInteraction.startEditExtrusionFromLastPointer(true),
-});
 axisController = new AxisGizmoController({
   camera,
   controls,
@@ -3191,6 +2381,171 @@ geometryEditService = new GeometryEditService<PackedSceneUrlState>({
   renderSync,
 });
 
+duplicatePlacementFactory = new DuplicatePlacementOperationFactory<PackedSceneUrlState, Instance, SceneLightRuntime>({
+  noSelection: NO_SELECTION,
+  getEditMode: () => PARAMS.editMode,
+  getSelectedInstance: () => selectionService.primary,
+  getSelectedInstances: () => selectionService.items,
+  getControlsEnabled: () => controls.enabled,
+  setControlsEnabled: enabled => {
+    controls.enabled = enabled;
+  },
+  isGeometrySelectionIndex,
+  captureUndoSnapshot: captureSceneUrlState,
+  pushUndoSnapshot: snapshot => sceneHistory.push(snapshot),
+  createLightDuplicate: (idx, position) => {
+    const lightRuntime = sceneLightRuntimeForSelection(idx);
+    if (!lightRuntime) return null;
+    const state = cloneSceneLightState(lightRuntime.state);
+    const delta = position.clone().sub(state.position);
+    state.id = createSceneLightId();
+    state.label = duplicateLabel(state.label);
+    state.position.copy(position);
+    if (state.kind === 'directional') state.target.add(delta);
+    const runtime = createSceneLightRuntime(state, sceneLightRuntimeOptions(false));
+    sceneLights.push(runtime);
+    selectionService.setLightId(state.id);
+    selectObject(lightSelectionIndex(sceneLights.length - 1));
+    updateObjectList();
+    sceneLightPanel.sync();
+    return runtime;
+  },
+  createInstanceDuplicate: (idx, position) => {
+    const snapshot = instanceSnapshotForSelection(idx);
+    if (!snapshot) return null;
+    const instance = restoreInstanceSnapshot(snapshot);
+    extraInstances.push(instance);
+    const duplicateIndex = extraInstances.length - 1;
+    projectAndRenderAll();
+    selectObject(duplicateIndex);
+    moveObjectOriginToWorldPosition(duplicateIndex, position);
+    updateObjectList();
+    textureEditor.updatePanel();
+    return instance;
+  },
+  moveLightDuplicate: (runtime, position) => {
+    const idx = sceneLights.indexOf(runtime);
+    if (idx >= 0) moveObjectOriginToWorldPosition(lightSelectionIndex(idx), position);
+  },
+  moveInstanceDuplicate: (instance, position) => {
+    const idx = extraInstances.indexOf(instance);
+    if (idx >= 0) moveObjectOriginToWorldPosition(idx, position);
+  },
+  removeLightDuplicate: runtime => {
+    const idx = sceneLights.indexOf(runtime);
+    if (idx >= 0) {
+      sceneLights.splice(idx, 1);
+      disposeSceneLightRuntime(scene, runtime);
+    }
+  },
+  removeInstanceDuplicate: instance => {
+    const idx = extraInstances.indexOf(instance);
+    if (idx >= 0) {
+      instance.renderer.destroy();
+      extraInstances.splice(idx, 1);
+    }
+  },
+  restoreSelection: (primary, items) => {
+    selectionService.setSnapshot(primary, items);
+    const selectedLight = sceneLightRuntimeForSelection(selectionService.primary);
+    if (selectedLight) selectionService.setLightId(selectedLight.state.id);
+    else selectionService.ensureSelectedLightId();
+  },
+  refreshAfterRestoreSelection: () => {
+    updateObjectList();
+    updateSelectionOutline();
+    sceneLightPanel.sync();
+    textureEditor.updatePanel();
+    updateTransformActionButtons();
+  },
+  refreshAfterCommit: () => {
+    updateObjectList();
+    updateSelectionOutline();
+    sceneLightPanel.sync();
+    textureEditor.updatePanel();
+    requestSceneUrlUpdate();
+  },
+  projectAndRenderAll,
+});
+
+geometryEditOperationFactory = new GeometryEditOperationFactory<PackedSceneUrlState>({
+  baseSelection: BASE_SELECTION,
+  getSelectedInstance: () => selectionService.primary,
+  getEditMode: () => PARAMS.editMode,
+  isGeometrySelectionIndex,
+  getObjectVisible,
+  selectedGeometryDimension,
+  selectedEditOperationContext: () => selectionService.selectedEditOperationContext(),
+  getTargetState: idx => {
+    if (idx === BASE_SELECTION) {
+      return {
+        X,
+        E,
+        M,
+        cellTopology: baseCellTopology,
+        surfaceTopology: baseSurfaceTopology,
+      };
+    }
+    const target = extraInstances[idx];
+    return target ? {
+      X: target.X,
+      E: target.E,
+      M: target.M,
+      cellTopology: target.cellTopology,
+      surfaceTopology: target.surfaceTopology,
+    } : null;
+  },
+  setTargetState: (idx, state) => {
+    if (idx === BASE_SELECTION) {
+      X = new Float32Array(state.X);
+      M = state.M;
+      Y = new Float32Array(3 * M);
+      E = new Uint32Array(state.E);
+      baseCellTopology = cloneCellTopology(state.cellTopology);
+      baseSurfaceTopology = clonePrimitiveSurfaceTopology(state.surfaceTopology);
+      return;
+    }
+    const target = extraInstances[idx];
+    if (!target) return;
+    target.X = new Float32Array(state.X);
+    target.M = state.M;
+    target.Y = new Float32Array(3 * target.M);
+    target.E = new Uint32Array(state.E);
+    target.cellTopology = cloneCellTopology(state.cellTopology);
+    target.surfaceTopology = clonePrimitiveSurfaceTopology(state.surfaceTopology);
+  },
+  refreshTargetSurface: idx => {
+    if (idx === BASE_SELECTION) rendererND.refreshSurface();
+    else extraInstances[idx]?.renderer.refreshSurface();
+  },
+  captureUndoSnapshot: captureSceneUrlState,
+  editService: geometryEditService,
+  clearEditSelection: () => transformController.clearEditSelection(),
+  setSelectedEditCells: (dimension, cellIds, topology) => transformController.setSelectedEditCells(dimension, cellIds, topology),
+  setSelectedEditElement: (dimension, vertices, cellId) => transformController.setSelectedEditElement(dimension, vertices, cellId),
+  updateVertexCloud,
+  updateSelectionOutline,
+  updateTransformActionButtons,
+  rebuildGeometryRenderer: idx => renderSync.rebuildGeometryRenderer(idx),
+  refreshAfterGeometryChange: (idx, options) => renderSync.refreshAfterGeometryChange(idx, options),
+  projectAndRenderAll,
+});
+
+editToolbar = new EditToolbarController({
+  getEditMode: () => PARAMS.editMode,
+  getObjectVisible: () => getObjectVisible(selectionService.primary),
+  getObjectDimension: selectedObjectDimension,
+  getTopology: selectedObjectCellTopology,
+  getActiveCellDimension: () => transformController.getEditCellDimension(),
+  setCellDimension: setEditCellDimension,
+  canStartBevel: () => canStartEditBevel('edge'),
+  canStartInset: canStartEditInset,
+  canStartExtrude: canStartEditExtrusion,
+  startBevel: () => viewportInteraction.startEditOperationFromLastPointer({ type: 'bevel', kind: 'edge' }, true),
+  startInset: () => viewportInteraction.startEditOperationFromLastPointer({ type: 'inset' }, true),
+  startExtrude: () => viewportInteraction.startEditOperationFromLastPointer({ type: 'extrude' }, true),
+});
+
 function updateDimensionControl() {
   dimensionControl.sync();
 }
@@ -3233,7 +2588,9 @@ function applyEditMode(active: boolean) {
 }
 
 function setEditMode(active: boolean) {
-  runImmediateViewportOperation('set-edit-mode', 'viewport', () => applyEditMode(active));
+  const commit = () => applyEditMode(active);
+  if (viewportInteraction) viewportInteraction.runImmediateOperation('set-edit-mode', 'viewport', commit);
+  else commit();
 }
 
 function updateTransformActionButtons() {
@@ -3245,37 +2602,16 @@ function hasActiveSelection() {
   return selectionService.hasActiveSelection();
 }
 
-function selectedEditOperationContext() {
-  return selectionService.selectedEditOperationContext();
-}
-
-function selectedEditCellSignatures() {
-  const context = selectedEditOperationContext();
-  if (!context) return [];
-  const { selection, topology } = context;
-  const selectedCellIds = selection.cellIds.length ? selection.cellIds : [selection.cellId];
-  return selectedCellIds
-    .map(cellId => cellVertexSignature(getCellVertices(topology, selection.dimension, cellId)))
-    .filter(signature => signature.length > 0);
-}
-
 function canStartEditExtrusion() {
-  const context = selectedEditOperationContext();
-  if (!context) return false;
-  if (context.selection.dimension + 1 > selectedGeometryDimension()) return false;
-  return selectedEditCellSignatures().length > 0;
+  return geometryEditOperationFactory?.canStartExtrusion() ?? false;
 }
 
 function canStartEditInset() {
-  const context = selectedEditOperationContext();
-  if (!context || context.selection.dimension < 1) return false;
-  return selectedEditCellSignatures().length > 0;
+  return geometryEditOperationFactory?.canStartInset() ?? false;
 }
 
 function canStartEditBevel(kind: 'vertex' | 'edge') {
-  const context = selectedEditOperationContext();
-  if (!context) return false;
-  return collectEditBevelTargets(context.topology, context.selection, kind) !== null;
+  return geometryEditOperationFactory?.canStartBevel(kind) ?? false;
 }
 
 function handleTransformConstraintKey(key: string) {
@@ -3326,10 +2662,14 @@ const lightMenuOptions: { label: string; kind: SceneLightKind }[] = [
 ];
 
 const insertKeyframeOperation = () => {
-  runImmediateViewportOperation('insert-keyframe', 'viewport', () => animationTimeline?.addKeyframeAtCurrentFrame());
+  const commit = () => animationTimeline?.addKeyframeAtCurrentFrame();
+  if (viewportInteraction) viewportInteraction.runImmediateOperation('insert-keyframe', 'viewport', commit);
+  else commit();
 };
 const removeKeyframeOperation = () => {
-  runImmediateViewportOperation('remove-keyframe', 'viewport', () => animationTimeline?.removeLastKeyframe());
+  const commit = () => animationTimeline?.removeLastKeyframe();
+  if (viewportInteraction) viewportInteraction.runImmediateOperation('remove-keyframe', 'viewport', commit);
+  else commit();
 };
 
 viewportInteraction = new ViewportInteractionController({
@@ -3357,10 +2697,13 @@ viewportInteraction = new ViewportInteractionController({
   pushUndoSnapshot,
   addPrimitiveInstanceAt,
   addSceneLightAt,
-  createDuplicatePlacementOperation,
-  createEditExtrusionOperation,
-  createEditInsetOperation,
-  createEditBevelOperation,
+  createDuplicatePlacementOperation: (position, pickPosition) => duplicatePlacementFactory.createOperation(position, pickPosition),
+  createEditExtrusionOperation: mode => geometryEditOperationFactory.createExtrusionOperation(mode),
+  createEditInsetOperation: mode => geometryEditOperationFactory.createInsetOperation(mode),
+  createEditBevelOperation: (smoothness, kind, inward, mode, setSmoothness) => (
+    geometryEditOperationFactory.createBevelOperation(smoothness, kind, inward, mode, setSmoothness)
+  ),
+  createSceneLightDragOperation,
   insertKeyframe: insertKeyframeOperation,
   removeLastKeyframe: removeKeyframeOperation,
   deleteSelected,
@@ -3581,7 +2924,9 @@ function applyViewMode(mode: ViewMode) {
   requestSceneUrlUpdate();
 }
 setViewMode = (mode: ViewMode) => {
-  runImmediateViewportOperation('set-view-mode', 'viewport', () => applyViewMode(mode));
+  const commit = () => applyViewMode(mode);
+  if (viewportInteraction) viewportInteraction.runImmediateOperation('set-view-mode', 'viewport', commit);
+  else commit();
 };
 viewModeController.bind();
 backgroundController.syncForRenderMode();
@@ -3652,25 +2997,6 @@ new KeyboardShortcutController({
 
 updateTransformActionButtons();
 paneController.syncToViewport(true);
-renderer.domElement.addEventListener('pointerdown', handleSceneLightPointerDown, { capture: true });
-window.addEventListener('pointermove', ev => {
-  if (viewportInteraction.isOperationKind('scene-light-drag')) viewportInteraction.updateActiveOperationPointer(ev);
-});
-window.addEventListener('pointerup', ev => {
-  if (viewportInteraction.isOperationKind('scene-light-drag')) {
-    viewportInteraction.finishOperation(true);
-    ev.preventDefault();
-  }
-});
-window.addEventListener('pointercancel', ev => {
-  if (viewportInteraction.isOperationKind('scene-light-drag')) {
-    viewportInteraction.finishOperation(false);
-    ev.preventDefault();
-  }
-});
-window.addEventListener('blur', () => {
-  if (viewportInteraction.isOperationKind('scene-light-drag')) viewportInteraction.finishOperation(false);
-});
 viewportInteraction.bind();
 const startupScenePayload = readScenePayloadFromUrl();
 void backgroundSelectorReady
