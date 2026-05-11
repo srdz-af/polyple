@@ -658,6 +658,10 @@ const captureFrameButton = document.getElementById('capture-frame-button') as HT
 const cameraViewOverlay = document.getElementById('camera-view-overlay') as HTMLDivElement | null;
 const editModeToggle = document.getElementById('edit-mode-toggle') as HTMLButtonElement | null;
 const editCellDimensionButtons = document.getElementById('edit-cell-dimension-buttons') as HTMLDivElement | null;
+const editOperationButtons = document.getElementById('edit-operation-buttons') as HTMLDivElement | null;
+const editBevelButton = document.getElementById('edit-bevel-button') as HTMLButtonElement | null;
+const editInsetButton = document.getElementById('edit-inset-button') as HTMLButtonElement | null;
+const editExtrudeButton = document.getElementById('edit-extrude-button') as HTMLButtonElement | null;
 const mobileFullscreenToggle = document.getElementById('mobile-fullscreen-toggle') as HTMLButtonElement | null;
 const transformMoveButton = document.getElementById('transform-move-button') as HTMLButtonElement | null;
 const transformRotateButton = document.getElementById('transform-rotate-button') as HTMLButtonElement | null;
@@ -5568,11 +5572,21 @@ async function toggleMobileFullscreen() {
 
 function updateTransformActionButtons() {
   if (transformController) transformController.updateActionButtons();
+  updateEditOperationButtons();
   updateEditCellDimensionButtons();
 }
 
 function hasActiveSelection() {
   return selectedInstances.some(isSelectableObject);
+}
+
+function updateEditOperationButtons() {
+  if (!editOperationButtons) return;
+  const visible = PARAMS.editMode;
+  editOperationButtons.hidden = !visible;
+  [editBevelButton, editInsetButton, editExtrudeButton].forEach(button => {
+    if (button) button.disabled = !visible;
+  });
 }
 
 function handleTransformConstraintKey(key: string) {
@@ -6027,6 +6041,9 @@ sceneLoadInput?.addEventListener('change', () => {
 ].forEach(entry => {
   entry.el?.addEventListener('click', () => transformController.toggleTransformMode(entry.mode));
 });
+editBevelButton?.addEventListener('click', () => viewportInteraction.startEditBevelFromLastPointer('edge', false, true));
+editInsetButton?.addEventListener('click', () => viewportInteraction.startEditInsetFromLastPointer(true));
+editExtrudeButton?.addEventListener('click', () => viewportInteraction.startEditExtrusionFromLastPointer(true));
 dimensionDownButton?.addEventListener('click', () => setNewPrimitiveDimension(PARAMS.N - 1));
 dimensionUpButton?.addEventListener('click', () => setNewPrimitiveDimension(PARAMS.N + 1));
 cameraRecenterButton?.addEventListener('click', () => keyboardCamera.recenterCamera());
