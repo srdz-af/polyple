@@ -5438,6 +5438,7 @@ transformController = new TransformController({
   projectAndRenderAll,
   updateSelectionOutline,
   pushUndoSnapshot,
+  onEditSelectionChange: () => updateTransformActionButtons(),
   onStateChange: () => requestSceneUrlUpdate(),
 });
 axisController = new AxisGizmoController({
@@ -5584,9 +5585,47 @@ function updateEditOperationButtons() {
   if (!editOperationButtons) return;
   const visible = PARAMS.editMode;
   editOperationButtons.hidden = !visible;
-  [editBevelButton, editInsetButton, editExtrudeButton].forEach(button => {
-    if (button) button.disabled = !visible;
-  });
+  if (editBevelButton) editBevelButton.disabled = !canStartEditBevel('edge');
+  if (editInsetButton) editInsetButton.disabled = !canStartEditInset();
+  if (editExtrudeButton) editExtrudeButton.disabled = !canStartEditExtrusion();
+}
+
+function selectedEditOperationContext() {
+  if (!transformController || !PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return null;
+  const selection = transformController.getEditSelection();
+  if (!selection || selection.cellId < 0 || !selection.vertices.length) return null;
+  const topology = selectedObjectCellTopology();
+  if (!topology) return null;
+  return { selection, topology };
+}
+
+function selectedEditCellSignatures() {
+  const context = selectedEditOperationContext();
+  if (!context) return [];
+  const { selection, topology } = context;
+  const selectedCellIds = selection.cellIds.length ? selection.cellIds : [selection.cellId];
+  return selectedCellIds
+    .map(cellId => cellVertexSignature(getCellVertices(topology, selection.dimension, cellId)))
+    .filter(signature => signature.length > 0);
+}
+
+function canStartEditExtrusion() {
+  const context = selectedEditOperationContext();
+  if (!context) return false;
+  if (context.selection.dimension + 1 > selectedGeometryDimension()) return false;
+  return selectedEditCellSignatures().length > 0;
+}
+
+function canStartEditInset() {
+  const context = selectedEditOperationContext();
+  if (!context || context.selection.dimension < 1) return false;
+  return selectedEditCellSignatures().length > 0;
+}
+
+function canStartEditBevel(kind: 'vertex' | 'edge') {
+  const context = selectedEditOperationContext();
+  if (!context) return false;
+  return collectEditBevelTargets(context.topology, context.selection, kind) !== null;
 }
 
 function handleTransformConstraintKey(key: string) {

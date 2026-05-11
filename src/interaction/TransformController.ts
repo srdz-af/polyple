@@ -51,6 +51,7 @@ type TransformControllerOptions = {
   projectAndRenderAll: () => void;
   updateSelectionOutline: () => void;
   pushUndoSnapshot: () => void;
+  onEditSelectionChange?: () => void;
   onStateChange?: () => void;
 };
 
@@ -252,6 +253,7 @@ export class TransformController {
     this.selectedCellId = vertex;
     this.selectedCellIds = vertex >= 0 ? [vertex] : [];
     this.updateActionButtons();
+    this.options.onEditSelectionChange?.();
   }
 
   getEditCellDimension() {
@@ -275,6 +277,7 @@ export class TransformController {
     this.selectedCellId = cellId;
     this.selectedCellIds = cellId >= 0 ? [cellId] : [];
     this.updateActionButtons();
+    this.options.onEditSelectionChange?.();
   }
 
   setSelectedEditCells(dimension: EditCellDimension, cellIds: number[], topology: CellTopology | undefined) {
@@ -295,7 +298,10 @@ export class TransformController {
     this.selectedEditVertices = vertices;
     this.selectedVertex = nextDimension === 0 && vertices.length ? vertices[0] : -1;
     if (!nextCellIds.length) this.clearEditSelection();
-    else this.updateActionButtons();
+    else {
+      this.updateActionButtons();
+      this.options.onEditSelectionChange?.();
+    }
   }
 
   toggleSelectedEditElement(
@@ -336,6 +342,7 @@ export class TransformController {
     this.clearVertexMarker();
     this.clearEditComponentOverlay();
     this.updateActionButtons();
+    this.options.onEditSelectionChange?.();
   }
 
   hasEditSelection() {
