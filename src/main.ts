@@ -65,7 +65,8 @@ import { BackgroundController, backgroundElementsFromDocument, type BackgroundUr
 import { KeyboardCameraController } from './controls/KeyboardCameraController';
 import { KeyboardShortcutController } from './interaction/KeyboardShortcutController';
 import { TransformController } from './interaction/TransformController';
-import { ViewportInteractionController, viewportContextMenuFromDocument } from './interaction/ViewportInteractionController';
+import { ViewportInteractionController, viewportContextMenuFromDocument, type ViewportAmountOperation } from './interaction/ViewportInteractionController';
+import type { ViewportOperation, ViewportPointerPoint } from './interaction/ViewportOperationManager';
 import { createBidirectionalAxes, createFadingGrid } from './viewport/grid';
 import { AxisGizmoController } from './ui/AxisGizmoController';
 import { DimensionControlController } from './ui/DimensionControlController';
@@ -253,6 +254,8 @@ const SCENE_LIGHT_MARKER_PIXEL_DIAMETER = 11;
 const SELECTED_SCENE_LIGHT_MARKER_PIXEL_DIAMETER = 15;
 const SCENE_LIGHT_TARGET_PIXEL_DIAMETER = 10;
 const MAX_UNDO_SNAPSHOT_BYTES = 64 * 1024 * 1024;
+const BEVEL_MIN_SMOOTHNESS = 1;
+const BEVEL_MAX_SMOOTHNESS = 32;
 const SHADOW_MAP_SIZE_BY_QUALITY: Record<RenderQuality, number> = {
   full: 2048,
   high: 1024,
@@ -2044,6 +2047,33 @@ function commitDuplicatePlacement(token: unknown) {
   requestSceneUrlUpdate();
 }
 
+function createDuplicatePlacementOperation(
+  position: THREE.Vector3,
+  pickPosition: (point: ViewportPointerPoint) => THREE.Vector3,
+): ViewportOperation | null {
+  const token = startDuplicatePlacement(position);
+  if (!token) return null;
+  const prevControlsEnabled = controls.enabled;
+  controls.enabled = false;
+  return {
+    kind: 'duplicate-placement',
+    scope: 'object',
+    blocksCamera: true,
+    blocksSelection: true,
+    blocksContextMenu: true,
+    usesPointerLock: true,
+    updatePointer: point => {
+      moveDuplicatePlacement(token, pickPosition(point));
+      return true;
+    },
+    commit: () => commitDuplicatePlacement(token),
+    cancel: () => cancelDuplicatePlacement(token),
+    cleanup: () => {
+      controls.enabled = prevControlsEnabled;
+    },
+  };
+}
+
 function recalculateObjectOrigin(idx: number) {
   const origin = getObjectOrigin(idx);
   if (!origin) return;
@@ -2421,6 +2451,18 @@ function cancelEditExtrusion(token: unknown) {
   updateTransformActionButtons();
 }
 
+function createEditExtrusionOperation(mode: EditOperationMode = 'grouped'): ViewportAmountOperation | null {
+  const token = extrudeSelectedEditCell(mode);
+  if (!token) return null;
+  return {
+    kind: 'edit-extrusion',
+    scope: 'edit',
+    updateAmount: amount => updateEditExtrusion(token, amount),
+    commit: () => commitEditExtrusion(token),
+    cancel: () => cancelEditExtrusion(token),
+  };
+}
+
 function captureEditGeometrySnapshot(instIdx: number): EditBevelGeometrySnapshot | null {
   return geometryEditService.captureSnapshot(instIdx);
 }
@@ -2601,6 +2643,18 @@ function cancelEditInset(token: unknown) {
   updateTransformActionButtons();
 }
 
+function createEditInsetOperation(mode: EditOperationMode = 'grouped'): ViewportAmountOperation | null {
+  const token = startEditInset(mode);
+  if (!token) return null;
+  return {
+    kind: 'edit-inset',
+    scope: 'edit',
+    updateAmount: amount => updateEditInset(token, amount),
+    commit: () => commitEditInset(token),
+    cancel: () => cancelEditInset(token),
+  };
+}
+
 function startEditBevel(
   smoothness: number,
   kind: 'vertex' | 'edge' = 'edge',
@@ -2769,6 +2823,42 @@ function cancelEditBevel(token: unknown) {
   if (token.cellIds.length && topology) transformController.setSelectedEditCells(token.dimension, token.cellIds, topology);
   else transformController.setSelectedEditElement(token.dimension, token.vertices, token.cellId);
   renderSync.refreshAfterGeometryChange(token.instIdx, { dirtyUrl: false });
+}
+
+function createEditBevelOperation(
+  smoothness: number,
+  kind: 'vertex' | 'edge' = 'edge',
+  inward = false,
+  mode: EditOperationMode = 'grouped',
+  setSmoothness?: (smoothness: number) => void,
+): ViewportAmountOperation | null {
+  let currentSmoothness = Math.max(BEVEL_MIN_SMOOTHNESS, Math.floor(smoothness));
+  const token = startEditBevel(currentSmoothness, kind, inward, mode);
+  if (!token) return null;
+  return {
+    kind: 'edit-bevel',
+    scope: 'edit',
+    updateAmount: amount => updateEditBevel(token, amount, currentSmoothness),
+    updateWheel: (ev, amount) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.stopImmediatePropagation();
+
+      const step = ev.deltaY < 0 ? 1 : -1;
+      const nextSmoothness = Math.max(
+        BEVEL_MIN_SMOOTHNESS,
+        Math.min(BEVEL_MAX_SMOOTHNESS, currentSmoothness + step),
+      );
+      if (nextSmoothness === currentSmoothness) return true;
+
+      currentSmoothness = nextSmoothness;
+      setSmoothness?.(currentSmoothness);
+      updateEditBevel(token, amount, currentSmoothness);
+      return true;
+    },
+    commit: () => commitEditBevel(token),
+    cancel: () => cancelEditBevel(token),
+  };
 }
 
 const extraInstances: Instance[] = [];
@@ -3339,22 +3429,10 @@ viewportInteraction = new ViewportInteractionController({
   pushUndoSnapshot,
   addPrimitiveInstanceAt,
   addSceneLightAt,
-  startDuplicatePlacement,
-  moveDuplicatePlacement,
-  commitDuplicatePlacement,
-  cancelDuplicatePlacement,
-  extrudeSelectedEditCell,
-  updateEditExtrusion,
-  commitEditExtrusion,
-  cancelEditExtrusion,
-  startEditInset,
-  updateEditInset,
-  commitEditInset,
-  cancelEditInset,
-  startEditBevel,
-  updateEditBevel,
-  commitEditBevel,
-  cancelEditBevel,
+  createDuplicatePlacementOperation,
+  createEditExtrusionOperation,
+  createEditInsetOperation,
+  createEditBevelOperation,
   insertKeyframe: insertKeyframeOperation,
   removeLastKeyframe: removeKeyframeOperation,
   deleteSelected,

@@ -6,7 +6,7 @@ import type { HypercubeRenderer } from '../rendering/HypercubeRenderer';
 import type { Instance, SceneLightKind, TransformMode } from '../scene/types';
 import type { KeyboardCameraController } from '../controls/KeyboardCameraController';
 import type { TransformController } from './TransformController';
-import { ViewportOperationManager, type ViewportOperation } from './ViewportOperationManager';
+import { ViewportOperationManager, type ViewportOperation, type ViewportPointerPoint } from './ViewportOperationManager';
 
 type ViewportParams = {
   editMode: boolean;
@@ -26,11 +26,11 @@ export function viewportContextMenuFromDocument() {
   return document.getElementById('context-menu') as HTMLDivElement | null;
 }
 
-type DuplicatePlacementToken = unknown;
-type EditExtrusionToken = unknown;
-type EditInsetToken = unknown;
-type EditBevelToken = unknown;
-type EditOperationMode = 'grouped' | 'individual';
+export type EditOperationMode = 'grouped' | 'individual';
+export type ViewportAmountOperation = Omit<ViewportOperation, 'updatePointer' | 'updateWheel'> & {
+  updateAmount: (amount: number) => void;
+  updateWheel?: (ev: WheelEvent, amount: number) => boolean | void;
+};
 
 const OBJECT_FOCUS_DOUBLE_CLICK_MS = 220;
 const OBJECT_FOCUS_DOUBLE_CLICK_MAX_DIST = 8;
@@ -62,17 +62,12 @@ type CellPickCandidate = {
 };
 
 type ScalarEditOperationOptions = {
-  kind: string;
   initialAmount?: number;
   scale: number;
   signed?: boolean;
   min?: number;
   max?: number;
   epsilon?: number;
-  updateAmount: (amount: number) => void;
-  updateWheel?: (ev: WheelEvent, amount: number) => boolean | void;
-  commit: () => void;
-  cancel: () => void;
 };
 
 type ViewportInteractionControllerOptions = {
@@ -100,27 +95,19 @@ type ViewportInteractionControllerOptions = {
   pushUndoSnapshot: () => void;
   addPrimitiveInstanceAt: (kind: PrimitiveKind, label: string, offset: THREE.Vector3, syncMode?: boolean) => void;
   addSceneLightAt: (kind: SceneLightKind, position: THREE.Vector3) => void;
-  startDuplicatePlacement: (position: THREE.Vector3) => DuplicatePlacementToken | null;
-  moveDuplicatePlacement: (token: DuplicatePlacementToken, position: THREE.Vector3) => void;
-  commitDuplicatePlacement: (token: DuplicatePlacementToken) => void;
-  cancelDuplicatePlacement: (token: DuplicatePlacementToken) => void;
-  extrudeSelectedEditCell: (mode?: EditOperationMode) => EditExtrusionToken | null;
-  updateEditExtrusion: (token: EditExtrusionToken, amount: number) => void;
-  commitEditExtrusion: (token: EditExtrusionToken) => void;
-  cancelEditExtrusion: (token: EditExtrusionToken) => void;
-  startEditInset: (mode?: EditOperationMode) => EditInsetToken | null;
-  updateEditInset: (token: EditInsetToken, amount: number) => void;
-  commitEditInset: (token: EditInsetToken) => void;
-  cancelEditInset: (token: EditInsetToken) => void;
-  startEditBevel: (
+  createDuplicatePlacementOperation: (
+    position: THREE.Vector3,
+    pickPosition: (point: ViewportPointerPoint) => THREE.Vector3,
+  ) => ViewportOperation | null;
+  createEditExtrusionOperation: (mode?: EditOperationMode) => ViewportAmountOperation | null;
+  createEditInsetOperation: (mode?: EditOperationMode) => ViewportAmountOperation | null;
+  createEditBevelOperation: (
     smoothness: number,
     kind?: 'vertex' | 'edge',
     inward?: boolean,
     mode?: EditOperationMode,
-  ) => EditBevelToken | null;
-  updateEditBevel: (token: EditBevelToken, amount: number, smoothness: number) => void;
-  commitEditBevel: (token: EditBevelToken) => void;
-  cancelEditBevel: (token: EditBevelToken) => void;
+    setSmoothness?: (smoothness: number) => void,
+  ) => ViewportAmountOperation | null;
   insertKeyframe: () => void;
   removeLastKeyframe: () => void;
   deleteSelected: () => void;
@@ -201,9 +188,16 @@ export class ViewportInteractionController {
   private startViewportOperation(operation: ViewportOperation) {
     const usesPointerLock = Boolean(operation.usesPointerLock && this.canUseOperationPointerLock());
     const cleanup = operation.cleanup;
+    const updatePointer = operation.updatePointer;
     const wrapped: ViewportOperation = {
       ...operation,
       usesPointerLock,
+      updatePointer: updatePointer
+        ? (point, ev) => {
+          this.lastPointer = { x: point.clientX, y: point.clientY };
+          return updatePointer(point, ev);
+        }
+        : undefined,
       cleanup: () => {
         if (usesPointerLock) this.releaseOperationPointerLock();
         cleanup?.();
@@ -495,7 +489,7 @@ export class ViewportInteractionController {
     }
   }
 
-  private startScalarEditOperation(options: ScalarEditOperationOptions) {
+  private startScalarEditOperation(operation: ViewportAmountOperation, options: ScalarEditOperationOptions) {
     let amount = options.initialAmount ?? 0;
     const startX = this.lastPointer.x;
     const startY = this.lastPointer.y;
@@ -508,37 +502,34 @@ export class ViewportInteractionController {
       const clamped = clampAmount(nextAmount);
       if (!force && Math.abs(clamped - amount) < (options.epsilon ?? 0.0005)) return true;
       amount = clamped;
-      options.updateAmount(amount);
-      this.updateScalarEditHandle(options.kind, amount);
+      operation.updateAmount(amount);
+      this.updateScalarEditHandle(operation.kind, amount);
       return true;
     };
 
     const started = this.startViewportOperation({
-      kind: options.kind,
-      scope: 'edit',
-      blocksCamera: true,
-      blocksSelection: true,
-      blocksContextMenu: true,
-      usesPointerLock: true,
+      ...operation,
+      blocksCamera: operation.blocksCamera ?? true,
+      blocksSelection: operation.blocksSelection ?? true,
+      blocksContextMenu: operation.blocksContextMenu ?? true,
+      usesPointerLock: operation.usesPointerLock ?? true,
       updatePointer: point => {
-        this.lastPointer = { x: point.clientX, y: point.clientY };
         const dx = point.clientX - startX;
         const dy = startY - point.clientY;
         const baseAmount = options.signed ? 0 : (options.initialAmount ?? 0);
         return applyAmount(baseAmount + ((dx + dy) * options.scale));
       },
-      updateWheel: options.updateWheel
+      updateWheel: operation.updateWheel
         ? ev => {
-          const handled = options.updateWheel?.(ev, amount);
-          this.updateScalarEditHandle(options.kind, amount);
+          const handled = operation.updateWheel?.(ev, amount);
+          this.updateScalarEditHandle(operation.kind, amount);
           return handled;
         }
         : undefined,
-      commit: options.commit,
-      cancel: options.cancel,
       cleanup: () => {
         this.hideScalarEditHandle();
         if (this.options.contextMenuEl) this.options.contextMenuEl.style.display = 'none';
+        operation.cleanup?.();
       },
     });
     if (started) applyAmount(amount, true);
@@ -550,18 +541,15 @@ export class ViewportInteractionController {
     if (!this.prepareOperationStart(replaceActive)) return;
     if (!this.options.getParams().editMode) return;
     if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
-    const token = this.options.extrudeSelectedEditCell(repeatSameOperation ? 'individual' : 'grouped');
-    if (!token) return;
-    if (!this.startScalarEditOperation({
-      kind: 'edit-extrusion',
+    const operation = this.options.createEditExtrusionOperation(repeatSameOperation ? 'individual' : 'grouped');
+    if (!operation) return;
+    if (!this.startScalarEditOperation(operation, {
       scale: EXTRUSION_POINTER_SCALE,
       signed: true,
       epsilon: 0.001,
-      updateAmount: amount => this.options.updateEditExtrusion(token, amount),
-      commit: () => this.options.commitEditExtrusion(token),
-      cancel: () => this.options.cancelEditExtrusion(token),
     })) {
-      this.options.cancelEditExtrusion(token);
+      operation.cancel?.();
+      operation.cleanup?.();
     }
   }
 
@@ -570,18 +558,17 @@ export class ViewportInteractionController {
     if (!this.prepareOperationStart(replaceActive)) return;
     if (!this.options.getParams().editMode) return;
     if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
-    const token = this.options.startEditInset(repeatSameOperation ? 'individual' : 'grouped');
-    if (!token) return;
-    this.startScalarEditOperation({
-      kind: 'edit-inset',
+    const operation = this.options.createEditInsetOperation(repeatSameOperation ? 'individual' : 'grouped');
+    if (!operation) return;
+    if (!this.startScalarEditOperation(operation, {
       initialAmount: INSET_INITIAL_AMOUNT,
       scale: INSET_POINTER_SCALE,
       min: 0,
       max: INSET_MAX_AMOUNT,
-      updateAmount: amount => this.options.updateEditInset(token, amount),
-      commit: () => this.options.commitEditInset(token),
-      cancel: () => this.options.cancelEditInset(token),
-    });
+    })) {
+      operation.cancel?.();
+      operation.cleanup?.();
+    }
   }
 
   startEditBevelFromLastPointer(kind: 'vertex' | 'edge' = 'edge', inward = false, replaceActive = false) {
@@ -589,35 +576,25 @@ export class ViewportInteractionController {
     if (!this.prepareOperationStart(replaceActive)) return;
     if (!this.options.getParams().editMode) return;
     if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
-    let smoothness = this.lastBevelSmoothness;
-    const token = this.options.startEditBevel(smoothness, kind, inward, repeatSameOperation ? 'individual' : 'grouped');
-    if (!token) return;
-    this.startScalarEditOperation({
-      kind: 'edit-bevel',
+    const smoothness = this.lastBevelSmoothness;
+    const operation = this.options.createEditBevelOperation(
+      smoothness,
+      kind,
+      inward,
+      repeatSameOperation ? 'individual' : 'grouped',
+      nextSmoothness => {
+        this.lastBevelSmoothness = nextSmoothness;
+      },
+    );
+    if (!operation) return;
+    if (!this.startScalarEditOperation(operation, {
       scale: BEVEL_POINTER_SCALE,
       min: 0,
       max: 0.995,
-      updateAmount: amount => this.options.updateEditBevel(token, amount, smoothness),
-      updateWheel: (ev, amount) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        ev.stopImmediatePropagation();
-
-        const step = ev.deltaY < 0 ? 1 : -1;
-        const nextSmoothness = Math.max(
-          BEVEL_MIN_SMOOTHNESS,
-          Math.min(BEVEL_MAX_SMOOTHNESS, smoothness + step),
-        );
-        if (nextSmoothness === smoothness) return true;
-
-        smoothness = nextSmoothness;
-        this.lastBevelSmoothness = smoothness;
-        this.options.updateEditBevel(token, amount, smoothness);
-        return true;
-      },
-      commit: () => this.options.commitEditBevel(token),
-      cancel: () => this.options.cancelEditBevel(token),
-    });
+    })) {
+      operation.cancel?.();
+      operation.cleanup?.();
+    }
   }
 
   startDuplicateFromLastPointer(replaceActive = false) {
@@ -625,29 +602,13 @@ export class ViewportInteractionController {
     if (this.options.getParams().editMode) return;
     if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
     const point = this.pickPointOnTargetPlane({ clientX: this.lastPointer.x, clientY: this.lastPointer.y });
-    const token = this.options.startDuplicatePlacement(point);
-    if (!token) return;
+    const operation = this.options.createDuplicatePlacementOperation(point, pointerPoint => this.pickPointOnTargetPlane(pointerPoint));
+    if (!operation) return;
     if (this.options.contextMenuEl) this.options.contextMenuEl.style.display = 'none';
-    const prevControlsEnabled = this.options.controls.enabled;
-    this.options.controls.enabled = false;
-    this.startViewportOperation({
-      kind: 'duplicate-placement',
-      scope: 'object',
-      blocksCamera: true,
-      blocksSelection: true,
-      blocksContextMenu: true,
-      usesPointerLock: true,
-      updatePointer: point => {
-        this.lastPointer = { x: point.clientX, y: point.clientY };
-        this.options.moveDuplicatePlacement(token, this.pickPointOnTargetPlane(point));
-        return true;
-      },
-      commit: () => this.options.commitDuplicatePlacement(token),
-      cancel: () => this.options.cancelDuplicatePlacement(token),
-      cleanup: () => {
-        this.options.controls.enabled = prevControlsEnabled;
-      },
-    });
+    if (!this.startViewportOperation(operation)) {
+      operation.cancel?.();
+      operation.cleanup?.();
+    }
   }
 
   isOperationActive() {
