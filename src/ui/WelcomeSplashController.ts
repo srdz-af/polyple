@@ -9,6 +9,14 @@ type WelcomeSplashElements = {
   dontShowInput: HTMLInputElement | null;
 };
 
+export function welcomeSplashElementsFromDocument(): WelcomeSplashElements {
+  return {
+    splash: document.getElementById('welcome-splash') as HTMLDivElement | null,
+    recentList: document.getElementById('welcome-recent-list') as HTMLDivElement | null,
+    dontShowInput: document.getElementById('welcome-dont-show') as HTMLInputElement | null,
+  };
+}
+
 type WelcomeSplashOptions = {
   loadPayload: (payload: string) => Promise<string | void>;
   hiddenKey?: string;

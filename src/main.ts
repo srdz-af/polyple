@@ -74,10 +74,11 @@ import { ModalOverlayController } from './ui/ModalOverlayController';
 import { ObjectListController } from './ui/ObjectListController';
 import { PaneController } from './ui/PaneController';
 import { SceneControlTabsController } from './ui/SceneControlTabsController';
+import { SceneFileControlsController } from './ui/SceneFileControlsController';
 import { SceneLightPanelController } from './ui/SceneLightPanelController';
 import { TextureEditorController } from './ui/TextureEditorController';
 import { ViewModeController } from './ui/ViewModeController';
-import { WelcomeSplashController } from './ui/WelcomeSplashController';
+import { WelcomeSplashController, welcomeSplashElementsFromDocument } from './ui/WelcomeSplashController';
 import { ViewportCaptureController, viewportCaptureElementsFromDocument } from './viewport/ViewportCaptureController';
 import { HypercubeRenderer } from './rendering/HypercubeRenderer';
 import { CachedGrainPass, ColorGradeShader, CopyFramePass, SmoothAfterimagePass } from './rendering/postProcessingPasses';
@@ -273,16 +274,6 @@ const transformRotateButton = document.getElementById('transform-rotate-button')
 const transformScaleButton = document.getElementById('transform-scale-button') as HTMLButtonElement | null;
 const cameraRecenterButton = document.getElementById('camera-recenter-button') as HTMLButtonElement | null;
 const focusResetButton = document.getElementById('focus-reset-button') as HTMLButtonElement | null;
-const sceneUndoButton = document.getElementById('scene-undo-button') as HTMLButtonElement | null;
-const sceneRedoButton = document.getElementById('scene-redo-button') as HTMLButtonElement | null;
-const sceneSaveButton = document.getElementById('scene-save-button') as HTMLButtonElement | null;
-const sceneLoadButton = document.getElementById('scene-load-button') as HTMLButtonElement | null;
-const sceneLoadInput = document.getElementById('scene-load-input') as HTMLInputElement | null;
-const welcomeSplash = document.getElementById('welcome-splash') as HTMLDivElement | null;
-const welcomeLoadSceneButton = document.getElementById('welcome-load-scene-button') as HTMLButtonElement | null;
-const welcomeCloseButton = document.getElementById('welcome-close-button') as HTMLButtonElement | null;
-const welcomeDontShowInput = document.getElementById('welcome-dont-show') as HTMLInputElement | null;
-const welcomeRecentList = document.getElementById('welcome-recent-list') as HTMLDivElement | null;
 const modalOverlayController = new ModalOverlayController();
 const paneController = new PaneController();
 const sceneControlTabs = new SceneControlTabsController();
@@ -291,15 +282,18 @@ const dimensionControl = new DimensionControlController({
   setDimension: value => setNewPrimitiveDimension(value),
 });
 const welcomeSplashController = new WelcomeSplashController(
-  {
-    splash: welcomeSplash,
-    recentList: welcomeRecentList,
-    dontShowInput: welcomeDontShowInput,
-  },
+  welcomeSplashElementsFromDocument(),
   {
     loadPayload: async payload => sanitizeSceneName((await loadSceneUrlPayload(payload, false)).sn),
   },
 );
+const sceneFileControls = new SceneFileControlsController({
+  undo: undoSceneSnapshot,
+  redo: redoSceneSnapshot,
+  saveScene: button => saveSceneStateFile(button),
+  loadSceneFile: loadSceneStateFile,
+  hideWelcome: () => welcomeSplashController.hide(),
+});
 
 function setSceneControlTab(tab: string) {
   sceneControlTabs.setActive(tab);
@@ -1329,7 +1323,7 @@ function requestSceneNameForSave() {
   return sceneName;
 }
 
-async function saveSceneStateFile() {
+async function saveSceneStateFile(sceneSaveButton: HTMLButtonElement | null) {
   if (!sceneSaveButton) return;
   const previousTitle = sceneSaveButton.title;
   sceneSaveButton.disabled = true;
@@ -1372,8 +1366,6 @@ async function loadSceneStateFile(file: File | null | undefined) {
     console.warn('Unable to load scene URL state', err);
     window.alert(err instanceof Error ? err.message : 'Unable to load scene URL.');
     return false;
-  } finally {
-    if (sceneLoadInput) sceneLoadInput.value = '';
   }
 }
 
@@ -3661,22 +3653,11 @@ renderEffects.bind();
 sceneLightPanel.bind();
 editToolbar?.bind();
 dimensionControl.bind();
+sceneFileControls.bind();
 editModeToggle?.addEventListener('click', () => setEditMode(!PARAMS.editMode));
 mobileFullscreenToggle?.addEventListener('click', () => void toggleMobileFullscreen());
 document.addEventListener('fullscreenchange', updateMobileFullscreenToggle);
 updateMobileFullscreenToggle();
-sceneUndoButton?.addEventListener('click', () => undoSceneSnapshot());
-sceneRedoButton?.addEventListener('click', () => redoSceneSnapshot());
-sceneSaveButton?.addEventListener('click', () => void saveSceneStateFile());
-sceneLoadButton?.addEventListener('click', () => sceneLoadInput?.click());
-welcomeLoadSceneButton?.addEventListener('click', () => sceneLoadInput?.click());
-welcomeCloseButton?.addEventListener('click', () => welcomeSplashController.hide());
-welcomeSplash?.addEventListener('click', ev => {
-  if (ev.target === welcomeSplash) welcomeSplashController.hide();
-});
-sceneLoadInput?.addEventListener('change', () => {
-  void loadSceneStateFile(sceneLoadInput.files?.[0]);
-});
 [
   { el: transformMoveButton, mode: 'move' as TransformMode },
   { el: transformRotateButton, mode: 'rotate' as TransformMode },
