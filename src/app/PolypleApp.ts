@@ -1,10 +1,4 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
-import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
-import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { MAX_N, type ViewMode } from '../constants';
 import { RotND } from '../RotND';
@@ -38,7 +32,7 @@ import { KeyboardShortcutController } from '../interaction/KeyboardShortcutContr
 import { SelectionOutlineRenderer } from '../interaction/SelectionOutlineRenderer';
 import { TransformController } from '../interaction/TransformController';
 import { ViewportInteractionController, viewportContextMenuFromDocument } from '../interaction/ViewportInteractionController';
-import { createBidirectionalAxes, createFadingGrid } from '../viewport/grid';
+import { ViewportRenderRuntime } from '../viewport/ViewportRenderRuntime';
 import { AxisGizmoController } from '../ui/AxisGizmoController';
 import { DimensionControlController } from '../ui/DimensionControlController';
 import { EditToolbarController } from '../ui/EditToolbarController';
@@ -54,12 +48,10 @@ import { WelcomeSplashController, welcomeSplashElementsFromDocument } from '../u
 import { ViewportCaptureController, viewportCaptureElementsFromDocument } from '../viewport/ViewportCaptureController';
 import { HypercubeRenderer } from '../rendering/HypercubeRenderer';
 import { PerformanceOverlayController } from '../rendering/PerformanceOverlayController';
-import { CachedGrainPass, ColorGradeShader, CopyFramePass, SmoothAfterimagePass } from '../rendering/postProcessingPasses';
 import { RenderEffectsController, clamp01, clampSigned01, renderEffectsElementsFromDocument } from '../rendering/RenderEffectsController';
 import {
   KeyframeTimelineController,
   normalizeAntialiasMode,
-  normalizeRenderQuality,
   type AntialiasMode,
   type AnimationKeyframeState,
   type AnimationTimelineState,
@@ -201,17 +193,35 @@ export class PolypleApp {
     sceneControlTabs.bind('environment');
     
     // --- Three.js setup ---
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    app.appendChild(renderer.domElement);
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.1;
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_VIEWPORT_PIXEL_RATIO));
-    renderer.shadowMap.enabled = false;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    
-    const scene = new THREE.Scene();
+    const DEFAULT_CAMERA_POSITION = new THREE.Vector3(3.9, 2.7, 3.9);
+    const renderRuntime = new ViewportRenderRuntime({
+      app,
+      maxPixelRatio: MAX_VIEWPORT_PIXEL_RATIO,
+      msaaSamples: POSTPROCESSING_MSAA_SAMPLES,
+      grainUpdateIntervalFrames: GRAIN_UPDATE_INTERVAL_FRAMES,
+      grainTextureScale: GRAIN_TEXTURE_SCALE,
+      defaultCameraPosition: DEFAULT_CAMERA_POSITION,
+      onCameraChange: () => requestSceneUrlUpdate(),
+      markProjectionDirty,
+      syncSceneLights: () => {
+        sceneLightService?.syncRuntimes();
+        sceneLightService?.syncPanel();
+      },
+    });
+    const {
+      renderer,
+      scene,
+      camera,
+      controls,
+      axes,
+      gridGroup,
+      bloomPass,
+      afterimagePass,
+      colorGradePass,
+      smaaPass,
+      grainPass,
+    } = renderRuntime;
+    const setCaptureResolutionMode = (renderQuality: RenderQuality) => renderRuntime.setCaptureResolutionMode(renderQuality);
     const baseBackground = new THREE.Color(0x10141a);
     const editBackground = new THREE.Color(0x141414);
     scene.background = baseBackground.clone();
@@ -232,66 +242,6 @@ export class PolypleApp {
       onStateChange: () => requestSceneUrlUpdate(),
     });
     
-    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.01, 100);
-    const DEFAULT_CAMERA_POSITION = new THREE.Vector3(3.9, 2.7, 3.9);
-    camera.position.copy(DEFAULT_CAMERA_POSITION);
-    const composerRenderTarget = new THREE.WebGLRenderTarget(
-      window.innerWidth * renderer.getPixelRatio(),
-      window.innerHeight * renderer.getPixelRatio(),
-      {
-        type: THREE.HalfFloatType,
-        samples: renderer.capabilities.isWebGL2 ? POSTPROCESSING_MSAA_SAMPLES : 0,
-      },
-    );
-    composerRenderTarget.texture.name = 'ViewportPostprocess.rt1';
-    const composer = new EffectComposer(renderer, composerRenderTarget);
-    composer.addPass(new RenderPass(scene, camera));
-    const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0, 0.58, 0.22);
-    const afterimagePass = new SmoothAfterimagePass();
-    const colorGradePass = new ShaderPass(ColorGradeShader);
-    const smaaPass = new SMAAPass(window.innerWidth, window.innerHeight);
-    const grainPass = new CachedGrainPass(GRAIN_UPDATE_INTERVAL_FRAMES, GRAIN_TEXTURE_SCALE);
-    const copyFramePass = new CopyFramePass();
-    composer.addPass(bloomPass);
-    composer.addPass(afterimagePass);
-    composer.addPass(colorGradePass);
-    composer.addPass(smaaPass);
-    composer.addPass(grainPass);
-    composer.addPass(copyFramePass);
-    const captureResolutionViewportSize = new THREE.Vector2();
-    const fullViewportPixelRatio = () => Math.min(window.devicePixelRatio, MAX_VIEWPORT_PIXEL_RATIO);
-    let downsampleSceneOnly = false;
-    
-    const RENDER_QUALITY_PIXEL_RATIO_SCALE: Record<RenderQuality, number> = {
-      full: 1,
-      high: 0.75,
-      medium: 0.5,
-      low: 0.25,
-    };
-    let currentRenderQuality: RenderQuality = 'full';
-    
-    function setCaptureResolutionMode(renderQuality: RenderQuality) {
-      renderer.getSize(captureResolutionViewportSize);
-      const fullPixelRatio = fullViewportPixelRatio();
-      const normalizedQuality = normalizeRenderQuality(renderQuality);
-      currentRenderQuality = normalizedQuality;
-      const nextDownsampleSceneOnly = normalizedQuality !== 'full';
-      const qualityChanged = downsampleSceneOnly !== nextDownsampleSceneOnly;
-      const scenePixelRatio = Math.max(0.25, fullPixelRatio * RENDER_QUALITY_PIXEL_RATIO_SCALE[normalizedQuality]);
-      downsampleSceneOnly = nextDownsampleSceneOnly;
-    
-      renderer.setPixelRatio(fullPixelRatio);
-      renderer.setSize(captureResolutionViewportSize.x, captureResolutionViewportSize.y, false);
-      composer.setPixelRatio(scenePixelRatio);
-      composer.setSize(captureResolutionViewportSize.x, captureResolutionViewportSize.y);
-      if (qualityChanged) markProjectionDirty();
-      sceneLightService?.syncRuntimes();
-      sceneLightService?.syncPanel();
-    }
-    
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.addEventListener('change', () => requestSceneUrlUpdate());
     const worldUp = new THREE.Vector3(0, 1, 0);
     let keyboardCamera: KeyboardCameraController;
     
@@ -348,15 +298,6 @@ export class PolypleApp {
     const raycaster = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
     
-    const axes = createBidirectionalAxes(1000);
-    scene.add(axes);
-    const gridGroup = createFadingGrid({ y: 0 });
-    scene.add(gridGroup);
-    const referenceLineDepthMaterial = new THREE.MeshBasicMaterial();
-    referenceLineDepthMaterial.colorWrite = false;
-    referenceLineDepthMaterial.depthWrite = true;
-    referenceLineDepthMaterial.depthTest = true;
-    referenceLineDepthMaterial.side = THREE.DoubleSide;
     let animationTimeline: KeyframeTimelineController | null = null;
     let animationVideoRendering = false;
     const viewportCapture = new ViewportCaptureController({
@@ -429,7 +370,7 @@ export class PolypleApp {
       ndc,
       lightSelectionBase: LIGHT_SELECTION_BASE,
       noSelection: NO_SELECTION,
-      getRenderQuality: () => currentRenderQuality,
+      getRenderQuality: () => renderRuntime.renderQuality,
       getEditMode: () => PARAMS.editMode,
       getSelectedItems: () => selectionService?.items ?? [],
       getSelectedLightId: () => selectionService?.lightId ?? '',
@@ -1505,56 +1446,15 @@ export class PolypleApp {
       projectAndRenderAll();
     }
     
-    function renderAxesClean(axesWereVisible: boolean) {
-      if (!axesWereVisible) return;
-    
-      const previousAutoClear = renderer.autoClear;
-      const previousBackground = scene.background;
-      const previousOverrideMaterial = scene.overrideMaterial;
-      const childVisibility = scene.children.map(child => ({ child, visible: child.visible }));
-    
-      renderer.autoClear = false;
-      scene.background = null;
-    
-      gridGroup.visible = false;
-      axes.visible = false;
-      scene.overrideMaterial = referenceLineDepthMaterial;
-      renderer.clearDepth();
-      renderer.render(scene, camera);
-      scene.overrideMaterial = previousOverrideMaterial;
-    
-      for (const { child } of childVisibility) {
-        child.visible = child === axes && axesWereVisible;
-      }
-      renderer.render(scene, camera);
-    
-      for (const { child, visible } of childVisibility) child.visible = visible;
-      scene.background = previousBackground;
-      scene.overrideMaterial = previousOverrideMaterial;
-      renderer.autoClear = previousAutoClear;
-    }
-    
-    function renderEffectsFrame() {
-      const axesWereVisible = axes.visible;
-    
-      axes.visible = false;
-      composer.render();
-    
-      axes.visible = axesWereVisible;
-      renderAxesClean(axesWereVisible);
-    }
-    
     function renderViewportFrame() {
-      const frameStart = performance.now();
-      const projectionMs = projectIfDirty();
-      controls.update();
-      transformController.updateScreenSpaceMarkerScales();
-      sceneLightService.updateScreenSpaceMarkers();
-      updateAxisGizmo();
-      const renderStart = performance.now();
-      if (renderEffects.hasEffects() || downsampleSceneOnly) renderEffectsFrame();
-      else renderer.render(scene, camera);
-      recordPerfFrame(frameStart, projectionMs, performance.now() - renderStart);
+      renderRuntime.renderFrame({
+        projectIfDirty,
+        updateScreenSpaceMarkers: () => transformController.updateScreenSpaceMarkerScales(),
+        updateSceneLightMarkers: () => sceneLightService.updateScreenSpaceMarkers(),
+        updateAxisGizmo,
+        hasEffects: () => renderEffects.hasEffects(),
+        recordFrame: recordPerfFrame,
+      });
     }
     
     transformController = new TransformController({
@@ -2327,11 +2227,7 @@ export class PolypleApp {
     
     // --- Resize ---
     window.addEventListener('resize', () => {
-      const w = window.innerWidth, h = window.innerHeight;
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
-      composer.setSize(w, h);
+      renderRuntime.resize();
       viewportCapture.onViewportResize();
       paneController.syncToViewport();
       textureEditor.updatePanel();
