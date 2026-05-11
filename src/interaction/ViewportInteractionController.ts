@@ -31,6 +31,7 @@ const OBJECT_FOCUS_DOUBLE_CLICK_MS = 220;
 const OBJECT_FOCUS_DOUBLE_CLICK_MAX_DIST = 8;
 const OBJECT_VERTEX_PICK_RADIUS = 24;
 const OBJECT_EDGE_PICK_RADIUS = 12;
+const VIRTUAL_CURSOR_SIZE_PX = 10;
 const CELL_CENTER_PICK_RADIUS = 16;
 const CELL_CENTER_FALLBACK_RADIUS = 48;
 const CELL_CYCLE_MAX_DIST = 10;
@@ -128,6 +129,7 @@ export class ViewportInteractionController {
   private pointerLockReleaseRequested = false;
   private readonly pointerLockStart = { x: this.lastPointer.x, y: this.lastPointer.y };
   private readonly pointerLockPoint = { clientX: this.lastPointer.x, clientY: this.lastPointer.y };
+  private virtualCursorEl: HTMLDivElement | null = null;
 
   constructor(private readonly options: ViewportInteractionControllerOptions) {}
 
@@ -179,6 +181,7 @@ export class ViewportInteractionController {
     this.pointerLockStart.y = this.lastPointer.y;
     this.pointerLockPoint.clientX = this.lastPointer.x;
     this.pointerLockPoint.clientY = this.lastPointer.y;
+    this.showVirtualCursor();
     if (document.pointerLockElement === canvas) return;
     try {
       const lockResult = canvas.requestPointerLock();
@@ -189,6 +192,7 @@ export class ViewportInteractionController {
   }
 
   private releaseOperationPointerLock() {
+    this.hideVirtualCursor();
     const canvas = this.options.renderer.domElement;
     if (document.pointerLockElement !== canvas) return;
     this.pointerLockReleaseRequested = true;
@@ -214,11 +218,64 @@ export class ViewportInteractionController {
     if (document.pointerLockElement === this.options.renderer.domElement && this.operationManager.current?.usesPointerLock) {
       this.pointerLockPoint.clientX += ev.movementX || 0;
       this.pointerLockPoint.clientY += ev.movementY || 0;
+      this.updateVirtualCursor();
       return this.pointerLockPoint;
     }
     this.pointerLockPoint.clientX = ev.clientX;
     this.pointerLockPoint.clientY = ev.clientY;
+    if (this.operationManager.current?.usesPointerLock) this.updateVirtualCursor();
     return this.pointerLockPoint;
+  }
+
+  private showVirtualCursor() {
+    const cursor = this.ensureVirtualCursor();
+    cursor.style.display = 'block';
+    this.updateVirtualCursor();
+  }
+
+  private hideVirtualCursor() {
+    if (this.virtualCursorEl) this.virtualCursorEl.style.display = 'none';
+  }
+
+  private ensureVirtualCursor() {
+    if (this.virtualCursorEl) return this.virtualCursorEl;
+    const cursor = document.createElement('div');
+    cursor.setAttribute('aria-hidden', 'true');
+    cursor.className = 'material-symbols-rounded';
+    cursor.textContent = 'drag_pan';
+    Object.assign(cursor.style, {
+      position: 'fixed',
+      left: '0px',
+      top: '0px',
+      width: `${VIRTUAL_CURSOR_SIZE_PX}px`,
+      height: `${VIRTUAL_CURSOR_SIZE_PX}px`,
+      color: 'rgba(255, 255, 255, 0.98)',
+      fontSize: `${VIRTUAL_CURSOR_SIZE_PX}px`,
+      lineHeight: `${VIRTUAL_CURSOR_SIZE_PX}px`,
+      fontVariationSettings: '"FILL" 0, "wght" 600, "GRAD" 0, "opsz" 20',
+      textShadow: '0 0 2px rgba(0, 0, 0, 0.92), 0 0 4px rgba(0, 0, 0, 0.55)',
+      boxSizing: 'border-box',
+      display: 'none',
+      pointerEvents: 'none',
+      transform: 'translate(-50%, -50%)',
+      zIndex: '2147483647',
+    });
+    document.body.append(cursor);
+    this.virtualCursorEl = cursor;
+    return cursor;
+  }
+
+  private updateVirtualCursor() {
+    if (!this.virtualCursorEl || this.virtualCursorEl.style.display === 'none') return;
+    const rect = this.options.renderer.domElement.getBoundingClientRect();
+    const wrap = (value: number, min: number, size: number) => {
+      if (!Number.isFinite(value) || size <= 0) return min;
+      return min + ((((value - min) % size) + size) % size);
+    };
+    const x = wrap(this.pointerLockPoint.clientX, rect.left, rect.width);
+    const y = wrap(this.pointerLockPoint.clientY, rect.top, rect.height);
+    this.virtualCursorEl.style.left = `${x}px`;
+    this.virtualCursorEl.style.top = `${y}px`;
   }
 
   showAddObjectMenuAtLastPointer(replaceActive = false) {
