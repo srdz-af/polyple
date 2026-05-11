@@ -15,7 +15,7 @@ import {
   normalizeAxisMap,
   type AxisMap,
 } from '../geometry/projectionUtils';
-import { buildProductMesh, type ProductMeshFactor } from '../geometry/productMesh';
+import type { ProductMeshFactor } from '../geometry/productMesh';
 import {
   compactDimensionMajorVertices,
 } from '../geometry/bevelGeometry';
@@ -841,13 +841,11 @@ export class PolypleApp {
     function setObjectVisible(idx: number, visible: boolean, recordUndo = true) {
       if (recordUndo && getObjectVisible(idx) !== visible) pushUndoSnapshot();
     
-      if (idx === -1) {
-        baseVisible = visible;
-      } else if (sceneLightRuntimeForSelection(idx)) {
-        const runtime = sceneLightRuntimeForSelection(idx);
+      const runtime = sceneLightRuntimeForSelection(idx);
+      if (runtime) {
         if (runtime) runtime.state.visible = visible;
-      } else if (extraInstances[idx]) {
-        extraInstances[idx].visible = visible;
+      } else {
+        sceneObjectService.setGeometryVisible(idx, visible);
       }
     
       applyObjectVisibility();
@@ -883,14 +881,12 @@ export class PolypleApp {
       }
     
       pushUndoSnapshot();
-      if (idx === -1) {
-        baseLabel = label;
-      } else if (lightRuntime) {
+      if (lightRuntime) {
         lightRuntime.state.label = label;
         selectionService.setLightId(lightRuntime.state.id);
         sceneLightService.syncPanel();
       } else {
-        extraInstances[idx].label = label;
+        sceneObjectService.renameGeometryObject(idx, label);
       }
       updateObjectList();
       textureEditor.updatePanel();
@@ -958,46 +954,7 @@ export class PolypleApp {
     }
     
     function instanceSnapshotForSelection(idx: number): InstanceSnapshot | null {
-      if (idx === BASE_SELECTION) {
-        if (M <= 0 || !baseVisible) return null;
-        return {
-          X: new Float32Array(X),
-          E: new Uint32Array(E),
-          cellTopology: cloneCellTopology(baseCellTopology),
-          surfaceTopology: clonePrimitiveSurfaceTopology(baseSurfaceTopology),
-          M,
-          offset: baseTransform.pos.clone(),
-          label: duplicateLabel(baseLabel),
-          kind: PARAMS.primitive,
-          transform: cloneTransformState(baseTransform),
-          origin: new Float32Array(baseOrigin),
-          originalN: baseOriginalN || PARAMS.N,
-          axisMap: [...baseAxisMap],
-          visible: true,
-          materialId: baseMaterialId,
-          surface: cloneSurface(baseSurface),
-        };
-      }
-    
-      const inst = extraInstances[idx];
-      if (!inst || !inst.visible) return null;
-      return {
-        X: new Float32Array(inst.X),
-        E: new Uint32Array(inst.E),
-        cellTopology: cloneCellTopology(inst.cellTopology),
-        surfaceTopology: clonePrimitiveSurfaceTopology(inst.surfaceTopology),
-        M: inst.M,
-        offset: inst.offset.clone(),
-        label: duplicateLabel(inst.label),
-        kind: inst.kind,
-        transform: cloneTransformState(inst.transform),
-        origin: new Float32Array(inst.origin),
-        originalN: inst.originalN,
-        axisMap: [...inst.axisMap],
-        visible: true,
-        materialId: inst.materialId,
-        surface: cloneSurface(inst.surface),
-      };
+      return sceneObjectService.captureInstanceSnapshot(idx, duplicateLabel);
     }
     
     function moveObjectOriginToWorldPosition(idx: number, position: THREE.Vector3) {
@@ -1010,15 +967,7 @@ export class PolypleApp {
         return true;
       }
     
-      const transform = idx === BASE_SELECTION ? baseTransform : extraInstances[idx]?.transform;
-      const current = getObjectOriginWorldPosition(idx);
-      if (!transform || !current) return false;
-      const delta = position.clone().sub(current);
-      transform.pos.add(delta);
-      if (idx >= 0) extraInstances[idx]?.offset.add(delta);
-      projectAndRenderAll();
-      updateSelectionOutline();
-      return true;
+      return sceneObjectService.moveGeometryOriginToWorldPosition(idx, position, getObjectOriginWorldPosition(idx));
     }
     
     function recalculateObjectOrigin(idx: number) {
@@ -1026,13 +975,7 @@ export class PolypleApp {
       if (!origin) return;
     
       pushUndoSnapshot();
-      if (idx === BASE_SELECTION) {
-        computeObjectOrigin(X, M, MAX_N, baseOrigin);
-      } else {
-        const inst = extraInstances[idx];
-        if (!inst) return;
-        computeObjectOrigin(inst.X, inst.M, MAX_N, inst.origin);
-      }
+      if (!sceneObjectService.recalculateGeometryOrigin(idx)) return;
       projectAndRenderAll();
       updateSelectionOutline();
       requestSceneUrlUpdate();
@@ -1053,39 +996,7 @@ export class PolypleApp {
     }
     
     function getObjectProductFactor(idx: number): ProductMeshFactor | null {
-      const source = idx === BASE_SELECTION
-        ? {
-          X,
-          M,
-          E,
-          cellTopology: baseCellTopology,
-          surfaceTopology: baseSurfaceTopology,
-          origin: baseOrigin,
-          originalN: baseOriginalN || visibleDims(),
-          axisMap: baseAxisMap,
-        }
-        : extraInstances[idx];
-      if (!source || source.M <= 0) return null;
-    
-      const dimension = Math.max(1, Math.min(MAX_N, source.originalN || visibleDims()));
-      const axisMap = normalizeAxisMap(source.axisMap, dimension);
-      const verts = new Float32Array(dimension * source.M);
-      for (let d = 0; d < dimension; d++) {
-        const ambientDim = axisMap[d] ?? d;
-        const originValue = source.origin[ambientDim] ?? 0;
-        for (let v = 0; v < source.M; v++) {
-          verts[d * source.M + v] = source.X[ambientDim * source.M + v] - originValue;
-        }
-      }
-    
-      return {
-        verts,
-        vertexCount: source.M,
-        dimension,
-        edges: new Uint32Array(source.E),
-        cellTopology: cloneCellTopology(source.cellTopology),
-        surfaceTopology: clonePrimitiveSurfaceTopology(source.surfaceTopology),
-      };
+      return sceneObjectService.getProductFactor(idx, visibleDims());
     }
     
     function getObjectSurface(idx: number) {
@@ -1093,7 +1004,7 @@ export class PolypleApp {
     }
     
     function getObjectTransform(idx: number) {
-      return idx === BASE_SELECTION ? baseTransform : extraInstances[idx]?.transform;
+      return sceneObjectService.getObjectTransform(idx);
     }
     
     function addProductMeshFromSelection() {
@@ -1106,42 +1017,16 @@ export class PolypleApp {
         return;
       }
     
-      let product;
-      try {
-        product = buildProductMesh(factors as ProductMeshFactor[], MAX_N);
-      } catch (err) {
-        window.alert(err instanceof Error ? err.message : 'Unable to build product mesh.');
-        return;
-      }
-    
-      const axisMap = canonicalAxisMap(product.dimension);
-      const verts = embedToMax(product.verts, product.dimension, axisMap);
-      const origin = new Float32Array(MAX_N);
       const parentIdx = selected[0];
       const parentMaterialId = objectMaterialId(parentIdx) || sceneMaterialService.defaultMaterialId();
       const parentTransform = getObjectTransform(parentIdx);
-      const label = `Product #${extraInstances.length + 1}`;
     
       pushUndoSnapshot();
-      const inst = insertInstance({
-        verts,
-        edges: product.edges,
-        cellTopology: cloneCellTopology(product.cellTopology)
-          ?? deriveCellTopologyForGeometry('productMesh', product.dimension, product.vertexCount, product.edges, product.surfaceTopology),
-        surfaceTopology: clonePrimitiveSurfaceTopology(product.surfaceTopology),
-        V: product.vertexCount,
-        kind: 'productMesh',
-        axisMap,
-        originalN: product.dimension,
-        origin,
-      }, new THREE.Vector3(0, 0, 0), label, parentMaterialId);
-    
-      if (parentTransform) {
-        inst.transform.scale.copy(parentTransform.scale);
-        projectAndRenderAll();
-        updateObjectList();
+      try {
+        sceneObjectService.addProductMeshFromSelection(selected, parentMaterialId, parentTransform, visibleDims());
+      } catch (err) {
+        window.alert(err instanceof Error ? err.message : 'Unable to build product mesh.');
       }
-      requestSceneUrlUpdate();
     }
     
     function deleteSelected() {
@@ -1154,12 +1039,7 @@ export class PolypleApp {
       const keepBaseSelected = selectionService.items.includes(BASE_SELECTION) && getObjectVisible(BASE_SELECTION);
       pushUndoSnapshot();
       removeSelectionOutlines();
-      for (const idx of deleteIndices) {
-        const inst = extraInstances[idx];
-        if (!inst) continue;
-        inst.renderer.destroy();
-        extraInstances.splice(idx, 1);
-      }
+      sceneObjectService.deleteGeometryObjects(deleteIndices);
       for (const idx of deleteLightIndices) {
         const runtime = sceneLightService.getLights()[idx];
         if (!runtime) continue;
@@ -1313,6 +1193,22 @@ export class PolypleApp {
           origin: new Float32Array(baseOrigin),
         };
       },
+      getBaseLabel: () => baseLabel,
+      setBaseLabel: label => {
+        baseLabel = label;
+      },
+      getBaseTransform: () => baseTransform,
+      getBaseVisible: () => baseVisible,
+      setBaseVisible: visible => {
+        baseVisible = visible;
+      },
+      getBaseSurface: () => baseSurface,
+      getBaseOriginWorldPosition: () => (M > 0 && baseVisible ? rendererND.originPosition.clone() : null),
+      recalculateBaseOrigin: () => {
+        if (M <= 0) return false;
+        computeObjectOrigin(X, M, MAX_N, baseOrigin);
+        return true;
+      },
       getBaseMaterialId: () => baseMaterialId,
       defaultMaterialName: 'Material 1',
       pushUndoSnapshot,
@@ -1322,6 +1218,7 @@ export class PolypleApp {
       requestSceneUrlUpdate,
       clearSelection: () => selectionService.clear(),
       clearSelectionOutlines: removeSelectionOutlines,
+      updateSelectionOutline,
     });
     const objectListController = new ObjectListController({
       getRows: () => sceneObjectStore.objectRows(),
