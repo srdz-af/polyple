@@ -34,6 +34,27 @@ type RenderEffectsElements = {
   grainIntensityValue: HTMLOutputElement | null;
 };
 
+export function renderEffectsElementsFromDocument(): RenderEffectsElements {
+  return {
+    bloomIntensityInput: document.getElementById('bloom-intensity') as HTMLInputElement | null,
+    bloomIntensityValue: document.getElementById('bloom-intensity-value') as HTMLOutputElement | null,
+    motionBlurIntensityInput: document.getElementById('motion-blur-intensity') as HTMLInputElement | null,
+    motionBlurIntensityValue: document.getElementById('motion-blur-intensity-value') as HTMLOutputElement | null,
+    colorHueInput: document.getElementById('color-hue') as HTMLInputElement | null,
+    colorHueValue: document.getElementById('color-hue-value') as HTMLOutputElement | null,
+    colorSaturationInput: document.getElementById('color-saturation') as HTMLInputElement | null,
+    colorSaturationValue: document.getElementById('color-saturation-value') as HTMLOutputElement | null,
+    colorBrightnessInput: document.getElementById('color-brightness') as HTMLInputElement | null,
+    colorBrightnessValue: document.getElementById('color-brightness-value') as HTMLOutputElement | null,
+    colorContrastInput: document.getElementById('color-contrast') as HTMLInputElement | null,
+    colorContrastValue: document.getElementById('color-contrast-value') as HTMLOutputElement | null,
+    renderAntialiasSelect: document.getElementById('render-antialias') as HTMLSelectElement | null,
+    renderAntialiasValue: document.getElementById('render-antialias-value') as HTMLOutputElement | null,
+    grainIntensityInput: document.getElementById('grain-intensity') as HTMLInputElement | null,
+    grainIntensityValue: document.getElementById('grain-intensity-value') as HTMLOutputElement | null,
+  };
+}
+
 type RenderEffectsPasses = {
   bloomPass: UnrealBloomPass;
   afterimagePass: SmoothAfterimagePass;

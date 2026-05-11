@@ -72,6 +72,7 @@ import { AxisGizmoController } from './ui/AxisGizmoController';
 import { ModalOverlayController } from './ui/ModalOverlayController';
 import { ObjectListController } from './ui/ObjectListController';
 import { PaneController } from './ui/PaneController';
+import { SceneControlTabsController } from './ui/SceneControlTabsController';
 import { SceneLightPanelController } from './ui/SceneLightPanelController';
 import { TextureEditorController } from './ui/TextureEditorController';
 import { ViewModeController } from './ui/ViewModeController';
@@ -79,7 +80,7 @@ import { WelcomeSplashController } from './ui/WelcomeSplashController';
 import { ViewportCaptureController } from './viewport/ViewportCaptureController';
 import { HypercubeRenderer } from './rendering/HypercubeRenderer';
 import { CachedGrainPass, ColorGradeShader, CopyFramePass, SmoothAfterimagePass } from './rendering/postProcessingPasses';
-import { RenderEffectsController, clamp01, clampSigned01 } from './rendering/RenderEffectsController';
+import { RenderEffectsController, clamp01, clampSigned01, renderEffectsElementsFromDocument } from './rendering/RenderEffectsController';
 import {
   KeyframeTimelineController,
   normalizeAntialiasMode,
@@ -284,22 +285,6 @@ const dimensionDownButton = document.getElementById('dimension-down') as HTMLBut
 const dimensionUpButton = document.getElementById('dimension-up') as HTMLButtonElement | null;
 const cameraRecenterButton = document.getElementById('camera-recenter-button') as HTMLButtonElement | null;
 const focusResetButton = document.getElementById('focus-reset-button') as HTMLButtonElement | null;
-const bloomIntensityInput = document.getElementById('bloom-intensity') as HTMLInputElement | null;
-const bloomIntensityValue = document.getElementById('bloom-intensity-value') as HTMLOutputElement | null;
-const motionBlurIntensityInput = document.getElementById('motion-blur-intensity') as HTMLInputElement | null;
-const motionBlurIntensityValue = document.getElementById('motion-blur-intensity-value') as HTMLOutputElement | null;
-const colorHueInput = document.getElementById('color-hue') as HTMLInputElement | null;
-const colorHueValue = document.getElementById('color-hue-value') as HTMLOutputElement | null;
-const colorSaturationInput = document.getElementById('color-saturation') as HTMLInputElement | null;
-const colorSaturationValue = document.getElementById('color-saturation-value') as HTMLOutputElement | null;
-const colorBrightnessInput = document.getElementById('color-brightness') as HTMLInputElement | null;
-const colorBrightnessValue = document.getElementById('color-brightness-value') as HTMLOutputElement | null;
-const colorContrastInput = document.getElementById('color-contrast') as HTMLInputElement | null;
-const colorContrastValue = document.getElementById('color-contrast-value') as HTMLOutputElement | null;
-const renderAntialiasSelect = document.getElementById('render-antialias') as HTMLSelectElement | null;
-const renderAntialiasValue = document.getElementById('render-antialias-value') as HTMLOutputElement | null;
-const grainIntensityInput = document.getElementById('grain-intensity') as HTMLInputElement | null;
-const grainIntensityValue = document.getElementById('grain-intensity-value') as HTMLOutputElement | null;
 const sceneUndoButton = document.getElementById('scene-undo-button') as HTMLButtonElement | null;
 const sceneRedoButton = document.getElementById('scene-redo-button') as HTMLButtonElement | null;
 const sceneSaveButton = document.getElementById('scene-save-button') as HTMLButtonElement | null;
@@ -310,10 +295,9 @@ const welcomeLoadSceneButton = document.getElementById('welcome-load-scene-butto
 const welcomeCloseButton = document.getElementById('welcome-close-button') as HTMLButtonElement | null;
 const welcomeDontShowInput = document.getElementById('welcome-dont-show') as HTMLInputElement | null;
 const welcomeRecentList = document.getElementById('welcome-recent-list') as HTMLDivElement | null;
-const sceneControlTabButtons = Array.from(document.querySelectorAll('[data-scene-control-tab]')) as HTMLButtonElement[];
-const sceneControlPanels = Array.from(document.querySelectorAll('[data-scene-control-panel]')) as HTMLElement[];
 const modalOverlayController = new ModalOverlayController();
 const paneController = new PaneController();
+const sceneControlTabs = new SceneControlTabsController();
 const welcomeSplashController = new WelcomeSplashController(
   {
     splash: welcomeSplash,
@@ -326,24 +310,10 @@ const welcomeSplashController = new WelcomeSplashController(
 );
 
 function setSceneControlTab(tab: string) {
-  sceneControlTabButtons.forEach(button => {
-    const active = button.dataset.sceneControlTab === tab;
-    button.classList.toggle('active', active);
-    button.setAttribute('aria-selected', String(active));
-    button.tabIndex = active ? 0 : -1;
-  });
-  sceneControlPanels.forEach(panel => {
-    panel.hidden = panel.dataset.sceneControlPanel !== tab;
-  });
-  window.dispatchEvent(new CustomEvent('scene-control-tab-change', { detail: { tab } }));
+  sceneControlTabs.setActive(tab);
 }
 
-sceneControlTabButtons.forEach(button => {
-  button.addEventListener('click', () => {
-    if (button.dataset.sceneControlTab) setSceneControlTab(button.dataset.sceneControlTab);
-  });
-});
-setSceneControlTab('environment');
+sceneControlTabs.bind('environment');
 
 // --- Three.js setup ---
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -2921,24 +2891,7 @@ const PARAMS = {
 const renderEffects = new RenderEffectsController(
   PARAMS,
   { bloomPass, afterimagePass, colorGradePass, smaaPass, grainPass },
-  {
-    bloomIntensityInput,
-    bloomIntensityValue,
-    motionBlurIntensityInput,
-    motionBlurIntensityValue,
-    colorHueInput,
-    colorHueValue,
-    colorSaturationInput,
-    colorSaturationValue,
-    colorBrightnessInput,
-    colorBrightnessValue,
-    colorContrastInput,
-    colorContrastValue,
-    renderAntialiasSelect,
-    renderAntialiasValue,
-    grainIntensityInput,
-    grainIntensityValue,
-  },
+  renderEffectsElementsFromDocument(),
   requestSceneUrlUpdate,
 );
 
