@@ -73,6 +73,7 @@ import { DEFAULT_SCENE_STATE } from './scene/defaultSceneState';
 import { cloneObjectOrigin, computeObjectOrigin, type ObjectOrigin } from './scene/objectOrigin';
 import { ProjectionPipeline } from './scene/ProjectionPipeline';
 import { RenderSyncService } from './scene/RenderSyncService';
+import { SceneObjectStore } from './scene/SceneObjectStore';
 import { SceneHistory } from './scene/SceneHistory';
 import {
   clearScenePayloadFromCurrentUrl,
@@ -875,6 +876,7 @@ const updateAxisGizmo = () => axisController.updateAxisGizmo();
 const applyAutoRotation = (dt: number) => axisController.applyAutoRotation(dt);
 let projectionPipeline: ProjectionPipeline | null = null;
 let renderSync: RenderSyncService;
+let sceneObjectStore: SceneObjectStore<SceneLightRuntime>;
 let projectionDirty = true;
 
 function markProjectionDirty() {
@@ -1537,19 +1539,19 @@ function selectedSceneLightRuntime() {
 }
 
 function lightSelectionIndex(lightIndex: number) {
-  return LIGHT_SELECTION_BASE - lightIndex;
+  return sceneObjectStore.lightSelectionIndex(lightIndex);
 }
 
 function isLightSelectionIndex(idx: number) {
-  return idx <= LIGHT_SELECTION_BASE && sceneLights[LIGHT_SELECTION_BASE - idx] !== undefined;
+  return sceneObjectStore.isLightSelectionIndex(idx);
 }
 
 function sceneLightIndexFromSelection(idx: number) {
-  return isLightSelectionIndex(idx) ? LIGHT_SELECTION_BASE - idx : -1;
+  return sceneObjectStore.lightIndexFromSelection(idx);
 }
 
 function sceneLightRuntimeForSelection(idx: number) {
-  return sceneLights[sceneLightIndexFromSelection(idx)] ?? null;
+  return sceneObjectStore.lightRuntimeForSelection(idx);
 }
 
 function selectedSceneLightSelectionIndex() {
@@ -1558,7 +1560,7 @@ function selectedSceneLightSelectionIndex() {
 }
 
 function isGeometrySelectionIndex(idx: number) {
-  return idx === BASE_SELECTION || idx >= 0;
+  return sceneObjectStore.isGeometrySelectionIndex(idx);
 }
 
 function syncSceneLightControls() {
@@ -1915,13 +1917,11 @@ function setLightTargetForRuntime(runtime: SceneLightRuntime, target: THREE.Vect
 }
 
 function objectLabelForMaterialList(idx: number) {
-  if (idx === BASE_SELECTION) return baseLabel;
-  return extraInstances[idx]?.label ?? `Object ${idx + 1}`;
+  return sceneObjectStore.objectLabel(idx);
 }
 
 function objectMaterialId(idx: number) {
-  if (idx === BASE_SELECTION) return baseMaterialId;
-  return extraInstances[idx]?.materialId ?? '';
+  return sceneObjectStore.objectMaterialId(idx);
 }
 
 function setObjectMaterialId(idx: number, materialId: string) {
@@ -1944,19 +1944,11 @@ function setObjectMaterialId(idx: number, materialId: string) {
 }
 
 function materialUsageRows(materialId: string) {
-  const rows: { idx: number; label: string }[] = [];
-  if (M > 0 && baseMaterialId === materialId) rows.push({ idx: BASE_SELECTION, label: baseLabel });
-  extraInstances.forEach((inst, idx) => {
-    if (inst.materialId === materialId) rows.push({ idx, label: inst.label });
-  });
-  return rows;
+  return sceneObjectStore.materialUsageRows(materialId);
 }
 
 function referencedMaterialIds() {
-  const ids = new Set<string>();
-  if (M > 0) ids.add(baseMaterialId);
-  extraInstances.forEach(inst => ids.add(inst.materialId));
-  return ids;
+  return sceneObjectStore.referencedMaterialIds();
 }
 
 function reconcileSceneMaterials() {
@@ -3069,22 +3061,15 @@ sceneHistory = new SceneHistory({
 });
 
 function getObjectVisible(idx: number) {
-  if (idx === BASE_SELECTION) return M > 0 && baseVisible;
-  const lightRuntime = sceneLightRuntimeForSelection(idx);
-  if (lightRuntime) return lightRuntime.state.visible;
-  return extraInstances[idx]?.visible ?? false;
+  return sceneObjectStore.getObjectVisible(idx);
 }
 
 function normalizeSelectionIndex(idx: number) {
-  if (idx === BASE_SELECTION) return M > 0 ? BASE_SELECTION : NO_SELECTION;
-  if (isLightSelectionIndex(idx)) return idx;
-  if (idx >= 0 && extraInstances[idx]) return idx;
-  return NO_SELECTION;
+  return sceneObjectStore.normalizeSelectionIndex(idx);
 }
 
 function isSelectableObject(idx: number) {
-  const normalizedIdx = normalizeSelectionIndex(idx);
-  return normalizedIdx !== NO_SELECTION && getObjectVisible(normalizedIdx);
+  return sceneObjectStore.isSelectableObject(idx) && getObjectVisible(idx);
 }
 
 function reconcileSelection() {
@@ -5853,22 +5838,23 @@ function cancelEditBevel(token: unknown) {
 }
 
 const extraInstances: Instance[] = [];
+sceneObjectStore = new SceneObjectStore<SceneLightRuntime>({
+  baseSelection: BASE_SELECTION,
+  noSelection: NO_SELECTION,
+  lightSelectionBase: LIGHT_SELECTION_BASE,
+  getBase: () => ({
+    M,
+    label: baseLabel,
+    originalN: baseOriginalN,
+    paramsN: PARAMS.N,
+    visible: baseVisible,
+    materialId: baseMaterialId,
+  }),
+  getInstances: () => extraInstances,
+  getLights: () => sceneLights,
+});
 const objectListController = new ObjectListController({
-  getRows: () => [
-    ...(M > 0 ? [{ idx: BASE_SELECTION, label: baseLabel, dimension: baseOriginalN || PARAMS.N, visible: baseVisible }] : []),
-    ...extraInstances.map((inst, idx) => ({
-      idx,
-      label: inst.label,
-      dimension: inst.originalN,
-      visible: inst.visible,
-    })),
-    ...sceneLights.map((runtime, idx) => ({
-      idx: lightSelectionIndex(idx),
-      label: runtime.state.label,
-      dimension: runtime.state.kind === 'point' ? 'Point' : 'Dir',
-      visible: runtime.state.visible,
-    })),
-  ],
+  getRows: () => sceneObjectStore.objectRows(),
   getSelectedIndex: () => selectedInstance,
   getSelectedIndices: () => selectedInstances,
   onSelect: (idx, additive) => selectObject(idx, additive),
