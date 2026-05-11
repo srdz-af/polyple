@@ -78,6 +78,7 @@ import { WelcomeSplashController } from './ui/WelcomeSplashController';
 import { ViewportCaptureController } from './viewport/ViewportCaptureController';
 import { HypercubeRenderer } from './rendering/HypercubeRenderer';
 import { CachedGrainPass, ColorGradeShader, CopyFramePass, SmoothAfterimagePass } from './rendering/postProcessingPasses';
+import { RenderEffectsController, clamp01, clampSigned01 } from './rendering/RenderEffectsController';
 import {
   KeyframeTimelineController,
   normalizeAntialiasMode,
@@ -167,6 +168,7 @@ import type {
   TransformState,
 } from './scene/types';
 import type { ExtraAxisGizmoState } from './ui/ExtraAxisGizmoController';
+import { copyTextToClipboard, downloadTextFile, timestampedSceneFileName } from './utils/fileExport';
 type SceneLightDragHandle = 'position' | 'target';
 
 type DuplicatePlacement = {
@@ -1368,7 +1370,7 @@ async function applySceneUrlState(state: PackedSceneUrlState) {
     PARAMS.colorContrast = clampSigned01(finiteNumber(state.fx?.[5], DEFAULT_COLOR_CONTRAST));
     PARAMS.grainIntensity = clamp01(finiteNumber(state.fx?.[6], DEFAULT_GRAIN_INTENSITY));
     PARAMS.antialiasMode = normalizeAntialiasMode(state.fx?.[7] === 1 ? 'smaa' : 'off');
-    syncRenderEffects();
+    renderEffects.sync();
 
     axisController.applyExtraAxisState(state.ag);
     paneController.setCollapsed(state.pc === 1);
@@ -1455,7 +1457,7 @@ async function saveSceneStateFile() {
     const payload = await encodeSceneUrlPayload(captureSceneUrlState(nextSceneName));
     welcomeSplashController.rememberScene(payload, nextSceneName);
     const sceneUrl = createSceneUrlWithPayload(payload);
-    downloadTextFile(sceneUrl, sceneStateFileName());
+    downloadTextFile(sceneUrl, timestampedSceneFileName());
     let copied = true;
     try {
       await copyTextToClipboard(sceneUrl);
@@ -1491,45 +1493,6 @@ async function loadSceneStateFile(file: File | null | undefined) {
   } finally {
     if (sceneLoadInput) sceneLoadInput.value = '';
   }
-}
-
-function downloadTextFile(text: string, fileName: string) {
-  const blobUrl = URL.createObjectURL(new Blob([`${text}\n`], { type: 'text/plain;charset=utf-8' }));
-  const link = document.createElement('a');
-  link.href = blobUrl;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(blobUrl);
-}
-
-function sceneStateFileName() {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return `blend-scene-${stamp}.txt`;
-}
-
-async function copyTextToClipboard(text: string) {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return;
-    }
-  } catch {
-    // Fall through to legacy copy.
-  }
-
-  const input = document.createElement('textarea');
-  input.value = text;
-  input.style.position = 'fixed';
-  input.style.left = '-9999px';
-  input.style.top = '0';
-  document.body.appendChild(input);
-  input.focus();
-  input.select();
-  const copied = document.execCommand('copy');
-  input.remove();
-  if (!copied) throw new Error('Clipboard copy failed.');
 }
 
 function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
@@ -3022,77 +2985,29 @@ const PARAMS = {
   antialiasMode: DEFAULT_ANTIALIAS_MODE as AntialiasMode,
 };
 
-function clamp01(value: number) {
-  return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
-}
-
-function clampSigned01(value: number) {
-  return Math.max(-1, Math.min(1, Number.isFinite(value) ? value : 0));
-}
-
-function motionBlurBlendFromIntensity(intensity: number) {
-  if (intensity <= 0) return 0;
-  return 0.54 + (clamp01(intensity) * 0.4);
-}
-
-function syncRenderEffects() {
-  PARAMS.bloomIntensity = clamp01(PARAMS.bloomIntensity);
-  PARAMS.motionBlurIntensity = clamp01(PARAMS.motionBlurIntensity);
-  PARAMS.colorHue = clampSigned01(PARAMS.colorHue);
-  PARAMS.colorSaturation = clampSigned01(PARAMS.colorSaturation);
-  PARAMS.colorBrightness = clampSigned01(PARAMS.colorBrightness);
-  PARAMS.colorContrast = clampSigned01(PARAMS.colorContrast);
-  PARAMS.grainIntensity = clamp01(PARAMS.grainIntensity);
-  PARAMS.antialiasMode = normalizeAntialiasMode(PARAMS.antialiasMode);
-
-  bloomPass.enabled = PARAMS.bloomIntensity > 0.001;
-  bloomPass.strength = PARAMS.bloomIntensity * 1.6;
-  bloomPass.radius = 0.46 + (PARAMS.bloomIntensity * 0.28);
-  bloomPass.threshold = 0.22;
-
-  afterimagePass.enabled = PARAMS.motionBlurIntensity > 0.001;
-  afterimagePass.uniforms.blend.value = motionBlurBlendFromIntensity(PARAMS.motionBlurIntensity);
-  if (!afterimagePass.enabled) afterimagePass.reset();
-
-  colorGradePass.enabled = Math.abs(PARAMS.colorHue) > 0.001
-    || Math.abs(PARAMS.colorSaturation) > 0.001
-    || Math.abs(PARAMS.colorBrightness) > 0.001
-    || Math.abs(PARAMS.colorContrast) > 0.001;
-  colorGradePass.uniforms.hue.value = PARAMS.colorHue;
-  colorGradePass.uniforms.saturation.value = PARAMS.colorSaturation;
-  colorGradePass.uniforms.brightness.value = PARAMS.colorBrightness;
-  colorGradePass.uniforms.contrast.value = PARAMS.colorContrast;
-
-  smaaPass.enabled = PARAMS.antialiasMode === 'smaa';
-
-  grainPass.enabled = PARAMS.grainIntensity > 0.001;
-  grainPass.setIntensity(PARAMS.grainIntensity);
-
-  if (bloomIntensityInput) bloomIntensityInput.value = PARAMS.bloomIntensity.toFixed(2);
-  if (bloomIntensityValue) bloomIntensityValue.textContent = PARAMS.bloomIntensity.toFixed(2);
-  if (motionBlurIntensityInput) motionBlurIntensityInput.value = PARAMS.motionBlurIntensity.toFixed(2);
-  if (motionBlurIntensityValue) motionBlurIntensityValue.textContent = PARAMS.motionBlurIntensity.toFixed(2);
-  if (colorHueInput) colorHueInput.value = PARAMS.colorHue.toFixed(2);
-  if (colorHueValue) colorHueValue.textContent = PARAMS.colorHue.toFixed(2);
-  if (colorSaturationInput) colorSaturationInput.value = PARAMS.colorSaturation.toFixed(2);
-  if (colorSaturationValue) colorSaturationValue.textContent = PARAMS.colorSaturation.toFixed(2);
-  if (colorBrightnessInput) colorBrightnessInput.value = PARAMS.colorBrightness.toFixed(2);
-  if (colorBrightnessValue) colorBrightnessValue.textContent = PARAMS.colorBrightness.toFixed(2);
-  if (colorContrastInput) colorContrastInput.value = PARAMS.colorContrast.toFixed(2);
-  if (colorContrastValue) colorContrastValue.textContent = PARAMS.colorContrast.toFixed(2);
-  if (renderAntialiasSelect) renderAntialiasSelect.value = PARAMS.antialiasMode;
-  if (renderAntialiasValue) renderAntialiasValue.textContent = PARAMS.antialiasMode === 'smaa' ? 'SMAA' : 'Native';
-  if (grainIntensityInput) grainIntensityInput.value = PARAMS.grainIntensity.toFixed(2);
-  if (grainIntensityValue) grainIntensityValue.textContent = PARAMS.grainIntensity.toFixed(2);
-}
-
-function hasRenderEffects() {
-  return bloomPass.enabled
-    || afterimagePass.enabled
-    || colorGradePass.enabled
-    || smaaPass.enabled
-    || grainPass.enabled;
-}
+const renderEffects = new RenderEffectsController(
+  PARAMS,
+  { bloomPass, afterimagePass, colorGradePass, smaaPass, grainPass },
+  {
+    bloomIntensityInput,
+    bloomIntensityValue,
+    motionBlurIntensityInput,
+    motionBlurIntensityValue,
+    colorHueInput,
+    colorHueValue,
+    colorSaturationInput,
+    colorSaturationValue,
+    colorBrightnessInput,
+    colorBrightnessValue,
+    colorContrastInput,
+    colorContrastValue,
+    renderAntialiasSelect,
+    renderAntialiasValue,
+    grainIntensityInput,
+    grainIntensityValue,
+  },
+  requestSceneUrlUpdate,
+);
 
 function captureAnimationState(): AnimationKeyframeState {
   return {
@@ -3144,7 +3059,7 @@ function applyAnimationState(state: AnimationKeyframeState) {
   PARAMS.colorContrast = state.colorContrast;
   PARAMS.grainIntensity = state.grainIntensity;
   PARAMS.antialiasMode = state.antialiasMode;
-  syncRenderEffects();
+  renderEffects.sync();
   applyAnimationLights(state.lights);
 
   if (PARAMS.renderMode !== state.renderMode) setViewMode(state.renderMode);
@@ -3209,52 +3124,9 @@ function renderViewportFrame() {
   updateSceneLightMarkersScreenSpace();
   updateAxisGizmo();
   const renderStart = performance.now();
-  if (hasRenderEffects() || downsampleSceneOnly) renderEffectsFrame();
+  if (renderEffects.hasEffects() || downsampleSceneOnly) renderEffectsFrame();
   else renderer.render(scene, camera);
   recordPerfFrame(frameStart, projectionMs, performance.now() - renderStart);
-}
-
-function bindRenderEffectControls() {
-  const bindRange = (
-    input: HTMLInputElement | null,
-    apply: (value: number) => void,
-  ) => {
-    input?.addEventListener('input', () => {
-      apply(Number.parseFloat(input.value));
-      syncRenderEffects();
-      requestSceneUrlUpdate();
-    });
-  };
-
-  bindRange(bloomIntensityInput, value => {
-    PARAMS.bloomIntensity = clamp01(value);
-  });
-  bindRange(motionBlurIntensityInput, value => {
-    PARAMS.motionBlurIntensity = clamp01(value);
-  });
-  bindRange(colorHueInput, value => {
-    PARAMS.colorHue = clampSigned01(value);
-  });
-  bindRange(colorSaturationInput, value => {
-    PARAMS.colorSaturation = clampSigned01(value);
-  });
-  bindRange(colorBrightnessInput, value => {
-    PARAMS.colorBrightness = clampSigned01(value);
-  });
-  bindRange(colorContrastInput, value => {
-    PARAMS.colorContrast = clampSigned01(value);
-  });
-  bindRange(grainIntensityInput, value => {
-    PARAMS.grainIntensity = clamp01(value);
-  });
-
-  renderAntialiasSelect?.addEventListener('change', () => {
-    PARAMS.antialiasMode = normalizeAntialiasMode(renderAntialiasSelect.value);
-    syncRenderEffects();
-    requestSceneUrlUpdate();
-  });
-
-  syncRenderEffects();
 }
 
 transformController = new TransformController({
@@ -3981,7 +3853,7 @@ animationTimeline = new KeyframeTimelineController({
 animationTimeline.bind();
 viewportCapture.bindControls();
 modalOverlayController.bindControls();
-bindRenderEffectControls();
+renderEffects.bind();
 bindSceneLightControls();
 editModeToggle?.addEventListener('click', () => setEditMode(!PARAMS.editMode));
 mobileFullscreenToggle?.addEventListener('click', () => void toggleMobileFullscreen());
