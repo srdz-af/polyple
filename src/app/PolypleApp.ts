@@ -37,7 +37,6 @@ import { KeyboardCameraController } from '../controls/KeyboardCameraController';
 import { KeyboardShortcutController } from '../interaction/KeyboardShortcutController';
 import { TransformController } from '../interaction/TransformController';
 import { ViewportInteractionController, viewportContextMenuFromDocument } from '../interaction/ViewportInteractionController';
-import type { ViewportOperation } from '../interaction/ViewportOperationManager';
 import { createBidirectionalAxes, createFadingGrid } from '../viewport/grid';
 import { AxisGizmoController } from '../ui/AxisGizmoController';
 import { DimensionControlController } from '../ui/DimensionControlController';
@@ -47,7 +46,6 @@ import { ObjectListController } from '../ui/ObjectListController';
 import { PaneController } from '../ui/PaneController';
 import { SceneControlTabsController } from '../ui/SceneControlTabsController';
 import { SceneFileControlsController } from '../ui/SceneFileControlsController';
-import { SceneLightPanelController } from '../ui/SceneLightPanelController';
 import { TextureEditorController } from '../ui/TextureEditorController';
 import { ViewModeController } from '../ui/ViewModeController';
 import { ViewportActionControlsController } from '../ui/ViewportActionControlsController';
@@ -78,15 +76,8 @@ import { SceneMaterialService } from '../scene/SceneMaterialService';
 import { SceneObjectStore } from '../scene/SceneObjectStore';
 import { SceneSelectionService } from '../scene/SceneSelectionService';
 import { SceneHistory } from '../scene/SceneHistory';
-import {
-  cloneSceneLightState,
-  createSceneLightRuntime,
-  disposeSceneLightRuntime,
-  normalizeSceneLightState,
-  rebuildSceneLightRuntimeKind,
-  syncSceneLightRuntime,
-  type SceneLightRuntime,
-} from '../scene/sceneLightRuntime';
+import { SceneLightService } from '../scene/SceneLightService';
+import type { SceneLightRuntime } from '../scene/sceneLightRuntime';
 import {
   deriveCellTopologyForGeometry,
   packCellTopologyForUrl,
@@ -152,8 +143,6 @@ export class PolypleApp {
   constructor(private readonly app: HTMLElement) {}
 
   start() {
-    type SceneLightDragHandle = 'position' | 'target';
-    
     const DEFAULT_BLOOM_INTENSITY = 0;
     const DEFAULT_MOTION_BLUR_INTENSITY = 0;
     const DEFAULT_COLOR_HUE = 0;
@@ -166,17 +155,7 @@ export class PolypleApp {
     const POSTPROCESSING_MSAA_SAMPLES = 4;
     const GRAIN_UPDATE_INTERVAL_FRAMES = 3;
     const GRAIN_TEXTURE_SCALE = 0.5;
-    const SCENE_LIGHT_MARKER_RADIUS = 0.025;
-    const SCENE_LIGHT_MARKER_PIXEL_DIAMETER = 11;
-    const SELECTED_SCENE_LIGHT_MARKER_PIXEL_DIAMETER = 15;
-    const SCENE_LIGHT_TARGET_PIXEL_DIAMETER = 10;
     const MAX_UNDO_SNAPSHOT_BYTES = 64 * 1024 * 1024;
-    const SHADOW_MAP_SIZE_BY_QUALITY: Record<RenderQuality, number> = {
-      full: 2048,
-      high: 1024,
-      medium: 512,
-      low: 0,
-    };
     
     let sceneUrlApplying = false;
     
@@ -304,8 +283,8 @@ export class PolypleApp {
       composer.setPixelRatio(scenePixelRatio);
       composer.setSize(captureResolutionViewportSize.x, captureResolutionViewportSize.y);
       if (qualityChanged) markProjectionDirty();
-      syncSceneLightRuntimes();
-      sceneLightPanel.sync();
+      sceneLightService?.syncRuntimes();
+      sceneLightService?.syncPanel();
     }
     
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -327,6 +306,7 @@ export class PolypleApp {
     const applyAutoRotation = (dt: number) => axisController.applyAutoRotation(dt);
     let projectionPipeline: ProjectionPipeline | null = null;
     let renderSync: RenderSyncService;
+    let sceneLightService: SceneLightService;
     let sceneMaterialService: SceneMaterialService;
     let sceneObjectStore: SceneObjectStore<SceneLightRuntime>;
     let geometryEditService: GeometryEditService<PackedSceneUrlState>;
@@ -447,21 +427,6 @@ export class PolypleApp {
     const raycaster = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
     
-    let sceneLightIdCounter = 1;
-    const sceneLights: SceneLightRuntime[] = [];
-    const sceneLightMarkerGeometry = new THREE.SphereGeometry(SCENE_LIGHT_MARKER_RADIUS, 12, 8);
-    const sceneLightDrag = {
-      active: false,
-      moved: false,
-      pointerId: -1,
-      lightId: '',
-      handle: 'position' as SceneLightDragHandle,
-      controlsEnabled: true,
-      plane: new THREE.Plane(),
-      startHit: new THREE.Vector3(),
-      startPosition: new THREE.Vector3(),
-      startTarget: new THREE.Vector3(),
-    };
     const axes = createBidirectionalAxes(1000);
     scene.add(axes);
     const gridGroup = createFadingGrid({ y: 0 });
@@ -536,388 +501,82 @@ export class PolypleApp {
         requestSceneUrlUpdate();
       },
     });
+    sceneLightService = new SceneLightService({
+      scene,
+      renderer,
+      camera,
+      controls,
+      raycaster,
+      ndc,
+      lightSelectionBase: LIGHT_SELECTION_BASE,
+      noSelection: NO_SELECTION,
+      getRenderQuality: () => currentRenderQuality,
+      getEditMode: () => PARAMS.editMode,
+      getSelectedItems: () => selectionService?.items ?? [],
+      getSelectedLightId: () => selectionService?.lightId ?? '',
+      setSelectedLightId: id => selectionService?.setLightId(id),
+      clearSelection: () => selectionService?.clear(),
+      repairSelectionAfterLightRemoval: removedSelection => selectionService?.repairAfterLightRemoval(removedSelection),
+      selectObject: (idx, additive) => selectObject(idx, additive),
+      setSceneControlTab: tab => setSceneControlTab(tab),
+      isTransformActive: () => transformController?.isActive() ?? false,
+      isTransformGizmoDragging: () => transformController?.isGizmoDragging() ?? false,
+      pushUndoSnapshot,
+      runImmediateOperation: (kind, scope, commit) => {
+        if (viewportInteraction) viewportInteraction.runImmediateOperation(kind, scope, commit);
+        else commit();
+      },
+      requestSceneUrlUpdate,
+      updateObjectList,
+      updateSelectionOutline,
+      updateTransformActionButtons,
+    });
     function createSceneLightId() {
-      return `light_${sceneLightIdCounter++}`;
-    }
-    
-    function syncSceneLightIdCounter() {
-      let max = 0;
-      for (const { state } of sceneLights) {
-        const match = /^light_(\d+)$/.exec(state.id);
-        if (match) max = Math.max(max, Number.parseInt(match[1], 10));
-      }
-      sceneLightIdCounter = Math.max(sceneLightIdCounter, max + 1);
-    }
-    
-    function sceneLightRuntimeOptions(selected = false) {
-      return {
-        scene,
-        markerGeometry: sceneLightMarkerGeometry,
-        createId: createSceneLightId,
-        shadowMapSize: currentShadowMapSize,
-        selected,
-      };
-    }
-    
-    function currentShadowMapSize() {
-      return SHADOW_MAP_SIZE_BY_QUALITY[currentRenderQuality] ?? SHADOW_MAP_SIZE_BY_QUALITY.full;
-    }
-    
-    function syncRendererShadowState() {
-      const shadowMapSize = currentShadowMapSize();
-      const enabled = shadowMapSize > 0 && sceneLights.some(runtime => runtime.state.visible && runtime.state.castShadow);
-      renderer.shadowMap.enabled = enabled;
-      renderer.shadowMap.needsUpdate = enabled;
-    }
-    
-    function syncSceneLightRuntimes() {
-      sceneLights.forEach(runtime => {
-        const lightIndex = sceneLights.indexOf(runtime);
-        syncSceneLightRuntime(runtime, sceneLightRuntimeOptions(
-          lightIndex >= 0 && selectionService.items.includes(lightSelectionIndex(lightIndex)),
-        ));
-      });
-      syncRendererShadowState();
+      return sceneLightService.createId();
     }
     
     function setSceneLights(states: SceneLightState[]) {
-      sceneLights.splice(0).forEach(runtime => disposeSceneLightRuntime(scene, runtime));
-      states.forEach(state => {
-        sceneLights.push(createSceneLightRuntime(state, sceneLightRuntimeOptions(false)));
-      });
-      syncSceneLightIdCounter();
-      if (!sceneLights.some(runtime => runtime.state.id === selectionService.lightId)) {
-        selectionService.setLightId(sceneLights[0]?.state.id ?? '');
-      }
-      syncSceneLightRuntimes();
-      sceneLightPanel.sync();
-    }
-    
-    function applyAnimationLights(states: SceneLightState[] | undefined) {
-      if (!states) return;
-      const compatible = states.length === sceneLights.length
-        && states.every((state, index) => sceneLights[index]?.state.id === state.id && sceneLights[index]?.state.kind === state.kind);
-    
-      if (!compatible) {
-        setSceneLights(states.map(cloneSceneLightState));
-        updateObjectList();
-        return;
-      }
-    
-      states.forEach((state, index) => {
-        sceneLights[index].state = cloneSceneLightState(state);
-      });
-      syncSceneLightRuntimes();
-      sceneLightPanel.sync();
+      sceneLightService.setLights(states);
     }
     
     function selectedSceneLightRuntime() {
-      return selectionService?.selectedLightRuntime() ?? sceneLights.find(runtime => runtime.state.id === selectionService?.lightId) ?? null;
+      return sceneLightService?.selectedRuntime() ?? null;
     }
     
     function lightSelectionIndex(lightIndex: number) {
-      return selectionService?.lightSelectionIndex(lightIndex) ?? sceneObjectStore.lightSelectionIndex(lightIndex);
+      return sceneLightService.lightSelectionIndex(lightIndex);
     }
     
     function isLightSelectionIndex(idx: number) {
-      return selectionService?.isLightSelectionIndex(idx) ?? sceneObjectStore.isLightSelectionIndex(idx);
+      return sceneLightService?.isLightSelectionIndex(idx) ?? false;
     }
     
     function sceneLightIndexFromSelection(idx: number) {
-      return selectionService?.lightIndexFromSelection(idx) ?? sceneObjectStore.lightIndexFromSelection(idx);
+      return sceneLightService?.indexFromSelection(idx) ?? -1;
     }
     
     function sceneLightRuntimeForSelection(idx: number) {
-      return selectionService?.lightRuntimeForSelection(idx) ?? sceneObjectStore.lightRuntimeForSelection(idx);
+      return sceneLightService?.runtimeForSelection(idx) ?? null;
     }
     
     function selectedSceneLightSelectionIndex() {
-      return selectionService?.selectedLightSelectionIndex() ?? NO_SELECTION;
+      return sceneLightService?.selectedSelectionIndex() ?? NO_SELECTION;
     }
     
     function isGeometrySelectionIndex(idx: number) {
       return selectionService?.isGeometrySelectionIndex(idx) ?? sceneObjectStore.isGeometrySelectionIndex(idx);
     }
     
-    const sceneLightPanel = new SceneLightPanelController({
-      getLights: () => sceneLights,
-      getSelected: selectedSceneLightRuntime,
-      selectLight: id => {
-        selectionService.setLightId(id);
-        selectObject(selectedSceneLightSelectionIndex());
-      },
-      setKind: setSelectedSceneLightKind,
-      removeSelected: removeSelectedSceneLight,
-      setShadow: enabled => updateSelectedSceneLight(state => {
-        state.castShadow = enabled;
-      }),
-      setColor: color => updateSelectedSceneLight(state => {
-        state.color = color;
-      }),
-      setIntensity: intensity => updateSelectedSceneLight(state => {
-        state.intensity = intensity;
-      }),
-      currentShadowMapSize,
-      syncRuntimes: syncSceneLightRuntimes,
-    });
-    
-    function performRemoveSelectedSceneLight() {
-      const selected = selectedSceneLightRuntime();
-      if (!selected) return;
-      pushUndoSnapshot();
-      const index = sceneLights.indexOf(selected);
-      const removedSelection = lightSelectionIndex(index);
-      sceneLights.splice(index, 1);
-      disposeSceneLightRuntime(scene, selected);
-      selectionService.setLightId(sceneLights[Math.min(index, sceneLights.length - 1)]?.state.id ?? '');
-      selectionService.repairAfterLightRemoval(removedSelection);
-      sceneLightPanel.sync();
-      updateObjectList();
-      updateSelectionOutline();
-      updateTransformActionButtons();
-      requestSceneUrlUpdate();
-    }
-    
-    function removeSelectedSceneLight() {
-      if (viewportInteraction) viewportInteraction.runImmediateOperation('remove-scene-light', 'light', performRemoveSelectedSceneLight);
-      else performRemoveSelectedSceneLight();
-    }
-    
-    function performUpdateSelectedSceneLight(mutator: (state: SceneLightState) => void) {
-      const selected = selectedSceneLightRuntime();
-      if (!selected) return;
-      const previousKind = selected.state.kind;
-      pushUndoSnapshot();
-      mutator(selected.state);
-      selected.state = normalizeSceneLightState(selected.state);
-      const selectedLightIdx = selectedSceneLightSelectionIndex();
-      if (!selected.state.visible && selectionService.items.includes(selectedLightIdx)) {
-        selectionService.clear();
-      }
-      if (selected.state.kind !== previousKind) {
-        rebuildSceneLightRuntimeKind(selected, sceneLightRuntimeOptions(false));
-      }
-      syncSceneLightRuntimes();
-      sceneLightPanel.sync();
-      updateObjectList();
-      updateTransformActionButtons();
-      requestSceneUrlUpdate();
-    }
-    
-    function updateSelectedSceneLight(mutator: (state: SceneLightState) => void) {
-      const commit = () => performUpdateSelectedSceneLight(mutator);
-      if (viewportInteraction) viewportInteraction.runImmediateOperation('update-scene-light', 'light', commit);
-      else commit();
-    }
-    
-    function setSelectedSceneLightKind(kind: SceneLightKind) {
-      const selected = selectedSceneLightRuntime();
-      if (!selected || selected.state.kind === kind) return;
-      updateSelectedSceneLight(state => {
-        state.kind = kind;
-      });
-    }
-    
-    function sceneLightMarkerScale(position: THREE.Vector3, pixelDiameter: number) {
-      const viewportHeight = Math.max(1, renderer.domElement.clientHeight || renderer.domElement.height);
-      const cameraSpace = tmpVec.copy(position).applyMatrix4(camera.matrixWorldInverse);
-      const distance = Math.max(0.01, Math.abs(cameraSpace.z));
-      const visibleHeight = (2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5)) / camera.zoom;
-      const worldDiameter = (pixelDiameter / viewportHeight) * visibleHeight;
-      return Math.max(0.01, worldDiameter / (SCENE_LIGHT_MARKER_RADIUS * 2));
-    }
-    
-    function updateSceneLightMarkersScreenSpace() {
-      sceneLights.forEach(runtime => {
-        const lightIndex = sceneLights.indexOf(runtime);
-        const selected = lightIndex >= 0 && selectionService.items.includes(lightSelectionIndex(lightIndex));
-        if (runtime.marker.visible) {
-          runtime.marker.scale.setScalar(sceneLightMarkerScale(
-            runtime.marker.position,
-            selected ? SELECTED_SCENE_LIGHT_MARKER_PIXEL_DIAMETER : SCENE_LIGHT_MARKER_PIXEL_DIAMETER,
-          ));
-        }
-        if (runtime.targetMarker.visible) {
-          runtime.targetMarker.scale.setScalar(sceneLightMarkerScale(runtime.targetMarker.position, SCENE_LIGHT_TARGET_PIXEL_DIAMETER));
-        }
-      });
-    }
-    
-    function pickSceneLightHandle(ev: PointerEvent) {
-      const markers = sceneLights
-        .flatMap(runtime => [runtime.targetMarker, runtime.marker])
-        .filter(marker => marker.visible);
-      if (!markers.length) return null;
-    
-      const rect = renderer.domElement.getBoundingClientRect();
-      ndc.set(
-        ((ev.clientX - rect.left) / rect.width) * 2 - 1,
-        -((ev.clientY - rect.top) / rect.height) * 2 + 1,
-      );
-      raycaster.setFromCamera(ndc, camera);
-      const hit = raycaster.intersectObjects(markers, false)[0];
-      const lightId = hit?.object.userData.sceneLightId;
-      if (typeof lightId !== 'string') return null;
-      const runtime = sceneLights.find(entry => entry.state.id === lightId) ?? null;
-      if (!runtime) return null;
-      const handle: SceneLightDragHandle = hit.object.userData.sceneLightHandle === 'target' ? 'target' : 'position';
-      return { runtime, handle };
-    }
-    
-    function createSceneLightDragOperation(ev: PointerEvent): ViewportOperation | null {
-      if (ev.button !== 0 || PARAMS.editMode || transformController.isActive() || transformController.isGizmoDragging()) return null;
-      const lightHit = pickSceneLightHandle(ev);
-      if (!lightHit) return null;
-    
-      selectionService.setLightId(lightHit.runtime.state.id);
-      selectObject(selectedSceneLightSelectionIndex());
-      const runtime = lightHit.runtime;
-      const handle = lightHit.handle;
-      const dragPoint = handle === 'target' ? runtime.state.target : runtime.state.position;
-      camera.getWorldDirection(tmpVec).normalize();
-      sceneLightDrag.plane.setFromNormalAndCoplanarPoint(tmpVec, dragPoint);
-      raycaster.setFromCamera(ndc, camera);
-      const planeHit = raycaster.ray.intersectPlane(sceneLightDrag.plane, tmpVec);
-      sceneLightDrag.active = true;
-      sceneLightDrag.moved = false;
-      sceneLightDrag.pointerId = ev.pointerId;
-      sceneLightDrag.lightId = runtime.state.id;
-      sceneLightDrag.handle = handle;
-      sceneLightDrag.controlsEnabled = controls.enabled;
-      sceneLightDrag.startPosition.copy(runtime.state.position);
-      sceneLightDrag.startTarget.copy(runtime.state.target);
-      sceneLightDrag.startHit.copy(planeHit ?? dragPoint);
-      controls.enabled = false;
-      try {
-        renderer.domElement.setPointerCapture(ev.pointerId);
-      } catch {
-        // Window handlers still keep the drag alive if pointer capture is unavailable.
-      }
-      return {
-        kind: 'scene-light-drag',
-        scope: 'light',
-        blocksCamera: true,
-        blocksSelection: true,
-        blocksContextMenu: true,
-        usesPointerCapture: true,
-        usesPointerLock: true,
-        updatePointer: (point, pointerEvent) => (pointerEvent ? updateSceneLightDrag(pointerEvent, point) : false),
-        commit: () => {
-          endSceneLightDrag(null, true);
-        },
-        cancel: () => {
-          endSceneLightDrag(null, false);
-        },
-        cleanup: () => {
-          try {
-            if (renderer.domElement.hasPointerCapture(sceneLightDrag.pointerId)) {
-              renderer.domElement.releasePointerCapture(sceneLightDrag.pointerId);
-            }
-          } catch {
-            // Pointer capture release is best-effort.
-          }
-        },
-      };
-    }
-    
-    function updateSceneLightDrag(ev: PointerEvent, point: { clientX: number; clientY: number } = ev) {
-      if (!sceneLightDrag.active || ev.pointerId !== sceneLightDrag.pointerId) return false;
-      const runtime = sceneLights.find(entry => entry.state.id === sceneLightDrag.lightId);
-      if (!runtime) return false;
-    
-      const rect = renderer.domElement.getBoundingClientRect();
-      ndc.set(
-        ((point.clientX - rect.left) / rect.width) * 2 - 1,
-        -((point.clientY - rect.top) / rect.height) * 2 + 1,
-      );
-      raycaster.setFromCamera(ndc, camera);
-      const hit = raycaster.ray.intersectPlane(sceneLightDrag.plane, tmpVec);
-      if (!hit) return true;
-    
-      const nextPoint = (sceneLightDrag.handle === 'target' ? sceneLightDrag.startTarget : sceneLightDrag.startPosition)
-        .clone()
-        .add(hit.sub(sceneLightDrag.startHit));
-      const movedDistance = sceneLightDrag.handle === 'target'
-        ? nextPoint.distanceToSquared(sceneLightDrag.startTarget)
-        : nextPoint.distanceToSquared(sceneLightDrag.startPosition);
-      if (!sceneLightDrag.moved && movedDistance > 1e-8) {
-        pushUndoSnapshot();
-        sceneLightDrag.moved = true;
-      }
-      if (sceneLightDrag.handle === 'target') {
-        setLightTargetForRuntime(runtime, nextPoint);
-      } else {
-        setLightPositionForSelection(lightSelectionIndex(sceneLights.indexOf(runtime)), nextPoint);
-      }
-      ev.preventDefault();
-      return true;
-    }
-    
-    function endSceneLightDrag(ev: PointerEvent | null, commit: boolean) {
-      if (!sceneLightDrag.active || (ev && ev.pointerId !== sceneLightDrag.pointerId)) return false;
-      try {
-        if (renderer.domElement.hasPointerCapture(sceneLightDrag.pointerId)) {
-          renderer.domElement.releasePointerCapture(sceneLightDrag.pointerId);
-        }
-      } catch {
-        // Pointer capture release is best-effort.
-      }
-      if (!commit) {
-        const runtime = sceneLights.find(entry => entry.state.id === sceneLightDrag.lightId);
-        if (runtime) {
-          runtime.state.position.copy(sceneLightDrag.startPosition);
-          runtime.state.target.copy(sceneLightDrag.startTarget);
-        }
-      }
-      controls.enabled = sceneLightDrag.controlsEnabled;
-      sceneLightDrag.active = false;
-      sceneLightDrag.pointerId = -1;
-      sceneLightDrag.lightId = '';
-      sceneLightDrag.handle = 'position';
-      sceneLightDrag.moved = false;
-      sceneLightPanel.sync();
-      if (commit) requestSceneUrlUpdate();
-      ev?.preventDefault();
-      return true;
-    }
-    
-    function cancelSceneLightDrag() {
-      if (!sceneLightDrag.active) return false;
-      const runtime = sceneLights.find(entry => entry.state.id === sceneLightDrag.lightId);
-      if (runtime) {
-        runtime.state.position.copy(sceneLightDrag.startPosition);
-        runtime.state.target.copy(sceneLightDrag.startTarget);
-      }
-      controls.enabled = sceneLightDrag.controlsEnabled;
-      sceneLightDrag.active = false;
-      sceneLightDrag.pointerId = -1;
-      sceneLightDrag.lightId = '';
-      sceneLightDrag.handle = 'position';
-      sceneLightDrag.moved = false;
-      sceneLightPanel.sync();
-      return true;
-    }
-    
     function getLightPositionForSelection(idx: number) {
-      return sceneLightRuntimeForSelection(idx)?.state.position.clone() ?? null;
+      return sceneLightService.getPositionForSelection(idx);
     }
     
     function setLightPositionForSelection(idx: number, position: THREE.Vector3) {
-      const runtime = sceneLightRuntimeForSelection(idx);
-      if (!runtime) return;
-      const delta = position.clone().sub(runtime.state.position);
-      runtime.state.position.copy(position);
-      if (runtime.state.kind === 'directional') runtime.state.target.add(delta);
-      syncSceneLightRuntimes();
-      requestSceneUrlUpdate();
+      sceneLightService.setPositionForSelection(idx, position);
     }
-    
-    function setLightTargetForRuntime(runtime: SceneLightRuntime, target: THREE.Vector3) {
-      if (runtime.state.kind !== 'directional') return;
-      if (target.distanceToSquared(runtime.state.position) < 1e-8) return;
-      runtime.state.target.copy(target);
-      syncSceneLightRuntimes();
-      requestSceneUrlUpdate();
+
+    function createSceneLightDragOperation(ev: PointerEvent) {
+      return sceneLightService.createDragOperation(ev);
     }
     
     function objectMaterialId(idx: number) {
@@ -1010,7 +669,7 @@ export class PolypleApp {
         i: snap.instances.map(packInstanceState),
         c: packCameraState(),
         bg: packBackgroundState(backgroundController.getUrlState()),
-        li: sceneLights.map(runtime => packSceneLightState(runtime.state)),
+        li: sceneLightService.getLightStates().map(packSceneLightState),
         tl: animationTimeline ? packTimelineState(animationTimeline.getTimelineState()) : undefined,
         pc: paneController.isCollapsed ? 1 : 0,
         ag: axisController.getExtraAxisState(),
@@ -1201,11 +860,7 @@ export class PolypleApp {
           materialId: inst.materialId,
           surface: cloneSurface(inst.surface),
         })),
-        lights: sceneLights.map(runtime => ({
-          ...runtime.state,
-          position: runtime.state.position.clone(),
-          target: runtime.state.target.clone(),
-        })),
+        lights: sceneLightService.getLightStates(),
       };
     }
     
@@ -1289,11 +944,7 @@ export class PolypleApp {
       sceneMaterialService.reconcile();
       if (M > 0) sceneMaterialService.setObjectMaterialId(BASE_SELECTION, baseMaterialId);
       extraInstances.forEach((inst, idx) => sceneMaterialService.setObjectMaterialId(idx, inst.materialId));
-      setSceneLights((snap.lights ?? []).map(lightState => ({
-        ...lightState,
-        position: lightState.position.clone(),
-        target: lightState.target?.clone() ?? new THREE.Vector3(),
-      })));
+      setSceneLights(snap.lights ?? []);
       selectionService.setSnapshot(snap.selectedInstance, snap.selectedInstances ?? [snap.selectedInstance]);
       reconcileSelection();
       projectAndRenderAll();
@@ -1344,7 +995,7 @@ export class PolypleApp {
       }
       reconcileSelection();
       selectObject(selectionService.primary, selectionService.primary !== NO_SELECTION);
-      sceneLightPanel.sync();
+      sceneLightService.syncPanel();
       requestSceneUrlUpdate();
     }
     
@@ -1375,7 +1026,7 @@ export class PolypleApp {
       } else if (lightRuntime) {
         lightRuntime.state.label = label;
         selectionService.setLightId(lightRuntime.state.id);
-        sceneLightPanel.sync();
+        sceneLightService.syncPanel();
       } else {
         extraInstances[idx].label = label;
       }
@@ -1541,7 +1192,7 @@ export class PolypleApp {
         const delta = position.clone().sub(lightRuntime.state.position);
         lightRuntime.state.position.copy(position);
         if (lightRuntime.state.kind === 'directional') lightRuntime.state.target.add(delta);
-        syncSceneLightRuntimes();
+        sceneLightService.syncRuntimes();
         return true;
       }
     
@@ -1696,17 +1347,16 @@ export class PolypleApp {
         extraInstances.splice(idx, 1);
       }
       for (const idx of deleteLightIndices) {
-        const runtime = sceneLights[idx];
+        const runtime = sceneLightService.getLights()[idx];
         if (!runtime) continue;
-        sceneLights.splice(idx, 1);
-        disposeSceneLightRuntime(scene, runtime);
+        sceneLightService.removeRuntime(runtime);
       }
-      if (deleteLightIndices.length) selectionService.setLightId(sceneLights[0]?.state.id ?? '');
+      if (deleteLightIndices.length) sceneLightService.ensureSelectedId();
       if (keepBaseSelected) selectionService.setSnapshot(BASE_SELECTION, [BASE_SELECTION]);
       else selectionService.clear();
       sceneMaterialService.reconcile();
       projectAndRenderAll();
-      sceneLightPanel.sync();
+      sceneLightService.syncPanel();
       updateObjectList();
       selectObject(selectionService.primary);
       requestSceneUrlUpdate();
@@ -1784,7 +1434,7 @@ export class PolypleApp {
         materialId: baseMaterialId,
       }),
       getInstances: () => extraInstances,
-      getLights: () => sceneLights,
+      getLights: () => sceneLightService.getLights(),
     });
     sceneMaterialService = new SceneMaterialService({
       baseSelection: BASE_SELECTION,
@@ -1925,7 +1575,7 @@ export class PolypleApp {
         cameraUp: camera.up.clone(),
         cameraFov: camera.fov,
         cameraZoom: camera.zoom,
-        lights: sceneLights.map(runtime => cloneSceneLightState(runtime.state)),
+        lights: sceneLightService.getLightStates(),
       };
     }
     
@@ -1956,7 +1606,7 @@ export class PolypleApp {
       PARAMS.grainIntensity = state.grainIntensity;
       PARAMS.antialiasMode = state.antialiasMode;
       renderEffects.sync();
-      applyAnimationLights(state.lights);
+      sceneLightService.applyAnimationLights(state.lights);
     
       if (PARAMS.renderMode !== state.renderMode) setViewMode(state.renderMode);
     
@@ -2017,7 +1667,7 @@ export class PolypleApp {
       const projectionMs = projectIfDirty();
       controls.update();
       transformController.updateScreenSpaceMarkerScales();
-      updateSceneLightMarkersScreenSpace();
+      sceneLightService.updateScreenSpaceMarkers();
       updateAxisGizmo();
       const renderStart = performance.now();
       if (renderEffects.hasEffects() || downsampleSceneOnly) renderEffectsFrame();
@@ -2066,7 +1716,7 @@ export class PolypleApp {
       baseSelection: BASE_SELECTION,
       noSelection: NO_SELECTION,
       getObjectStore: () => sceneObjectStore,
-      getLights: () => sceneLights,
+      getLights: () => sceneLightService.getLights(),
       getEditMode: () => PARAMS.editMode,
       getBaseRenderer: () => rendererND,
       getInstanceRenderer: idx => extraInstances[idx]?.renderer,
@@ -2079,7 +1729,7 @@ export class PolypleApp {
       updateObjectList,
       updateSelectionOutline,
       updateVertexCloud,
-      syncSceneLightPanel: () => sceneLightPanel.sync(),
+      syncSceneLightPanel: () => sceneLightService.syncPanel(),
       updateTexturePanel: () => textureEditor.updatePanel(),
       updateTransformActionButtons,
       requestSceneUrlUpdate,
@@ -2207,23 +1857,9 @@ export class PolypleApp {
       isGeometrySelectionIndex,
       captureUndoSnapshot: captureSceneUrlState,
       pushUndoSnapshot: snapshot => sceneHistory.push(snapshot),
-      createLightDuplicate: (idx, position) => {
-        const lightRuntime = sceneLightRuntimeForSelection(idx);
-        if (!lightRuntime) return null;
-        const state = cloneSceneLightState(lightRuntime.state);
-        const delta = position.clone().sub(state.position);
-        state.id = createSceneLightId();
-        state.label = duplicateLabel(state.label);
-        state.position.copy(position);
-        if (state.kind === 'directional') state.target.add(delta);
-        const runtime = createSceneLightRuntime(state, sceneLightRuntimeOptions(false));
-        sceneLights.push(runtime);
-        selectionService.setLightId(state.id);
-        selectObject(lightSelectionIndex(sceneLights.length - 1));
-        updateObjectList();
-        sceneLightPanel.sync();
-        return runtime;
-      },
+      createLightDuplicate: (idx, position) => (
+        sceneLightService.duplicateFromSelection(idx, position, duplicateLabel)
+      ),
       createInstanceDuplicate: (idx, position) => {
         const snapshot = instanceSnapshotForSelection(idx);
         if (!snapshot) return null;
@@ -2238,7 +1874,7 @@ export class PolypleApp {
         return instance;
       },
       moveLightDuplicate: (runtime, position) => {
-        const idx = sceneLights.indexOf(runtime);
+        const idx = sceneLightService.indexOf(runtime);
         if (idx >= 0) moveObjectOriginToWorldPosition(lightSelectionIndex(idx), position);
       },
       moveInstanceDuplicate: (instance, position) => {
@@ -2246,11 +1882,7 @@ export class PolypleApp {
         if (idx >= 0) moveObjectOriginToWorldPosition(idx, position);
       },
       removeLightDuplicate: runtime => {
-        const idx = sceneLights.indexOf(runtime);
-        if (idx >= 0) {
-          sceneLights.splice(idx, 1);
-          disposeSceneLightRuntime(scene, runtime);
-        }
+        sceneLightService.removeRuntime(runtime);
       },
       removeInstanceDuplicate: instance => {
         const idx = extraInstances.indexOf(instance);
@@ -2268,14 +1900,14 @@ export class PolypleApp {
       refreshAfterRestoreSelection: () => {
         updateObjectList();
         updateSelectionOutline();
-        sceneLightPanel.sync();
+        sceneLightService.syncPanel();
         textureEditor.updatePanel();
         updateTransformActionButtons();
       },
       refreshAfterCommit: () => {
         updateObjectList();
         updateSelectionOutline();
-        sceneLightPanel.sync();
+        sceneLightService.syncPanel();
         textureEditor.updatePanel();
         requestSceneUrlUpdate();
       },
@@ -2558,25 +2190,7 @@ export class PolypleApp {
     }
     
     function addSceneLightAt(kind: SceneLightKind, position: THREE.Vector3) {
-      const index = sceneLights.filter(runtime => runtime.state.kind === kind).length + 1;
-      const label = `${kind === 'point' ? 'Point' : 'Directional'} light ${index}`;
-      const target = kind === 'directional' && position.lengthSq() < 1e-8
-        ? new THREE.Vector3(0, -1, 0)
-        : new THREE.Vector3();
-      const state = normalizeSceneLightState({
-        id: createSceneLightId(),
-        kind,
-        label,
-        position: position.clone(),
-        target,
-      });
-      sceneLights.push(createSceneLightRuntime(state, sceneLightRuntimeOptions(false)));
-      selectionService.setLightId(state.id);
-      selectObject(lightSelectionIndex(sceneLights.length - 1));
-      setSceneControlTab('lights');
-      updateObjectList();
-      sceneLightPanel.sync();
-      requestSceneUrlUpdate();
+      sceneLightService.addLightAt(kind, position);
     }
     
     function clearExtraInstances() {
@@ -2758,7 +2372,7 @@ export class PolypleApp {
     viewportCapture.bindControls();
     modalOverlayController.bindControls();
     renderEffects.bind();
-    sceneLightPanel.bind();
+    sceneLightService.bindPanel();
     editToolbar?.bind();
     dimensionControl.bind();
     sceneFileControls.bind();
