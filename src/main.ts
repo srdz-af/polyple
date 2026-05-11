@@ -72,6 +72,7 @@ import { createSceneInstance, type InstanceGeometryData } from './scene/instance
 import { DEFAULT_SCENE_STATE } from './scene/defaultSceneState';
 import { cloneObjectOrigin, computeObjectOrigin, type ObjectOrigin } from './scene/objectOrigin';
 import { ProjectionPipeline } from './scene/ProjectionPipeline';
+import { RenderSyncService } from './scene/RenderSyncService';
 import { SceneHistory } from './scene/SceneHistory';
 import {
   clearScenePayloadFromCurrentUrl,
@@ -873,6 +874,7 @@ const updateAxisLegend = () => axisController.updateAxisLegend();
 const updateAxisGizmo = () => axisController.updateAxisGizmo();
 const applyAutoRotation = (dt: number) => axisController.applyAutoRotation(dt);
 let projectionPipeline: ProjectionPipeline | null = null;
+let renderSync: RenderSyncService;
 let projectionDirty = true;
 
 function markProjectionDirty() {
@@ -4838,9 +4840,7 @@ function deleteSelectedEditCell() {
     baseCellTopology = deletion.topology;
     baseSurfaceTopology = surfaceTopologyForEditedCellTopology(baseCellTopology);
     if (M > 0) {
-      rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
-      rendererND.setSurface(baseSurface);
-      rendererND.setMode(PARAMS.renderMode);
+      renderSync.rebuildBaseRenderer();
     } else {
       baseVisible = false;
       baseOrigin = new Float32Array(MAX_N);
@@ -4856,9 +4856,7 @@ function deleteSelectedEditCell() {
     target.cellTopology = deletion.topology;
     target.surfaceTopology = surfaceTopologyForEditedCellTopology(target.cellTopology);
     if (target.M > 0) {
-      target.renderer.build(target.M, target.E, target.surfaceTopology, target.cellTopology);
-      target.renderer.setSurface(target.surface);
-      target.renderer.setMode(PARAMS.renderMode);
+      renderSync.rebuildInstanceRenderer(target);
     } else {
       target.renderer.destroy();
       extraInstances.splice(selectedInstance, 1);
@@ -4869,13 +4867,7 @@ function deleteSelectedEditCell() {
 
   reconcileSelection();
   reconcileSceneMaterials();
-  projectAndRenderAll();
-  applyObjectVisibility();
-  updateObjectList();
-  updateSelectionOutline();
-  updateTransformActionButtons();
-  if (PARAMS.editMode && getObjectVisible(selectedInstance)) updateVertexCloud(selectedInstance);
-  requestSceneUrlUpdate();
+  renderSync.refreshAfterGeometryChange(selectedInstance);
 }
 
 function selectedGeometryDimension() {
@@ -4885,13 +4877,7 @@ function selectedGeometryDimension() {
 }
 
 function finalizeCommittedGeometryEdit() {
-  projectAndRenderAll();
-  applyObjectVisibility();
-  updateObjectList();
-  updateSelectionOutline();
-  updateTransformActionButtons();
-  if (PARAMS.editMode && getObjectVisible(selectedInstance)) updateVertexCloud(selectedInstance);
-  requestSceneUrlUpdate();
+  renderSync.refreshAfterGeometryChange(selectedInstance);
 }
 
 function cellVertexSignature(vertices: number[]) {
@@ -5187,15 +5173,7 @@ function extrudeSelectedEditCell(mode: EditOperationMode = 'grouped'): EditExtru
     return null;
   }
 
-  if (targetIsBase) {
-    rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
-    rendererND.setSurface(baseSurface);
-    rendererND.setMode(PARAMS.renderMode);
-  } else if (target) {
-    target.renderer.build(target.M, target.E, target.surfaceTopology, target.cellTopology);
-    target.renderer.setSurface(target.surface);
-    target.renderer.setMode(PARAMS.renderMode);
-  }
+  renderSync.rebuildGeometryRenderer(selectedInstance);
 
   projectAndRenderAll();
   const nextTopology = targetIsBase ? baseCellTopology : target?.cellTopology;
@@ -5310,9 +5288,7 @@ function restoreEditGeometrySnapshot(instIdx: number, original: EditBevelGeometr
     baseCellTopology = cloneCellTopology(original.cellTopology);
     baseSurfaceTopology = clonePrimitiveSurfaceTopology(original.surfaceTopology);
     if (M > 0) {
-      rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
-      rendererND.setSurface(baseSurface);
-      rendererND.setMode(PARAMS.renderMode);
+      renderSync.rebuildBaseRenderer();
       baseVisible = true;
     }
   } else {
@@ -5324,9 +5300,7 @@ function restoreEditGeometrySnapshot(instIdx: number, original: EditBevelGeometr
     target.E = new Uint32Array(original.E);
     target.cellTopology = cloneCellTopology(original.cellTopology);
     target.surfaceTopology = clonePrimitiveSurfaceTopology(original.surfaceTopology);
-    target.renderer.build(target.M, target.E, target.surfaceTopology, target.cellTopology);
-    target.renderer.setSurface(target.surface);
-    target.renderer.setMode(PARAMS.renderMode);
+    renderSync.rebuildInstanceRenderer(target);
   }
 }
 
@@ -5554,15 +5528,7 @@ function startEditInset(mode: EditOperationMode = 'grouped'): EditInsetToken | n
     return null;
   }
 
-  if (targetIsBase) {
-    rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
-    rendererND.setSurface(baseSurface);
-    rendererND.setMode(PARAMS.renderMode);
-  } else if (target) {
-    target.renderer.build(target.M, target.E, target.surfaceTopology, target.cellTopology);
-    target.renderer.setSurface(target.surface);
-    target.renderer.setMode(PARAMS.renderMode);
-  }
+  renderSync.rebuildGeometryRenderer(selectedInstance);
 
   projectAndRenderAll();
   const nextTopology = targetIsBase ? baseCellTopology : target?.cellTopology;
@@ -5827,9 +5793,7 @@ function applyEditBevelPreview(token: EditBevelToken) {
     E = new Uint32Array(edgeListFromCellTopology(currentTopology));
     baseCellTopology = currentTopology;
     baseSurfaceTopology = nextSurfaceTopology;
-    rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
-    rendererND.setSurface(baseSurface);
-    rendererND.setMode(PARAMS.renderMode);
+    renderSync.rebuildBaseRenderer();
   } else if (target) {
     target.X = new Float32Array(currentX);
     target.M = currentVertexCount;
@@ -5837,9 +5801,7 @@ function applyEditBevelPreview(token: EditBevelToken) {
     target.E = new Uint32Array(edgeListFromCellTopology(currentTopology));
     target.cellTopology = currentTopology;
     target.surfaceTopology = nextSurfaceTopology;
-    target.renderer.build(target.M, target.E, target.surfaceTopology, target.cellTopology);
-    target.renderer.setSurface(target.surface);
-    target.renderer.setMode(PARAMS.renderMode);
+    renderSync.rebuildInstanceRenderer(target);
   }
 
   token.applied = true;
@@ -6490,6 +6452,28 @@ projectionPipeline = new ProjectionPipeline({
   tmpCenter,
 });
 
+renderSync = new RenderSyncService({
+  getRenderMode: () => PARAMS.renderMode,
+  getEditMode: () => PARAMS.editMode,
+  getBaseRenderer: () => rendererND,
+  getBaseGeometry: () => ({
+    M,
+    E,
+    surfaceTopology: baseSurfaceTopology,
+    cellTopology: baseCellTopology,
+    surface: baseSurface,
+  }),
+  getInstance: idx => extraInstances[idx],
+  getObjectVisible,
+  projectAndRenderAll,
+  applyObjectVisibility,
+  updateObjectList,
+  updateSelectionOutline,
+  updateTransformActionButtons,
+  updateVertexCloud,
+  requestSceneUrlUpdate,
+});
+
 function updateDimensionControl() {
   if (dimensionValue) dimensionValue.textContent = `${PARAMS.N}D`;
   if (dimensionDownButton) dimensionDownButton.disabled = PARAMS.N <= 3;
@@ -6973,9 +6957,7 @@ function rebuildState(
   PARAMS.axesY = axisController.axesOrder[1] ?? 1;
   PARAMS.axesZ = axisController.axesOrder[2] ?? 2;
   if (M > 0) {
-    rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
-    rendererND.setSurface(baseSurface);
-    rendererND.setMode(PARAMS.renderMode);
+    renderSync.rebuildBaseRenderer();
     if (setViewMode) setViewMode(currentMode);
     projectAndRenderAll();
   } else {
