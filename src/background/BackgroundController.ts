@@ -1,6 +1,13 @@
 import * as THREE from 'three';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type { ViewMode } from '../constants';
+import {
+  readStoredBoolean,
+  readStoredColor,
+  readStoredNumber,
+  safeLocalStorageGet,
+  safeLocalStorageSet,
+} from '../utils/localStorage';
 
 const HDR_BACKGROUND_SELECTION_KEY = 'blend.hdriSelection.v1';
 const HDR_BACKGROUND_BLUR_KEY = 'blend.hdriBlur.v1';
@@ -127,38 +134,6 @@ function clampHdrLightness(value: number) {
   return Math.max(0, Math.min(2.0, value));
 }
 
-function readStoredNumber(key: string, fallback: number) {
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (raw == null) return fallback;
-    const parsed = Number.parseFloat(raw);
-    return Number.isFinite(parsed) ? parsed : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function readStoredColor(key: string, fallback: number) {
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (raw == null) return fallback;
-    const parsed = Number.parseInt(raw, 10);
-    return Number.isFinite(parsed) ? Math.max(0, Math.min(0xffffff, parsed >>> 0)) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function readStoredBoolean(key: string, fallback: boolean) {
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (raw == null) return fallback;
-    return raw === '1' || raw === 'true';
-  } catch {
-    return fallback;
-  }
-}
-
 function isHdriBackgroundKey(key: BackgroundKey): key is HdriBackgroundKey {
   return key !== PLAIN_BACKGROUND_KEY;
 }
@@ -259,7 +234,7 @@ export class BackgroundController {
     this.plainBackgroundColor.setHex(readStoredColor(PLAIN_BACKGROUND_COLOR_KEY, options.baseBackground.getHex()));
     this.environmentLightingEnabled = readStoredBoolean(ENVIRONMENT_LIGHTING_KEY, this.environmentLightingEnabled);
     try {
-      this.hdrQuality = normalizeHdrQuality(window.localStorage.getItem(HDR_BACKGROUND_QUALITY_KEY));
+      this.hdrQuality = normalizeHdrQuality(safeLocalStorageGet(HDR_BACKGROUND_QUALITY_KEY));
     } catch {
       this.hdrQuality = DEFAULT_HDR_QUALITY;
     }
@@ -463,11 +438,11 @@ export class BackgroundController {
 
   private storeRenderSettings() {
     try {
-      window.localStorage.setItem(HDR_BACKGROUND_BLUR_KEY, String(this.hdrBackgroundBlur));
-      window.localStorage.setItem(HDR_BACKGROUND_LIGHTNESS_KEY, String(this.hdrBackgroundLightness));
-      window.localStorage.setItem(HDR_BACKGROUND_QUALITY_KEY, this.hdrQuality);
-      window.localStorage.setItem(PLAIN_BACKGROUND_COLOR_KEY, String(this.plainBackgroundColor.getHex()));
-      window.localStorage.setItem(ENVIRONMENT_LIGHTING_KEY, this.environmentLightingEnabled ? '1' : '0');
+      safeLocalStorageSet(HDR_BACKGROUND_BLUR_KEY, String(this.hdrBackgroundBlur));
+      safeLocalStorageSet(HDR_BACKGROUND_LIGHTNESS_KEY, String(this.hdrBackgroundLightness));
+      safeLocalStorageSet(HDR_BACKGROUND_QUALITY_KEY, this.hdrQuality);
+      safeLocalStorageSet(PLAIN_BACKGROUND_COLOR_KEY, String(this.plainBackgroundColor.getHex()));
+      safeLocalStorageSet(ENVIRONMENT_LIGHTING_KEY, this.environmentLightingEnabled ? '1' : '0');
     } catch {
       // Storage may be unavailable in private sessions.
     }
@@ -481,7 +456,7 @@ export class BackgroundController {
 
   private getStoredHdrBackgroundKey(): HdriBackgroundKey {
     try {
-      return normalizeSolidBackgroundKey(window.localStorage.getItem(HDR_BACKGROUND_SELECTION_KEY));
+      return normalizeSolidBackgroundKey(safeLocalStorageGet(HDR_BACKGROUND_SELECTION_KEY));
     } catch {
       return DEFAULT_SOLID_BACKGROUND_KEY;
     }
@@ -489,7 +464,7 @@ export class BackgroundController {
 
   private storeHdrBackgroundKey(key: HdriBackgroundKey) {
     try {
-      window.localStorage.setItem(HDR_BACKGROUND_SELECTION_KEY, key);
+      safeLocalStorageSet(HDR_BACKGROUND_SELECTION_KEY, key);
     } catch {
       // Storage may be unavailable in private sessions.
     }

@@ -104,6 +104,7 @@ import type {
   TransformState,
 } from './scene/types';
 import type { ExtraAxisGizmoState } from './ui/ExtraAxisGizmoController';
+import { safeLocalStorageGet, safeLocalStorageSet } from './utils/localStorage';
 
 type PrimitiveMode = PrimitiveKind;
 type SceneLightHelper = THREE.PointLightHelper | THREE.SpotLightHelper;
@@ -2679,7 +2680,7 @@ function packedSceneName(state: PackedSceneUrlState | null | undefined) {
 
 function readRecentSceneEntries() {
   try {
-    const raw = window.localStorage.getItem(RECENT_SCENE_PAYLOADS_KEY);
+    const raw = safeLocalStorageGet(RECENT_SCENE_PAYLOADS_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(parsed)) return [];
     const seen = new Set<string>();
@@ -2698,14 +2699,11 @@ function readRecentSceneEntries() {
 }
 
 function writeRecentSceneEntries(entries: RecentSceneEntry[]) {
-  try {
-    window.localStorage.setItem(RECENT_SCENE_PAYLOADS_KEY, JSON.stringify(entries.slice(0, MAX_RECENT_SCENES).map(entry => ({
-      p: entry.payload,
-      n: entry.name || undefined,
-    }))));
-  } catch (err) {
-    console.warn('Unable to store recent scene list', err);
-  }
+  const stored = safeLocalStorageSet(RECENT_SCENE_PAYLOADS_KEY, JSON.stringify(entries.slice(0, MAX_RECENT_SCENES).map(entry => ({
+    p: entry.payload,
+    n: entry.name || undefined,
+  }))));
+  if (!stored) console.warn('Unable to store recent scene list');
 }
 
 function rememberRecentScenePayload(payload: string, name = '') {
@@ -2757,19 +2755,13 @@ function renderWelcomeRecentScenes() {
 }
 
 function shouldShowWelcomeSplash() {
-  try {
-    return window.localStorage.getItem(WELCOME_SPLASH_HIDDEN_KEY) !== '1';
-  } catch {
-    return true;
-  }
+  return safeLocalStorageGet(WELCOME_SPLASH_HIDDEN_KEY) !== '1';
 }
 
 function hideWelcomeSplash(persistPreference = false) {
   if (persistPreference || welcomeDontShowInput?.checked) {
-    try {
-      window.localStorage.setItem(WELCOME_SPLASH_HIDDEN_KEY, '1');
-    } catch (err) {
-      console.warn('Unable to store welcome splash preference', err);
+    if (!safeLocalStorageSet(WELCOME_SPLASH_HIDDEN_KEY, '1')) {
+      console.warn('Unable to store welcome splash preference');
     }
   }
   if (welcomeSplash) welcomeSplash.hidden = true;

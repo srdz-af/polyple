@@ -1,16 +1,7 @@
 import * as THREE from 'three';
+import { disposeMaterial, disposeRenderable } from '../utils/threeDisposal';
 
 const MARKER_GEOMETRY_RADIUS = 0.012;
-
-function disposeMaterial(material: THREE.Material | THREE.Material[]) {
-  if (Array.isArray(material)) material.forEach(entry => entry.dispose());
-  else material.dispose();
-}
-
-function disposeRenderable(renderable: THREE.Object3D & { geometry?: THREE.BufferGeometry; material?: THREE.Material | THREE.Material[] }) {
-  renderable.geometry?.dispose();
-  if (renderable.material) disposeMaterial(renderable.material);
-}
 
 type EditOverlayRendererOptions = {
   scene: THREE.Scene;
