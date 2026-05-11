@@ -47,7 +47,6 @@ import {
 } from './geometry/editOperationGeometry';
 import {
   buildGeneratedCellTopology,
-  cellCount,
   cloneCellTopology,
   bevelEdge,
   bevelSelectedEdges,
@@ -69,6 +68,7 @@ import { TransformController } from './interaction/TransformController';
 import { ViewportInteractionController } from './interaction/ViewportInteractionController';
 import { createBidirectionalAxes, createFadingGrid } from './viewport/grid';
 import { AxisGizmoController } from './ui/AxisGizmoController';
+import { EditToolbarController } from './ui/EditToolbarController';
 import { ModalOverlayController } from './ui/ModalOverlayController';
 import { ObjectListController } from './ui/ObjectListController';
 import { PaneController } from './ui/PaneController';
@@ -271,11 +271,6 @@ const recordViewportTimer = document.getElementById('record-viewport-timer') as 
 const captureFrameButton = document.getElementById('capture-frame-button') as HTMLButtonElement | null;
 const cameraViewOverlay = document.getElementById('camera-view-overlay') as HTMLDivElement | null;
 const editModeToggle = document.getElementById('edit-mode-toggle') as HTMLButtonElement | null;
-const editCellDimensionButtons = document.getElementById('edit-cell-dimension-buttons') as HTMLDivElement | null;
-const editOperationButtons = document.getElementById('edit-operation-buttons') as HTMLDivElement | null;
-const editBevelButton = document.getElementById('edit-bevel-button') as HTMLButtonElement | null;
-const editInsetButton = document.getElementById('edit-inset-button') as HTMLButtonElement | null;
-const editExtrudeButton = document.getElementById('edit-extrude-button') as HTMLButtonElement | null;
 const mobileFullscreenToggle = document.getElementById('mobile-fullscreen-toggle') as HTMLButtonElement | null;
 const transformMoveButton = document.getElementById('transform-move-button') as HTMLButtonElement | null;
 const transformRotateButton = document.getElementById('transform-rotate-button') as HTMLButtonElement | null;
@@ -435,6 +430,7 @@ let projectionPipeline: ProjectionPipeline | null = null;
 let renderSync: RenderSyncService;
 let sceneObjectStore: SceneObjectStore<SceneLightRuntime>;
 let geometryEditService: GeometryEditService<PackedSceneUrlState>;
+let editToolbar: EditToolbarController | null = null;
 let projectionDirty = true;
 
 function markProjectionDirty() {
@@ -3054,6 +3050,20 @@ transformController = new TransformController({
   onEditSelectionChange: () => updateTransformActionButtons(),
   onStateChange: () => requestSceneUrlUpdate(),
 });
+editToolbar = new EditToolbarController({
+  getEditMode: () => PARAMS.editMode,
+  getObjectVisible: () => getObjectVisible(selectedInstance),
+  getObjectDimension: selectedObjectDimension,
+  getTopology: selectedObjectCellTopology,
+  getActiveCellDimension: () => transformController.getEditCellDimension(),
+  setCellDimension: setEditCellDimension,
+  canStartBevel: () => canStartEditBevel('edge'),
+  canStartInset: canStartEditInset,
+  canStartExtrude: canStartEditExtrusion,
+  startBevel: () => viewportInteraction.startEditBevelFromLastPointer('edge', false, true),
+  startInset: () => viewportInteraction.startEditInsetFromLastPointer(true),
+  startExtrude: () => viewportInteraction.startEditExtrusionFromLastPointer(true),
+});
 axisController = new AxisGizmoController({
   camera,
   controls,
@@ -3252,21 +3262,11 @@ async function toggleMobileFullscreen() {
 
 function updateTransformActionButtons() {
   if (transformController) transformController.updateActionButtons();
-  updateEditOperationButtons();
-  updateEditCellDimensionButtons();
+  editToolbar?.sync();
 }
 
 function hasActiveSelection() {
   return selectedInstances.some(isSelectableObject);
-}
-
-function updateEditOperationButtons() {
-  if (!editOperationButtons) return;
-  const visible = PARAMS.editMode;
-  editOperationButtons.hidden = !visible;
-  if (editBevelButton) editBevelButton.disabled = !canStartEditBevel('edge');
-  if (editInsetButton) editInsetButton.disabled = !canStartEditInset();
-  if (editExtrudeButton) editExtrudeButton.disabled = !canStartEditExtrusion();
 }
 
 function selectedEditOperationContext() {
@@ -3319,22 +3319,6 @@ function maxEditableCellDimensionForSelection() {
   return maxCellDimension(rendererRef?.getCellTopologyForSelection());
 }
 
-function editCellDimensionIcon(dimension: number) {
-  if (dimension === 0) return 'line_end_circle';
-  if (dimension === 1) return 'diagonal_line';
-  if (dimension === 2) return 'square';
-  if (dimension === 3) return 'deployed_code';
-  return `filter_${Math.max(4, Math.min(8, dimension))}`;
-}
-
-function editCellDimensionTitle(dimension: number) {
-  if (dimension === 0) return 'Vertex selection (1)';
-  if (dimension === 1) return 'Edge selection (2)';
-  if (dimension === 2) return 'Face selection (3)';
-  if (dimension === 3) return 'Volume selection (4)';
-  return `${dimension}-cell selection (${dimension + 1})`;
-}
-
 function selectedObjectDimension() {
   if (!isGeometrySelectionIndex(selectedInstance)) return 0;
   if (selectedInstance === BASE_SELECTION) return M > 0 ? (baseOriginalN || visibleDims()) : 0;
@@ -3347,53 +3331,6 @@ function selectedObjectCellTopology() {
     ? rendererND
     : extraInstances[selectedInstance]?.renderer;
   return rendererRef?.getCellTopologyForSelection();
-}
-
-function updateEditCellDimensionButtons() {
-  if (!editCellDimensionButtons || !transformController) return;
-
-  const topology = selectedObjectCellTopology();
-  const objectDimension = selectedObjectDimension();
-  const count = PARAMS.editMode && getObjectVisible(selectedInstance)
-    ? Math.max(0, Math.min(MAX_N, objectDimension))
-    : 0;
-
-  if (!topology || count <= 0) {
-    editCellDimensionButtons.hidden = true;
-    editCellDimensionButtons.dataset.signature = '';
-    editCellDimensionButtons.replaceChildren();
-    return;
-  }
-
-  const active = transformController.getEditCellDimension();
-  const availability = Array.from({ length: count }, (_entry, dimension) => cellCount(topology, dimension) > 0);
-  const signature = `${count}:${active}:${availability.map(enabled => enabled ? '1' : '0').join('')}`;
-  if (editCellDimensionButtons.dataset.signature === signature) {
-    editCellDimensionButtons.hidden = false;
-    return;
-  }
-
-  editCellDimensionButtons.dataset.signature = signature;
-  editCellDimensionButtons.hidden = false;
-  editCellDimensionButtons.replaceChildren();
-
-  for (let dimension = 0; dimension < count; dimension++) {
-    const button = document.createElement('button');
-    const icon = document.createElement('span');
-    const enabled = availability[dimension];
-    button.type = 'button';
-    button.className = dimension === active ? 'active' : '';
-    button.disabled = !enabled;
-    button.title = editCellDimensionTitle(dimension);
-    button.setAttribute('aria-label', button.title);
-    button.setAttribute('aria-pressed', String(dimension === active));
-    icon.className = 'material-symbols-rounded';
-    icon.setAttribute('aria-hidden', 'true');
-    icon.textContent = editCellDimensionIcon(dimension);
-    button.appendChild(icon);
-    button.addEventListener('click', () => setEditCellDimension(dimension));
-    editCellDimensionButtons.appendChild(button);
-  }
 }
 
 function setEditCellDimension(dimension: number) {
@@ -3741,6 +3678,7 @@ viewportCapture.bindControls();
 modalOverlayController.bindControls();
 renderEffects.bind();
 sceneLightPanel.bind();
+editToolbar?.bind();
 editModeToggle?.addEventListener('click', () => setEditMode(!PARAMS.editMode));
 mobileFullscreenToggle?.addEventListener('click', () => void toggleMobileFullscreen());
 document.addEventListener('fullscreenchange', updateMobileFullscreenToggle);
@@ -3764,9 +3702,6 @@ sceneLoadInput?.addEventListener('change', () => {
 ].forEach(entry => {
   entry.el?.addEventListener('click', () => transformController.toggleTransformMode(entry.mode));
 });
-editBevelButton?.addEventListener('click', () => viewportInteraction.startEditBevelFromLastPointer('edge', false, true));
-editInsetButton?.addEventListener('click', () => viewportInteraction.startEditInsetFromLastPointer(true));
-editExtrudeButton?.addEventListener('click', () => viewportInteraction.startEditExtrusionFromLastPointer(true));
 dimensionDownButton?.addEventListener('click', () => setNewPrimitiveDimension(PARAMS.N - 1));
 dimensionUpButton?.addEventListener('click', () => setNewPrimitiveDimension(PARAMS.N + 1));
 cameraRecenterButton?.addEventListener('click', () => keyboardCamera.recenterCamera());
