@@ -57,7 +57,6 @@ import {
   insetCell,
   insetCells,
   getCellVertices,
-  maxCellDimension,
   surfaceTopologyFromCellTopology,
   type CellTopology,
 } from './geometry/cellTopology';
@@ -102,6 +101,7 @@ import { cloneObjectOrigin, computeObjectOrigin, type ObjectOrigin } from './sce
 import { ProjectionPipeline } from './scene/ProjectionPipeline';
 import { RenderSyncService } from './scene/RenderSyncService';
 import { SceneObjectStore } from './scene/SceneObjectStore';
+import { SceneSelectionService } from './scene/SceneSelectionService';
 import { SceneHistory } from './scene/SceneHistory';
 import {
   cloneSceneLightState,
@@ -414,6 +414,7 @@ let projectionPipeline: ProjectionPipeline | null = null;
 let renderSync: RenderSyncService;
 let sceneObjectStore: SceneObjectStore<SceneLightRuntime>;
 let geometryEditService: GeometryEditService<PackedSceneUrlState>;
+let selectionService: SceneSelectionService<SceneLightRuntime>;
 let editToolbar: EditToolbarController | null = null;
 let projectionDirty = true;
 
@@ -528,7 +529,6 @@ const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 
 let sceneLightIdCounter = 1;
-let selectedSceneLightId = '';
 const sceneLights: SceneLightRuntime[] = [];
 const sceneLightMarkerGeometry = new THREE.SphereGeometry(SCENE_LIGHT_MARKER_RADIUS, 12, 8);
 const sceneLightDrag = {
@@ -595,8 +595,6 @@ let sceneName = '';
 const BASE_SELECTION = -1;
 const NO_SELECTION = -2;
 const LIGHT_SELECTION_BASE = -1000;
-let selectedInstance: number = BASE_SELECTION; // -1 base, >=0 extra, <= -1000 light, -2 none
-let selectedInstances: number[] = [BASE_SELECTION];
 let selectionOutlines: THREE.LineSegments[] = [];
 let selectionOutlineKeys: number[] = [];
 const baseTransform = { pos: new THREE.Vector3(), rot: new THREE.Vector3(), scale: new THREE.Vector3(1,1,1) };
@@ -706,7 +704,7 @@ function syncSceneLightRuntimes() {
   sceneLights.forEach(runtime => {
     const lightIndex = sceneLights.indexOf(runtime);
     syncSceneLightRuntime(runtime, sceneLightRuntimeOptions(
-      lightIndex >= 0 && selectedInstances.includes(lightSelectionIndex(lightIndex)),
+      lightIndex >= 0 && selectionService.items.includes(lightSelectionIndex(lightIndex)),
     ));
   });
   syncRendererShadowState();
@@ -718,8 +716,8 @@ function setSceneLights(states: SceneLightState[]) {
     sceneLights.push(createSceneLightRuntime(state, sceneLightRuntimeOptions(false)));
   });
   syncSceneLightIdCounter();
-  if (!sceneLights.some(runtime => runtime.state.id === selectedSceneLightId)) {
-    selectedSceneLightId = sceneLights[0]?.state.id ?? '';
+  if (!sceneLights.some(runtime => runtime.state.id === selectionService.lightId)) {
+    selectionService.setLightId(sceneLights[0]?.state.id ?? '');
   }
   syncSceneLightRuntimes();
   sceneLightPanel.sync();
@@ -744,39 +742,38 @@ function applyAnimationLights(states: SceneLightState[] | undefined) {
 }
 
 function selectedSceneLightRuntime() {
-  return sceneLights.find(runtime => runtime.state.id === selectedSceneLightId) ?? null;
+  return selectionService?.selectedLightRuntime() ?? sceneLights.find(runtime => runtime.state.id === selectionService?.lightId) ?? null;
 }
 
 function lightSelectionIndex(lightIndex: number) {
-  return sceneObjectStore.lightSelectionIndex(lightIndex);
+  return selectionService?.lightSelectionIndex(lightIndex) ?? sceneObjectStore.lightSelectionIndex(lightIndex);
 }
 
 function isLightSelectionIndex(idx: number) {
-  return sceneObjectStore.isLightSelectionIndex(idx);
+  return selectionService?.isLightSelectionIndex(idx) ?? sceneObjectStore.isLightSelectionIndex(idx);
 }
 
 function sceneLightIndexFromSelection(idx: number) {
-  return sceneObjectStore.lightIndexFromSelection(idx);
+  return selectionService?.lightIndexFromSelection(idx) ?? sceneObjectStore.lightIndexFromSelection(idx);
 }
 
 function sceneLightRuntimeForSelection(idx: number) {
-  return sceneObjectStore.lightRuntimeForSelection(idx);
+  return selectionService?.lightRuntimeForSelection(idx) ?? sceneObjectStore.lightRuntimeForSelection(idx);
 }
 
 function selectedSceneLightSelectionIndex() {
-  const index = sceneLights.findIndex(runtime => runtime.state.id === selectedSceneLightId);
-  return index >= 0 ? lightSelectionIndex(index) : NO_SELECTION;
+  return selectionService?.selectedLightSelectionIndex() ?? NO_SELECTION;
 }
 
 function isGeometrySelectionIndex(idx: number) {
-  return sceneObjectStore.isGeometrySelectionIndex(idx);
+  return selectionService?.isGeometrySelectionIndex(idx) ?? sceneObjectStore.isGeometrySelectionIndex(idx);
 }
 
 const sceneLightPanel = new SceneLightPanelController({
   getLights: () => sceneLights,
   getSelected: selectedSceneLightRuntime,
   selectLight: id => {
-    selectedSceneLightId = id;
+    selectionService.setLightId(id);
     selectObject(selectedSceneLightSelectionIndex());
   },
   setKind: setSelectedSceneLightKind,
@@ -809,19 +806,10 @@ function performRemoveSelectedSceneLight() {
   pushUndoSnapshot();
   const index = sceneLights.indexOf(selected);
   const removedSelection = lightSelectionIndex(index);
-  const removedWasSelected = selectedInstances.includes(removedSelection);
   sceneLights.splice(index, 1);
   disposeSceneLightRuntime(scene, selected);
-  selectedSceneLightId = sceneLights[Math.min(index, sceneLights.length - 1)]?.state.id ?? '';
-  if (removedWasSelected) {
-    selectedInstance = selectedSceneLightSelectionIndex();
-    selectedInstances = selectedInstance === NO_SELECTION ? [] : [selectedInstance];
-  } else {
-    selectedInstances = selectedInstances.filter(idx => idx > LIGHT_SELECTION_BASE);
-    selectedInstance = isLightSelectionIndex(selectedInstance)
-      ? (selectedInstances[0] ?? NO_SELECTION)
-      : normalizeSelectionIndex(selectedInstance);
-  }
+  selectionService.setLightId(sceneLights[Math.min(index, sceneLights.length - 1)]?.state.id ?? '');
+  selectionService.repairAfterLightRemoval(removedSelection);
   sceneLightPanel.sync();
   updateObjectList();
   updateSelectionOutline();
@@ -841,9 +829,8 @@ function performUpdateSelectedSceneLight(mutator: (state: SceneLightState) => vo
   mutator(selected.state);
   selected.state = normalizeSceneLightState(selected.state);
   const selectedLightIdx = selectedSceneLightSelectionIndex();
-  if (!selected.state.visible && selectedInstances.includes(selectedLightIdx)) {
-    selectedInstance = NO_SELECTION;
-    selectedInstances = [];
+  if (!selected.state.visible && selectionService.items.includes(selectedLightIdx)) {
+    selectionService.clear();
   }
   if (selected.state.kind !== previousKind) {
     rebuildSceneLightRuntimeKind(selected, sceneLightRuntimeOptions(false));
@@ -879,7 +866,7 @@ function sceneLightMarkerScale(position: THREE.Vector3, pixelDiameter: number) {
 function updateSceneLightMarkersScreenSpace() {
   sceneLights.forEach(runtime => {
     const lightIndex = sceneLights.indexOf(runtime);
-    const selected = lightIndex >= 0 && selectedInstances.includes(lightSelectionIndex(lightIndex));
+    const selected = lightIndex >= 0 && selectionService.items.includes(lightSelectionIndex(lightIndex));
     if (runtime.marker.visible) {
       runtime.marker.scale.setScalar(sceneLightMarkerScale(
         runtime.marker.position,
@@ -919,7 +906,7 @@ function handleSceneLightPointerDown(ev: PointerEvent) {
   const hit = pickSceneLightHandle(ev);
   if (!hit) return;
 
-  selectedSceneLightId = hit.runtime.state.id;
+  selectionService.setLightId(hit.runtime.state.id);
   selectObject(selectedSceneLightSelectionIndex());
   startSceneLightDrag(hit.runtime, hit.handle, ev);
   ev.preventDefault();
@@ -1256,19 +1243,19 @@ async function applySceneUrlState(state: PackedSceneUrlState) {
     applyCameraState(state.c);
     setEditMode(state.em === 1);
     const packedEditSelection = Array.isArray(state.es) ? state.es : null;
-    if (packedEditSelection && PARAMS.editMode && isGeometrySelectionIndex(selectedInstance)) {
+    if (packedEditSelection && PARAMS.editMode && isGeometrySelectionIndex(selectionService.primary)) {
       const dimension = finiteInteger(packedEditSelection[0], 0);
       const cellIds = Array.isArray(packedEditSelection[1])
         ? packedEditSelection[1].map(cellId => finiteInteger(cellId, -1))
         : [];
-      transformController.setSelectedEditCells(dimension, cellIds, selectedObjectCellTopology());
+      selectionService.restorePackedEditSelection(dimension, cellIds);
     } else {
       transformController.setSelectedVertex(finiteInteger(state.sv, -1));
     }
     const activeEditSelection = transformController.getEditSelection();
-    if (PARAMS.editMode && activeEditSelection && getObjectVisible(selectedInstance)) {
-      updateVertexCloud(selectedInstance);
-      if (transformController.getSelectedVertex() >= 0) placeVertexMarker(selectedInstance, transformController.getSelectedVertex());
+    if (PARAMS.editMode && activeEditSelection && getObjectVisible(selectionService.primary)) {
+      updateVertexCloud(selectionService.primary);
+      if (transformController.getSelectedVertex() >= 0) placeVertexMarker(selectionService.primary, transformController.getSelectedVertex());
     }
 
     animationTimeline?.applyTimelineState(state.tl ? unpackTimelineState(state.tl, sceneCodecDefaults()) : undefined, false);
@@ -1401,8 +1388,8 @@ function captureSnapshot(): SceneSnapshot<PrimitiveMode> {
     })),
     baseMaterialId,
     baseSurface: cloneSurface(baseSurface),
-    selectedInstance,
-    selectedInstances: [...selectedInstances],
+    selectedInstance: selectionService.primary,
+    selectedInstances: [...selectionService.items],
     instances: extraInstances.map(inst => ({
       X: new Float32Array(inst.X),
       E: new Uint32Array(inst.E),
@@ -1525,13 +1512,12 @@ function applySnapshot(snap: SceneSnapshot<PrimitiveMode>) {
     position: lightState.position.clone(),
     target: lightState.target?.clone() ?? new THREE.Vector3(),
   })));
-  selectedInstance = normalizeSelectionIndex(snap.selectedInstance);
-  selectedInstances = (snap.selectedInstances ?? [selectedInstance]).map(normalizeSelectionIndex);
+  selectionService.setSnapshot(snap.selectedInstance, snap.selectedInstances ?? [snap.selectedInstance]);
   reconcileSelection();
   projectAndRenderAll();
   updateDimensionControl();
   updateObjectList();
-  selectObject(selectedInstance, selectedInstance !== NO_SELECTION);
+  selectObject(selectionService.primary, selectionService.primary !== NO_SELECTION);
   requestSceneUrlUpdate();
 }
 
@@ -1542,30 +1528,19 @@ sceneHistory = new SceneHistory({
 });
 
 function getObjectVisible(idx: number) {
-  return sceneObjectStore.getObjectVisible(idx);
+  return selectionService?.getObjectVisible(idx) ?? sceneObjectStore.getObjectVisible(idx);
 }
 
 function normalizeSelectionIndex(idx: number) {
-  return sceneObjectStore.normalizeSelectionIndex(idx);
+  return selectionService?.normalizeSelectionIndex(idx) ?? sceneObjectStore.normalizeSelectionIndex(idx);
 }
 
 function isSelectableObject(idx: number) {
-  return sceneObjectStore.isSelectableObject(idx) && getObjectVisible(idx);
+  return selectionService?.isSelectableObject(idx) ?? (sceneObjectStore.isSelectableObject(idx) && getObjectVisible(idx));
 }
 
 function reconcileSelection() {
-  const normalized = selectedInstances
-    .map(normalizeSelectionIndex)
-    .filter((idx, position, arr) => idx !== NO_SELECTION && arr.indexOf(idx) === position && getObjectVisible(idx));
-
-  const primary = normalizeSelectionIndex(selectedInstance);
-  if (primary !== NO_SELECTION && getObjectVisible(primary)) {
-    selectedInstances = [primary, ...normalized.filter(idx => idx !== primary)];
-    selectedInstance = primary;
-  } else {
-    selectedInstances = normalized;
-    selectedInstance = selectedInstances[0] ?? NO_SELECTION;
-  }
+  selectionService.reconcile();
 }
 
 function setObjectVisible(idx: number, visible: boolean, recordUndo = true) {
@@ -1581,12 +1556,12 @@ function setObjectVisible(idx: number, visible: boolean, recordUndo = true) {
   }
 
   applyObjectVisibility();
-  if (!visible && selectedInstances.includes(idx)) {
+  if (!visible && selectionService.items.includes(idx)) {
     removeSelectionOutlines();
     transformController.clearSelectionVisuals();
   }
   reconcileSelection();
-  selectObject(selectedInstance, selectedInstance !== NO_SELECTION);
+  selectObject(selectionService.primary, selectionService.primary !== NO_SELECTION);
   sceneLightPanel.sync();
   requestSceneUrlUpdate();
 }
@@ -1617,7 +1592,7 @@ function renameObject(idx: number, value: string) {
     baseLabel = label;
   } else if (lightRuntime) {
     lightRuntime.state.label = label;
-    selectedSceneLightId = lightRuntime.state.id;
+    selectionService.setLightId(lightRuntime.state.id);
     sceneLightPanel.sync();
   } else {
     extraInstances[idx].label = label;
@@ -1633,9 +1608,9 @@ function updateObjectList() {
 
 function getTextureMaterialTarget() {
   reconcileSceneMaterials();
-  const hasObjectTarget = isGeometrySelectionIndex(selectedInstance) && isSelectableObject(selectedInstance);
+  const hasObjectTarget = isGeometrySelectionIndex(selectionService.primary) && isSelectableObject(selectionService.primary);
   const materialId = hasObjectTarget
-    ? objectMaterialId(selectedInstance)
+    ? objectMaterialId(selectionService.primary)
     : (materialSlotById(textureEditorMaterialId)?.id ?? materialSlots[0]?.id ?? ensureMaterialSlot(undefined).id);
   const material = ensureMaterialSlot(materialId);
   textureEditorMaterialId = material.id;
@@ -1658,15 +1633,15 @@ function assignMaterialToSelection(materialId: string, recordUndo: boolean) {
   const material = materialSlotById(materialId);
   if (!material) return false;
 
-  if (!isGeometrySelectionIndex(selectedInstance) || !isSelectableObject(selectedInstance)) {
+  if (!isGeometrySelectionIndex(selectionService.primary) || !isSelectableObject(selectionService.primary)) {
     textureEditorMaterialId = material.id;
     textureEditor.updatePanel();
     return true;
   }
 
-  if (objectMaterialId(selectedInstance) === material.id) return false;
+  if (objectMaterialId(selectionService.primary) === material.id) return false;
   if (recordUndo) pushUndoSnapshot();
-  const changed = setObjectMaterialId(selectedInstance, material.id);
+  const changed = setObjectMaterialId(selectionService.primary, material.id);
   if (!changed) return false;
   textureEditorMaterialId = material.id;
   reconcileSceneMaterials();
@@ -1691,16 +1666,16 @@ function renameSceneMaterial(materialId: string, name: string, recordUndo: boole
 }
 
 function splitSelectedMaterial(recordUndo: boolean) {
-  if (!isGeometrySelectionIndex(selectedInstance) || !isSelectableObject(selectedInstance)) return false;
-  const current = materialSlotById(objectMaterialId(selectedInstance));
+  if (!isGeometrySelectionIndex(selectionService.primary) || !isSelectableObject(selectionService.primary)) return false;
+  const current = materialSlotById(objectMaterialId(selectionService.primary));
   if (!current) return false;
   const usage = materialUsageRows(current.id);
   if (usage.length <= 1) return false;
   if (recordUndo) pushUndoSnapshot();
-  const label = objectLabelForMaterialList(selectedInstance);
+  const label = objectLabelForMaterialList(selectionService.primary);
   const material = createSceneMaterial(current.surface, `${label} material`);
   materialSlots.push(material);
-  const changed = setObjectMaterialId(selectedInstance, material.id);
+  const changed = setObjectMaterialId(selectionService.primary, material.id);
   if (!changed) return false;
   reconcileSceneMaterials();
   updateObjectList();
@@ -1711,7 +1686,7 @@ function splitSelectedMaterial(recordUndo: boolean) {
 
 function applySurfaceToSelectionMaterial(surface: SurfaceState, recordUndo: boolean) {
   const material = ensureMaterialSlot(
-    isGeometrySelectionIndex(selectedInstance) && isSelectableObject(selectedInstance) ? objectMaterialId(selectedInstance) : textureEditorMaterialId,
+    isGeometrySelectionIndex(selectionService.primary) && isSelectableObject(selectionService.primary) ? objectMaterialId(selectionService.primary) : textureEditorMaterialId,
   );
   textureEditorMaterialId = material.id;
   const nextSurface = normalizeSurface(surface);
@@ -1770,52 +1745,14 @@ function buildSelectionOutline(geom: THREE.BufferGeometry, primary: boolean) {
 }
 
 function selectObject(idx: number, additive = false) {
-  const normalizedIdx = normalizeSelectionIndex(idx);
-
-  if (additive) {
-    if (normalizedIdx === NO_SELECTION) return;
-    if (!isSelectableObject(normalizedIdx)) return;
-    if (selectedInstance === NO_SELECTION) {
-      selectedInstance = normalizedIdx;
-      selectedInstances = [normalizedIdx];
-    } else if (normalizedIdx !== selectedInstance) {
-      if (selectedInstances.includes(normalizedIdx)) {
-        selectedInstances = selectedInstances.filter(entry => entry !== normalizedIdx);
-      } else {
-        selectedInstances.push(normalizedIdx);
-      }
-    }
-  } else {
-    selectedInstance = isSelectableObject(normalizedIdx) ? normalizedIdx : NO_SELECTION;
-    selectedInstances = selectedInstance === NO_SELECTION ? [] : [selectedInstance];
-  }
-
-  reconcileSelection();
-  const selectedLight = sceneLightRuntimeForSelection(selectedInstance);
-  if (selectedLight) {
-    selectedSceneLightId = selectedLight.state.id;
-    setSceneControlTab('lights');
-  }
-  transformController.clearEditSelection();
-  updateObjectList();
-  updateSelectionOutline();
-  backgroundController.applySceneBackground(PARAMS.editMode);
-  transformController.clearVertexMarker();
-  transformController.clearVertexCloud();
-  transformController.clearFaceCenterCloud();
-  transformController.clearEditWireOverlay();
-  if (PARAMS.editMode && isGeometrySelectionIndex(selectedInstance) && getObjectVisible(selectedInstance)) updateVertexCloud(selectedInstance);
-  sceneLightPanel.sync();
-  textureEditor.updatePanel();
-  updateTransformActionButtons();
-  requestSceneUrlUpdate();
+  selectionService.selectObject(idx, additive);
 }
 
 function updateSelectionOutline() {
   reconcileSelection();
   const desiredKeys = PARAMS.editMode
     ? []
-    : selectedInstances.filter(idx => getObjectVisible(idx) && selectionGeometry(idx));
+    : selectionService.items.filter(idx => getObjectVisible(idx) && selectionGeometry(idx));
   const unchanged = desiredKeys.length === selectionOutlineKeys.length
     && desiredKeys.every((idx, i) => idx === selectionOutlineKeys[i]);
   if (unchanged) {
@@ -1848,9 +1785,7 @@ function updateAxisGuide() {
 }
 
 function updateVertexCloud(instIdx: number) {
-  const rendererRef = instIdx === BASE_SELECTION ? rendererND : extraInstances[instIdx]?.renderer;
-  const maxDim = maxCellDimension(rendererRef?.getCellTopologyForSelection());
-  if (transformController.getEditCellDimension() > maxDim) transformController.setEditCellDimension(maxDim);
+  selectionService?.clampActiveDimension();
   transformController.updateVertexCloud(instIdx);
 }
 
@@ -1941,12 +1876,12 @@ function moveObjectOriginToWorldPosition(idx: number, position: THREE.Vector3) {
 }
 
 function startDuplicatePlacement(position: THREE.Vector3): DuplicatePlacement | null {
-  if (PARAMS.editMode || selectedInstance === NO_SELECTION) return null;
+  if (PARAMS.editMode || selectionService.primary === NO_SELECTION) return null;
   const undoSnapshot = captureSceneUrlState();
-  const originalSelectedInstance = selectedInstance;
-  const originalSelectedInstances = [...selectedInstances];
+  const originalSelectedInstance = selectionService.primary;
+  const originalSelectedInstances = [...selectionService.items];
 
-  const lightRuntime = sceneLightRuntimeForSelection(selectedInstance);
+  const lightRuntime = sceneLightRuntimeForSelection(selectionService.primary);
   if (lightRuntime) {
     const state = cloneSceneLightState(lightRuntime.state);
     const delta = position.clone().sub(state.position);
@@ -1956,7 +1891,7 @@ function startDuplicatePlacement(position: THREE.Vector3): DuplicatePlacement | 
     if (state.kind === 'directional') state.target.add(delta);
     const runtime = createSceneLightRuntime(state, sceneLightRuntimeOptions(false));
     sceneLights.push(runtime);
-    selectedSceneLightId = state.id;
+    selectionService.setLightId(state.id);
     selectObject(lightSelectionIndex(sceneLights.length - 1));
     updateObjectList();
     sceneLightPanel.sync();
@@ -1968,8 +1903,8 @@ function startDuplicatePlacement(position: THREE.Vector3): DuplicatePlacement | 
     };
   }
 
-  if (!isGeometrySelectionIndex(selectedInstance)) return null;
-  const snapshot = instanceSnapshotForSelection(selectedInstance);
+  if (!isGeometrySelectionIndex(selectionService.primary)) return null;
+  const snapshot = instanceSnapshotForSelection(selectionService.primary);
   if (!snapshot) return null;
   const instance = restoreInstanceSnapshot(snapshot);
   extraInstances.push(instance);
@@ -2002,12 +1937,10 @@ function moveDuplicatePlacement(token: unknown, position: THREE.Vector3) {
 }
 
 function restoreSelectionAfterDuplicate(placement: DuplicatePlacement) {
-  selectedInstance = normalizeSelectionIndex(placement.originalSelectedInstance);
-  selectedInstances = placement.originalSelectedInstances.map(normalizeSelectionIndex);
-  reconcileSelection();
-  const selectedLight = sceneLightRuntimeForSelection(selectedInstance);
-  if (selectedLight) selectedSceneLightId = selectedLight.state.id;
-  else if (!sceneLights.some(runtime => runtime.state.id === selectedSceneLightId)) selectedSceneLightId = sceneLights[0]?.state.id ?? '';
+  selectionService.setSnapshot(placement.originalSelectedInstance, placement.originalSelectedInstances);
+  const selectedLight = sceneLightRuntimeForSelection(selectionService.primary);
+  if (selectedLight) selectionService.setLightId(selectedLight.state.id);
+  else selectionService.ensureSelectedLightId();
   updateObjectList();
   updateSelectionOutline();
   sceneLightPanel.sync();
@@ -2098,7 +2031,7 @@ function focusObjectOrigin(idx: number) {
 }
 
 function selectedProductObjects() {
-  return selectedInstances.filter(idx => isGeometrySelectionIndex(idx) && isSelectableObject(idx));
+  return selectionService.selectedGeometryObjects();
 }
 
 function canAddProductMesh() {
@@ -2198,13 +2131,13 @@ function addProductMeshFromSelection() {
 }
 
 function deleteSelected() {
-  const deleteIndices = selectedInstances.filter(idx => idx >= 0).sort((a, b) => b - a);
-  const deleteLightIndices = selectedInstances
+  const deleteIndices = selectionService.items.filter(idx => idx >= 0).sort((a, b) => b - a);
+  const deleteLightIndices = selectionService.items
     .map(sceneLightIndexFromSelection)
     .filter((idx, position, arr) => idx >= 0 && arr.indexOf(idx) === position)
     .sort((a, b) => b - a);
   if (!deleteIndices.length && !deleteLightIndices.length) return;
-  const keepBaseSelected = selectedInstances.includes(BASE_SELECTION) && getObjectVisible(BASE_SELECTION);
+  const keepBaseSelected = selectionService.items.includes(BASE_SELECTION) && getObjectVisible(BASE_SELECTION);
   pushUndoSnapshot();
   removeSelectionOutlines();
   for (const idx of deleteIndices) {
@@ -2219,24 +2152,24 @@ function deleteSelected() {
     sceneLights.splice(idx, 1);
     disposeSceneLightRuntime(scene, runtime);
   }
-  if (deleteLightIndices.length) selectedSceneLightId = sceneLights[0]?.state.id ?? '';
-  selectedInstance = keepBaseSelected ? BASE_SELECTION : NO_SELECTION;
-  selectedInstances = keepBaseSelected ? [BASE_SELECTION] : [];
+  if (deleteLightIndices.length) selectionService.setLightId(sceneLights[0]?.state.id ?? '');
+  if (keepBaseSelected) selectionService.setSnapshot(BASE_SELECTION, [BASE_SELECTION]);
+  else selectionService.clear();
   reconcileSceneMaterials();
   projectAndRenderAll();
   sceneLightPanel.sync();
   updateObjectList();
-  selectObject(selectedInstance);
+  selectObject(selectionService.primary);
   requestSceneUrlUpdate();
 }
 
 function deleteSelectedEditCell() {
-  if (!PARAMS.editMode || !getObjectVisible(selectedInstance)) return;
+  if (!PARAMS.editMode || !getObjectVisible(selectionService.primary)) return;
   const selection = transformController.getEditSelection();
   if (!selection || selection.cellId < 0) return;
 
-  const targetIsBase = selectedInstance === BASE_SELECTION;
-  const target = targetIsBase ? null : extraInstances[selectedInstance];
+  const targetIsBase = selectionService.primary === BASE_SELECTION;
+  const target = targetIsBase ? null : extraInstances[selectionService.primary];
   const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
   const vertexCount = targetIsBase ? M : (target?.M ?? 0);
   const deletion = deleteCellAndPrune(topology, selection.dimension, selection.cellId, vertexCount);
@@ -2259,8 +2192,7 @@ function deleteSelectedEditCell() {
       baseVisible = false;
       baseOrigin = new Float32Array(MAX_N);
       rendererND.dispose?.();
-      selectedInstance = NO_SELECTION;
-      selectedInstances = [];
+      selectionService.clear();
     }
   } else if (target) {
     target.X = compactDimensionMajorVertices(target.X, target.M, deletion.vertexCount, deletion.vertexMap);
@@ -2273,21 +2205,20 @@ function deleteSelectedEditCell() {
       renderSync.rebuildInstanceRenderer(target);
     } else {
       target.renderer.destroy();
-      extraInstances.splice(selectedInstance, 1);
-      selectedInstance = NO_SELECTION;
-      selectedInstances = [];
+      extraInstances.splice(selectionService.primary, 1);
+      selectionService.clear();
     }
   }
 
   reconcileSelection();
   reconcileSceneMaterials();
-  renderSync.refreshAfterGeometryChange(selectedInstance);
+  renderSync.refreshAfterGeometryChange(selectionService.primary);
 }
 
 function selectedGeometryDimension() {
-  if (!isGeometrySelectionIndex(selectedInstance)) return 0;
-  if (selectedInstance === BASE_SELECTION) return baseOriginalN || PARAMS.N;
-  return extraInstances[selectedInstance]?.originalN ?? 0;
+  if (!isGeometrySelectionIndex(selectionService.primary)) return 0;
+  if (selectionService.primary === BASE_SELECTION) return baseOriginalN || PARAMS.N;
+  return extraInstances[selectionService.primary]?.originalN ?? 0;
 }
 
 function normalizeEditOperationMode(mode: EditOperationMode | undefined): EditOperationMode {
@@ -2295,21 +2226,21 @@ function normalizeEditOperationMode(mode: EditOperationMode | undefined): EditOp
 }
 
 function extrudeSelectedEditCell(mode: EditOperationMode = 'grouped'): EditExtrusionToken | null {
-  if (!PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return null;
+  if (!PARAMS.editMode || !isGeometrySelectionIndex(selectionService.primary) || !getObjectVisible(selectionService.primary)) return null;
   const selection = transformController.getEditSelection();
   if (!selection || selection.cellId < 0) return null;
 
   const objectDimension = selectedGeometryDimension();
   if (selection.dimension + 1 > objectDimension) return null;
 
-  const targetIsBase = selectedInstance === BASE_SELECTION;
-  const target = targetIsBase ? null : extraInstances[selectedInstance];
+  const targetIsBase = selectionService.primary === BASE_SELECTION;
+  const target = targetIsBase ? null : extraInstances[selectionService.primary];
   const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
   const selectedCellIds = selection.cellIds.length ? selection.cellIds : [selection.cellId];
   const operationMode = normalizeEditOperationMode(mode);
   const selectedCellSignatureGroups = selectedCellComponentSignatures(topology, selection.dimension, selectedCellIds, operationMode);
   if (!selectedCellSignatureGroups.length) return null;
-  const original = captureEditGeometrySnapshot(selectedInstance);
+  const original = captureEditGeometrySnapshot(selectionService.primary);
   if (!original) return null;
 
   const undoSnapshot = captureSceneUrlState();
@@ -2366,11 +2297,11 @@ function extrudeSelectedEditCell(mode: EditOperationMode = 'grouped'): EditExtru
     });
   }
   if (!capSignatures.length) {
-    restoreEditGeometrySnapshot(selectedInstance, original);
+    restoreEditGeometrySnapshot(selectionService.primary, original);
     return null;
   }
 
-  renderSync.rebuildGeometryRenderer(selectedInstance);
+  renderSync.rebuildGeometryRenderer(selectionService.primary);
 
   projectAndRenderAll();
   const nextTopology = targetIsBase ? baseCellTopology : target?.cellTopology;
@@ -2379,13 +2310,13 @@ function extrudeSelectedEditCell(mode: EditOperationMode = 'grouped'): EditExtru
     capSignatures.map(signature => findCellIdByVertexSignature(nextTopology, selection.dimension, signature)).filter(cellId => cellId >= 0),
     nextTopology,
   );
-  transformController.updateVertexCloud(selectedInstance);
+  transformController.updateVertexCloud(selectionService.primary);
   updateSelectionOutline();
   updateTransformActionButtons();
   return {
     undoSnapshot,
     mode: operationMode,
-    instIdx: selectedInstance,
+    instIdx: selectionService.primary,
     dimension: selection.dimension,
     cellId: selection.cellId,
     cellIds: [...selection.cellIds],
@@ -2493,18 +2424,18 @@ function restoreTokenEditSelection(token: {
 }
 
 function startEditInset(mode: EditOperationMode = 'grouped'): EditInsetToken | null {
-  if (!PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return null;
+  if (!PARAMS.editMode || !isGeometrySelectionIndex(selectionService.primary) || !getObjectVisible(selectionService.primary)) return null;
   const selection = transformController.getEditSelection();
   if (!selection || selection.cellId < 0 || selection.dimension < 1) return null;
 
-  const targetIsBase = selectedInstance === BASE_SELECTION;
-  const target = targetIsBase ? null : extraInstances[selectedInstance];
+  const targetIsBase = selectionService.primary === BASE_SELECTION;
+  const target = targetIsBase ? null : extraInstances[selectionService.primary];
   const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
   const selectedCellIds = selection.cellIds.length ? selection.cellIds : [selection.cellId];
   const operationMode = normalizeEditOperationMode(mode);
   const selectedCellSignatureGroups = selectedCellComponentSignatures(topology, selection.dimension, selectedCellIds, operationMode);
   if (!selectedCellSignatureGroups.length) return null;
-  const original = captureEditGeometrySnapshot(selectedInstance);
+  const original = captureEditGeometrySnapshot(selectionService.primary);
   if (!original) return null;
 
   const undoSnapshot = captureSceneUrlState();
@@ -2558,11 +2489,11 @@ function startEditInset(mode: EditOperationMode = 'grouped'): EditInsetToken | n
     allInsetVertices.push(...inset.insetVertices);
   }
   if (!insetGroups.length) {
-    restoreEditGeometrySnapshot(selectedInstance, original);
+    restoreEditGeometrySnapshot(selectionService.primary, original);
     return null;
   }
 
-  renderSync.rebuildGeometryRenderer(selectedInstance);
+  renderSync.rebuildGeometryRenderer(selectionService.primary);
 
   projectAndRenderAll();
   const nextTopology = targetIsBase ? baseCellTopology : target?.cellTopology;
@@ -2570,14 +2501,14 @@ function startEditInset(mode: EditOperationMode = 'grouped'): EditInsetToken | n
     .map(signature => findCellIdByVertexSignature(nextTopology, selection.dimension, signature))
     .filter(cellId => cellId >= 0);
   transformController.setSelectedEditCells(selection.dimension, insetCellIds, nextTopology);
-  transformController.updateVertexCloud(selectedInstance);
+  transformController.updateVertexCloud(selectionService.primary);
   updateSelectionOutline();
   updateTransformActionButtons();
 
   return {
     undoSnapshot,
     mode: operationMode,
-    instIdx: selectedInstance,
+    instIdx: selectionService.primary,
     dimension: selection.dimension,
     cellId: insetCellIds[0] ?? -1,
     cellIds: [...selection.cellIds],
@@ -2661,23 +2592,23 @@ function startEditBevel(
   inward = false,
   mode: EditOperationMode = 'grouped',
 ): EditBevelToken | null {
-  if (!PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return null;
+  if (!PARAMS.editMode || !isGeometrySelectionIndex(selectionService.primary) || !getObjectVisible(selectionService.primary)) return null;
   const selection = transformController.getEditSelection();
   if (!selection || selection.cellId < 0 || !selection.vertices.length) return null;
-  const targetIsBase = selectedInstance === BASE_SELECTION;
-  const target = targetIsBase ? null : extraInstances[selectedInstance];
+  const targetIsBase = selectionService.primary === BASE_SELECTION;
+  const target = targetIsBase ? null : extraInstances[selectionService.primary];
   const topology = targetIsBase ? baseCellTopology : target?.cellTopology;
   const operationMode = normalizeEditOperationMode(mode);
   const targets = collectEditBevelTargets(topology, selection, kind, operationMode);
   if (!targets) return null;
-  const original = captureEditBevelTargetSnapshot(selectedInstance);
+  const original = captureEditBevelTargetSnapshot(selectionService.primary);
   if (!original) return null;
   return {
     undoSnapshot: captureSceneUrlState(),
     mode: operationMode,
     kind,
     inward,
-    instIdx: selectedInstance,
+    instIdx: selectionService.primary,
     dimension: selection.dimension,
     cellId: selection.cellId,
     cellIds: [...selection.cellIds],
@@ -2879,8 +2810,8 @@ sceneObjectStore = new SceneObjectStore<SceneLightRuntime>({
 });
 const objectListController = new ObjectListController({
   getRows: () => sceneObjectStore.objectRows(),
-  getSelectedIndex: () => selectedInstance,
-  getSelectedIndices: () => selectedInstances,
+  getSelectedIndex: () => selectionService.primary,
+  getSelectedIndices: () => selectionService.items,
   onSelect: (idx, additive) => selectObject(idx, additive),
   onToggleVisibility: (idx, visible) => setObjectVisible(idx, visible),
   onRename: (idx, value) => renameObject(idx, value),
@@ -3097,8 +3028,8 @@ transformController = new TransformController({
   getObjectOrigin,
   getBaseOriginalN: () => baseOriginalN,
   getBaseAxisMap: () => baseAxisMap,
-  getSelectedInstance: () => selectedInstance,
-  getSelectedInstances: () => selectedInstances,
+  getSelectedInstance: () => selectionService.primary,
+  getSelectedInstances: () => selectionService.items,
   getObjectVisible,
   isLightSelection: isLightSelectionIndex,
   getLightPosition: getLightPositionForSelection,
@@ -3113,9 +3044,31 @@ transformController = new TransformController({
   onEditSelectionChange: () => updateTransformActionButtons(),
   onStateChange: () => requestSceneUrlUpdate(),
 });
+selectionService = new SceneSelectionService<SceneLightRuntime>({
+  baseSelection: BASE_SELECTION,
+  noSelection: NO_SELECTION,
+  getObjectStore: () => sceneObjectStore,
+  getLights: () => sceneLights,
+  getEditMode: () => PARAMS.editMode,
+  getBaseRenderer: () => rendererND,
+  getInstanceRenderer: idx => extraInstances[idx]?.renderer,
+  getBaseVertexCount: () => M,
+  getBaseObjectDimension: () => baseOriginalN || visibleDims(),
+  getInstanceObjectDimension: idx => extraInstances[idx]?.originalN ?? 0,
+  getTransformController: () => transformController ?? null,
+  setSceneControlTab,
+  applySceneBackground: () => backgroundController.applySceneBackground(PARAMS.editMode),
+  updateObjectList,
+  updateSelectionOutline,
+  updateVertexCloud,
+  syncSceneLightPanel: () => sceneLightPanel.sync(),
+  updateTexturePanel: () => textureEditor.updatePanel(),
+  updateTransformActionButtons,
+  requestSceneUrlUpdate,
+});
 editToolbar = new EditToolbarController({
   getEditMode: () => PARAMS.editMode,
-  getObjectVisible: () => getObjectVisible(selectedInstance),
+  getObjectVisible: () => getObjectVisible(selectionService.primary),
   getObjectDimension: selectedObjectDimension,
   getTopology: selectedObjectCellTopology,
   getActiveCellDimension: () => transformController.getEditCellDimension(),
@@ -3165,7 +3118,7 @@ projectionPipeline = new ProjectionPipeline({
   perspectiveDimsFor,
   applyObjectVisibility,
   updateSelectionOutline,
-  updateVertexCloud: () => updateVertexCloud(selectedInstance),
+  updateVertexCloud: () => updateVertexCloud(selectionService.primary),
   updateAxisGuide,
   tmpN,
   tmpVec,
@@ -3272,7 +3225,7 @@ function applyEditMode(active: boolean) {
     transformController.clearFaceCenterCloud();
     transformController.clearEditWireOverlay();
   } else {
-    updateVertexCloud(selectedInstance);
+    updateVertexCloud(selectionService.primary);
   }
   updateSelectionOutline();
   updateTransformActionButtons();
@@ -3289,16 +3242,11 @@ function updateTransformActionButtons() {
 }
 
 function hasActiveSelection() {
-  return selectedInstances.some(isSelectableObject);
+  return selectionService.hasActiveSelection();
 }
 
 function selectedEditOperationContext() {
-  if (!transformController || !PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return null;
-  const selection = transformController.getEditSelection();
-  if (!selection || selection.cellId < 0 || !selection.vertices.length) return null;
-  const topology = selectedObjectCellTopology();
-  if (!topology) return null;
-  return { selection, topology };
+  return selectionService.selectedEditOperationContext();
 }
 
 function selectedEditCellSignatures() {
@@ -3335,43 +3283,23 @@ function handleTransformConstraintKey(key: string) {
 }
 
 function maxEditableCellDimensionForSelection() {
-  if (!isGeometrySelectionIndex(selectedInstance)) return 0;
-  const rendererRef = selectedInstance === BASE_SELECTION
-    ? rendererND
-    : extraInstances[selectedInstance]?.renderer;
-  return maxCellDimension(rendererRef?.getCellTopologyForSelection());
+  return selectionService.maxEditableCellDimensionForSelection();
 }
 
 function selectedObjectDimension() {
-  if (!isGeometrySelectionIndex(selectedInstance)) return 0;
-  if (selectedInstance === BASE_SELECTION) return M > 0 ? (baseOriginalN || visibleDims()) : 0;
-  return extraInstances[selectedInstance]?.originalN ?? 0;
+  return selectionService.selectedObjectDimension();
 }
 
 function selectedObjectCellTopology() {
-  if (!isGeometrySelectionIndex(selectedInstance)) return undefined;
-  const rendererRef = selectedInstance === BASE_SELECTION
-    ? rendererND
-    : extraInstances[selectedInstance]?.renderer;
-  return rendererRef?.getCellTopologyForSelection();
+  return selectionService.selectedObjectCellTopology();
 }
 
 function setEditCellDimension(dimension: number) {
-  const maxDim = maxEditableCellDimensionForSelection();
-  transformController.setEditCellDimension(Math.max(0, Math.min(maxDim, Math.floor(dimension))));
-  if (PARAMS.editMode && isGeometrySelectionIndex(selectedInstance) && getObjectVisible(selectedInstance)) updateVertexCloud(selectedInstance);
-  updateTransformActionButtons();
+  selectionService.setEditCellDimension(dimension);
 }
 
 function selectAllEditCells() {
-  if (!PARAMS.editMode || !isGeometrySelectionIndex(selectedInstance) || !getObjectVisible(selectedInstance)) return;
-  const topology = selectedObjectCellTopology();
-  if (!topology) return;
-  const dimension = transformController.getEditCellDimension();
-  transformController.selectAllEditCells(dimension, topology);
-  updateVertexCloud(selectedInstance);
-  updateSelectionOutline();
-  updateTransformActionButtons();
+  selectionService.selectAllEditCells();
 }
 
 const primitiveMenuOptions: { label: string; kind: PrimitiveKind }[] = [
@@ -3422,7 +3350,7 @@ viewportInteraction = new ViewportInteractionController({
   getX: () => X,
   getM: () => M,
   getBaseVisible: () => baseVisible,
-  getSelectedInstance: () => selectedInstance,
+  getSelectedInstance: () => selectionService.primary,
   getRendererND: () => rendererND,
   getExtraInstances: () => extraInstances,
   selectObject,
@@ -3440,7 +3368,7 @@ viewportInteraction = new ViewportInteractionController({
   hasActiveSelection,
   canAddProductMesh,
   addProductMesh: addProductMeshFromSelection,
-  recalculateSelectedOrigin: () => recalculateObjectOrigin(selectedInstance),
+  recalculateSelectedOrigin: () => recalculateObjectOrigin(selectionService.primary),
   focusObjectOrigin,
   cycleAxes,
 });
@@ -3502,7 +3430,7 @@ function addSceneLightAt(kind: SceneLightKind, position: THREE.Vector3) {
     target,
   });
   sceneLights.push(createSceneLightRuntime(state, sceneLightRuntimeOptions(false)));
-  selectedSceneLightId = state.id;
+  selectionService.setLightId(state.id);
   selectObject(lightSelectionIndex(sceneLights.length - 1));
   setSceneControlTab('lights');
   updateObjectList();
@@ -3514,8 +3442,7 @@ function clearExtraInstances() {
   removeSelectionOutlines();
   extraInstances.forEach(inst => inst.renderer.destroy());
   extraInstances.length = 0;
-  selectedInstance = NO_SELECTION;
-  selectedInstances = [];
+  selectionService.clear();
 }
 
 function addInstanceAt(offset: THREE.Vector3, recordUndo = true) {
