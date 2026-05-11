@@ -53,6 +53,7 @@ import { ViewportActionControlsController } from '../ui/ViewportActionControlsCo
 import { WelcomeSplashController, welcomeSplashElementsFromDocument } from '../ui/WelcomeSplashController';
 import { ViewportCaptureController, viewportCaptureElementsFromDocument } from '../viewport/ViewportCaptureController';
 import { HypercubeRenderer } from '../rendering/HypercubeRenderer';
+import { PerformanceOverlayController } from '../rendering/PerformanceOverlayController';
 import { CachedGrainPass, ColorGradeShader, CopyFramePass, SmoothAfterimagePass } from '../rendering/postProcessingPasses';
 import { RenderEffectsController, clamp01, clampSigned01, renderEffectsElementsFromDocument } from '../rendering/RenderEffectsController';
 import {
@@ -334,93 +335,11 @@ export class PolypleApp {
       projectIfDirty();
     };
     
-    const perfOverlay = document.createElement('div');
-    perfOverlay.id = 'perf-overlay';
-    perfOverlay.setAttribute('aria-hidden', 'true');
-    Object.assign(perfOverlay.style, {
-      position: 'fixed',
-      right: 'calc(10px + var(--safe-right))',
-      top: 'calc(10px + var(--safe-top))',
-      zIndex: '80',
-      display: 'none',
-      minWidth: '128px',
-      boxSizing: 'border-box',
-      padding: '7px 8px',
-      border: '1px solid rgba(207, 241, 240, 0.2)',
-      borderRadius: '7px',
-      background: 'rgba(25, 23, 15, 0.78)',
-      color: 'rgba(207, 241, 240, 0.94)',
-      font: '700 10px/1.36 SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace',
-      letterSpacing: '0.01em',
-      pointerEvents: 'none',
-      whiteSpace: 'pre',
-      boxShadow: '0 10px 26px rgba(25, 23, 15, 0.36)',
-      backdropFilter: 'blur(10px) saturate(1.08)',
-      WebkitBackdropFilter: 'blur(10px) saturate(1.08)',
-    });
-    document.body.appendChild(perfOverlay);
-    
-    let perfOverlayVisible = false;
-    let perfSampleStart = performance.now();
-    const perfStats = {
-      frames: 0,
-      cpuMs: 0,
-      projectionMs: 0,
-      projectionFrames: 0,
-      renderMs: 0,
+    const perfOverlay = new PerformanceOverlayController();
+    const togglePerfOverlay = () => perfOverlay.toggle();
+    const recordPerfFrame = (frameStart: number, projectionMs: number, renderMs: number) => {
+      perfOverlay.recordFrame(frameStart, projectionMs, renderMs);
     };
-    
-    function resetPerfStats(now = performance.now()) {
-      perfSampleStart = now;
-      perfStats.frames = 0;
-      perfStats.cpuMs = 0;
-      perfStats.projectionMs = 0;
-      perfStats.projectionFrames = 0;
-      perfStats.renderMs = 0;
-    }
-    
-    function togglePerfOverlay() {
-      perfOverlayVisible = !perfOverlayVisible;
-      perfOverlay.style.display = perfOverlayVisible ? 'block' : 'none';
-      perfOverlay.setAttribute('aria-hidden', String(!perfOverlayVisible));
-      resetPerfStats();
-      if (perfOverlayVisible) perfOverlay.textContent = 'FPS --\nFrame --ms\nCPU --ms\nProj --\nRender --ms';
-    }
-    
-    function recordPerfFrame(frameStart: number, projectionMs: number, renderMs: number) {
-      if (!perfOverlayVisible) return;
-    
-      const now = performance.now();
-      const cpuMs = Math.max(0, now - frameStart);
-    
-      perfStats.frames += 1;
-      perfStats.cpuMs += cpuMs;
-      perfStats.renderMs += renderMs;
-      if (projectionMs > 0) {
-        perfStats.projectionMs += projectionMs;
-        perfStats.projectionFrames += 1;
-      }
-    
-      const elapsed = now - perfSampleStart;
-      if (elapsed < 500 || perfStats.frames === 0) return;
-    
-      const fps = (perfStats.frames * 1000) / elapsed;
-      const avgFrameMs = elapsed / perfStats.frames;
-      const avgCpuMs = perfStats.cpuMs / perfStats.frames;
-      const avgRenderMs = perfStats.renderMs / perfStats.frames;
-      const avgProjectionMs = perfStats.projectionFrames > 0
-        ? `${(perfStats.projectionMs / perfStats.projectionFrames).toFixed(1)}ms`
-        : 'idle';
-    
-      perfOverlay.textContent = [
-        `FPS ${fps.toFixed(0)}`,
-        `Frame ${avgFrameMs.toFixed(1)}ms`,
-        `CPU ${avgCpuMs.toFixed(1)}ms`,
-        `Proj ${avgProjectionMs}`,
-        `Render ${avgRenderMs.toFixed(1)}ms`,
-      ].join('\n');
-      resetPerfStats(now);
-    }
     let transformController: TransformController;
     let viewportInteraction: ViewportInteractionController;
     let selectionOutlineRenderer: SelectionOutlineRenderer;
