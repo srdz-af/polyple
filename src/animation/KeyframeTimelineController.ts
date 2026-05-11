@@ -235,15 +235,16 @@ export class KeyframeTimelineController {
     if (!state) return;
     const fallbackViewport = viewportDimensions();
     const settings = state.settings ?? this.settings;
-    this.cameraDimensionsFollowViewport = typeof state.cameraDimensionsFollowViewport === 'boolean'
+    const followViewport = typeof state.cameraDimensionsFollowViewport === 'boolean'
       ? state.cameraDimensionsFollowViewport
       : this.cameraDimensionsFollowViewport;
+    this.cameraDimensionsFollowViewport = followViewport;
     this.settings = {
       fps: clamp(Math.round(finiteNumber(settings.fps, this.settings.fps)), MIN_FPS, MAX_FPS),
       frameCount: clamp(Math.round(finiteNumber(settings.frameCount, this.settings.frameCount)), MIN_FRAME_COUNT, MAX_FRAME_COUNT),
       renderQuality: normalizeRenderQuality(settings.renderQuality),
-      cameraWidth: viewportDimension(settings.cameraWidth, fallbackViewport.width),
-      cameraHeight: viewportDimension(settings.cameraHeight, fallbackViewport.height),
+      cameraWidth: followViewport ? fallbackViewport.width : viewportDimension(settings.cameraWidth, fallbackViewport.width),
+      cameraHeight: followViewport ? fallbackViewport.height : viewportDimension(settings.cameraHeight, fallbackViewport.height),
     };
 
     this.keyframes.clear();
