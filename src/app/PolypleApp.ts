@@ -35,6 +35,7 @@ import {
 import { BackgroundController, backgroundElementsFromDocument, type BackgroundUrlState } from '../background/BackgroundController';
 import { KeyboardCameraController } from '../controls/KeyboardCameraController';
 import { KeyboardShortcutController } from '../interaction/KeyboardShortcutController';
+import { SelectionOutlineRenderer } from '../interaction/SelectionOutlineRenderer';
 import { TransformController } from '../interaction/TransformController';
 import { ViewportInteractionController, viewportContextMenuFromDocument } from '../interaction/ViewportInteractionController';
 import { createBidirectionalAxes, createFadingGrid } from '../viewport/grid';
@@ -422,6 +423,7 @@ export class PolypleApp {
     }
     let transformController: TransformController;
     let viewportInteraction: ViewportInteractionController;
+    let selectionOutlineRenderer: SelectionOutlineRenderer;
     let textureEditor: TextureEditorController;
     
     const raycaster = new THREE.Raycaster();
@@ -479,8 +481,6 @@ export class PolypleApp {
     const BASE_SELECTION = -1;
     const NO_SELECTION = -2;
     const LIGHT_SELECTION_BASE = -1000;
-    let selectionOutlines: THREE.LineSegments[] = [];
-    let selectionOutlineKeys: number[] = [];
     const baseTransform = { pos: new THREE.Vector3(), rot: new THREE.Vector3(), scale: new THREE.Vector3(1,1,1) };
     let baseOrigin: ObjectOrigin = new Float32Array(MAX_N);
     let baseOriginalN = 0;
@@ -1048,64 +1048,16 @@ export class PolypleApp {
       splitMaterialForTarget: () => sceneMaterialService.splitSelectedMaterial(true),
     });
     
-    function removeSelectionOutlines() {
-      selectionOutlines.forEach(outline => {
-        scene.remove(outline);
-        if (Array.isArray(outline.material)) outline.material.forEach(material => material.dispose());
-        else outline.material.dispose();
-      });
-      selectionOutlines = [];
-      selectionOutlineKeys = [];
-    }
-    
-    function selectionGeometry(idx: number) {
-      if (idx === BASE_SELECTION) return M > 0 ? rendererND.line.geometry : null;
-      return extraInstances[idx]?.renderer.line.geometry ?? null;
-    }
-    
-    function buildSelectionOutline(geom: THREE.BufferGeometry, primary: boolean) {
-      const mat = new THREE.LineBasicMaterial({
-        color: 0xffa64d,
-        transparent: true,
-        opacity: primary ? 1 : 0.38,
-        depthTest: false,
-        depthWrite: false,
-      });
-      const outline = new THREE.LineSegments(geom, mat);
-      outline.renderOrder = primary ? 10 : 9;
-      return outline;
-    }
-    
     function selectObject(idx: number, additive = false) {
       selectionService.selectObject(idx, additive);
     }
     
+    function removeSelectionOutlines() {
+      selectionOutlineRenderer.clear();
+    }
+
     function updateSelectionOutline() {
-      reconcileSelection();
-      const desiredKeys = PARAMS.editMode
-        ? []
-        : selectionService.items.filter(idx => getObjectVisible(idx) && selectionGeometry(idx));
-      const unchanged = desiredKeys.length === selectionOutlineKeys.length
-        && desiredKeys.every((idx, i) => idx === selectionOutlineKeys[i]);
-      if (unchanged) {
-        selectionOutlines.forEach(outline => {
-          if (!scene.children.includes(outline)) scene.add(outline);
-        });
-        return;
-      }
-    
-      removeSelectionOutlines();
-      if (PARAMS.editMode) return;
-    
-      desiredKeys.forEach((idx, selectionIdx) => {
-        if (!getObjectVisible(idx)) return;
-        const geom = selectionGeometry(idx);
-        if (!geom) return;
-        const outline = buildSelectionOutline(geom, selectionIdx === 0);
-        selectionOutlines.push(outline);
-        selectionOutlineKeys.push(idx);
-        scene.add(outline);
-      });
+      selectionOutlineRenderer.update();
     }
     
     function clearAxisGuide() {
@@ -1528,6 +1480,17 @@ export class PolypleApp {
       rendererND.build(M, E, baseSurfaceTopology, baseCellTopology);
       rendererND.setMode('solid');
     }
+    selectionOutlineRenderer = new SelectionOutlineRenderer({
+      scene,
+      getEditMode: () => PARAMS.editMode,
+      getSelectionItems: () => selectionService?.items ?? [],
+      getObjectVisible,
+      getSelectionGeometry: idx => {
+        if (idx === BASE_SELECTION) return M > 0 ? rendererND.line.geometry : null;
+        return extraInstances[idx]?.renderer.line.geometry ?? null;
+      },
+      reconcileSelection: () => selectionService?.reconcile(),
+    });
     
     // --- UI state ---
     const PARAMS = {
