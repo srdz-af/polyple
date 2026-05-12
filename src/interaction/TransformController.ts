@@ -107,6 +107,8 @@ const CELL_CENTER_MARKER_PIXEL_DIAMETER = 6.5;
 const SELECTED_MARKER_PIXEL_DIAMETER = 11;
 const TRANSFORM_GIZMO_MIN_PIXEL_RADIUS = 54;
 const TRANSFORM_GIZMO_HANDLE_PIXEL_DIAMETER = 15;
+const TRANSFORM_GIZMO_HANDLE_PICK_RADIUS_PX = 18;
+const TRANSFORM_GIZMO_HANDLE_COARSE_PICK_RADIUS_PX = 34;
 const TRANSFORM_GIZMO_SEGMENTS = 96;
 const MIN_TRANSFORM_SCALE = 1e-4;
 const PROJECTED_AXIS_DIRECTIONS = [
@@ -172,6 +174,7 @@ export class TransformController {
   private transformGizmoExtraHandles: THREE.Mesh[] = [];
   private transformGizmoExtraSignature = '';
   private readonly transformGizmoCenter = new THREE.Vector3();
+  private readonly transformGizmoPickWorld = new THREE.Vector3();
   private pendingGizmoConstraint: TransformGizmoConstraint | null = null;
   private readonly tmpVec = new THREE.Vector3();
   private readonly dragRotated = new Float32Array(32);
@@ -987,7 +990,34 @@ export class TransformController {
       .intersectObjects(this.transformGizmoHandles, false)
       .find(entry => entry.object.visible);
     const constraint = hit?.object.userData.transformGizmoConstraint as TransformGizmoConstraint | undefined;
-    return constraint ?? null;
+    if (constraint) return constraint;
+
+    this.transformGizmo.updateMatrixWorld(true);
+    const coarsePointer = ev.pointerType === 'touch'
+      || (typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches);
+    const pickRadius = coarsePointer
+      ? TRANSFORM_GIZMO_HANDLE_COARSE_PICK_RADIUS_PX
+      : TRANSFORM_GIZMO_HANDLE_PICK_RADIUS_PX;
+    const pickRadiusSq = pickRadius * pickRadius;
+    let bestDistanceSq = pickRadiusSq;
+    let bestConstraint: TransformGizmoConstraint | null = null;
+
+    for (const handle of this.transformGizmoHandles) {
+      if (!handle.visible) continue;
+      handle.getWorldPosition(this.transformGizmoPickWorld);
+      this.transformGizmoPickWorld.project(this.options.camera);
+      if (this.transformGizmoPickWorld.z < -1 || this.transformGizmoPickWorld.z > 1) continue;
+      const screenX = rect.left + ((this.transformGizmoPickWorld.x + 1) * 0.5 * rect.width);
+      const screenY = rect.top + ((1 - this.transformGizmoPickWorld.y) * 0.5 * rect.height);
+      const dx = ev.clientX - screenX;
+      const dy = ev.clientY - screenY;
+      const distanceSq = (dx * dx) + (dy * dy);
+      if (distanceSq > bestDistanceSq) continue;
+      bestDistanceSq = distanceSq;
+      bestConstraint = handle.userData.transformGizmoConstraint as TransformGizmoConstraint | undefined ?? null;
+    }
+
+    return bestConstraint;
   }
 
   private computeTransformGizmoBounds() {
