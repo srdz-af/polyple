@@ -55,6 +55,8 @@ const OPERATION_HANDLE_BASE_LENGTH = 42;
 const OPERATION_HANDLE_MAX_EXTRA_LENGTH = 58;
 const OPERATION_HANDLE_DOT_SIZE = 10;
 const OPERATION_HANDLE_LINE_WIDTH = 2;
+const OPERATION_HANDLE_PICK_RADIUS_PX = 18;
+const OPERATION_HANDLE_COARSE_PICK_RADIUS_PX = 34;
 
 type CellPickCandidate = {
   cellId: number;
@@ -72,6 +74,13 @@ type ScalarEditOperationOptions = {
   min?: number;
   max?: number;
   epsilon?: number;
+};
+
+type ActiveScalarEditDrag = {
+  pointerId: number;
+  begin: (point: ViewportPointerPoint, pointerId: number) => void;
+  end: (pointerId: number) => boolean;
+  isDragging: (pointerId?: number) => boolean;
 };
 
 type ViewportInteractionControllerOptions = {
@@ -159,6 +168,8 @@ export class ViewportInteractionController {
     line: HTMLDivElement;
     dot: HTMLDivElement;
   } | null = null;
+  private scalarEditHandleHit: { start: THREE.Vector2; end: THREE.Vector2 } | null = null;
+  private activeScalarEditDrag: ActiveScalarEditDrag | null = null;
 
   constructor(private readonly options: ViewportInteractionControllerOptions) {}
 
@@ -364,6 +375,7 @@ export class ViewportInteractionController {
 
   private hideScalarEditHandle() {
     if (this.scalarEditHandle) this.scalarEditHandle.root.style.display = 'none';
+    this.scalarEditHandleHit = null;
   }
 
   private updateScalarEditHandle(kind: string, amount: number) {
@@ -388,6 +400,51 @@ export class ViewportInteractionController {
     handle.line.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
     handle.dot.style.left = `${geometry.end.x}px`;
     handle.dot.style.top = `${geometry.end.y}px`;
+    this.scalarEditHandleHit = {
+      start: geometry.start.clone(),
+      end: geometry.end.clone(),
+    };
+  }
+
+  private isScalarEditOperationActive() {
+    return this.operationManager.isKind('edit-bevel')
+      || this.operationManager.isKind('edit-inset')
+      || this.operationManager.isKind('edit-extrusion');
+  }
+
+  private coarsePointer(ev: PointerEvent) {
+    return ev.pointerType === 'touch'
+      || (typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches);
+  }
+
+  private pointerNearScalarEditHandle(ev: PointerEvent) {
+    if (!this.scalarEditHandleHit) return false;
+    const radius = this.coarsePointer(ev)
+      ? OPERATION_HANDLE_COARSE_PICK_RADIUS_PX
+      : OPERATION_HANDLE_PICK_RADIUS_PX;
+    const radiusSq = radius * radius;
+    const px = ev.clientX;
+    const py = ev.clientY;
+    const { start, end } = this.scalarEditHandleHit;
+    const vx = end.x - start.x;
+    const vy = end.y - start.y;
+    const lenSq = (vx * vx) + (vy * vy);
+    const t = lenSq > 0
+      ? Math.max(0, Math.min(1, (((px - start.x) * vx) + ((py - start.y) * vy)) / lenSq))
+      : 1;
+    const closestX = start.x + (vx * t);
+    const closestY = start.y + (vy * t);
+    const dx = px - closestX;
+    const dy = py - closestY;
+    return ((dx * dx) + (dy * dy)) <= radiusSq;
+  }
+
+  private beginScalarEditHandleDrag(ev: PointerEvent) {
+    if (!this.isScalarEditOperationActive() || !this.activeScalarEditDrag || ev.button !== 0) return false;
+    if (!this.pointerNearScalarEditHandle(ev)) return false;
+    this.activeScalarEditDrag.begin({ clientX: ev.clientX, clientY: ev.clientY }, ev.pointerId);
+    this.consumeOperationPointerEvent(ev);
+    return true;
   }
 
   private scalarEditHandleGeometry(kind: string, amount: number) {
@@ -497,8 +554,10 @@ export class ViewportInteractionController {
 
   private startScalarEditOperation(operation: ViewportAmountOperation, options: ScalarEditOperationOptions) {
     let amount = options.initialAmount ?? 0;
-    const startX = this.lastPointer.x;
-    const startY = this.lastPointer.y;
+    let anchorX = this.lastPointer.x;
+    let anchorY = this.lastPointer.y;
+    let anchorAmount = amount;
+    let activePointerId = -1;
     const clampAmount = (value: number) => {
       const min = options.min ?? (options.signed ? Number.NEGATIVE_INFINITY : 0);
       const max = options.max ?? Number.POSITIVE_INFINITY;
@@ -519,11 +578,11 @@ export class ViewportInteractionController {
       blocksSelection: operation.blocksSelection ?? true,
       blocksContextMenu: operation.blocksContextMenu ?? true,
       usesPointerLock: operation.usesPointerLock ?? true,
-      updatePointer: point => {
-        const dx = point.clientX - startX;
-        const dy = startY - point.clientY;
-        const baseAmount = options.signed ? 0 : (options.initialAmount ?? 0);
-        return applyAmount(baseAmount + ((dx + dy) * options.scale));
+      updatePointer: (point, pointerEvent) => {
+        if (activePointerId >= 0 && pointerEvent && pointerEvent.pointerId !== activePointerId) return false;
+        const dx = point.clientX - anchorX;
+        const dy = anchorY - point.clientY;
+        return applyAmount(anchorAmount + ((dx + dy) * options.scale));
       },
       updateWheel: operation.updateWheel
         ? ev => {
@@ -534,11 +593,31 @@ export class ViewportInteractionController {
         : undefined,
       cleanup: () => {
         this.hideScalarEditHandle();
+        this.activeScalarEditDrag = null;
         if (this.options.contextMenuEl) this.options.contextMenuEl.style.display = 'none';
         operation.cleanup?.();
       },
     });
-    if (started) applyAmount(amount, true);
+    if (started) {
+      this.activeScalarEditDrag = {
+        get pointerId() {
+          return activePointerId;
+        },
+        begin: (point, pointerId) => {
+          anchorX = point.clientX;
+          anchorY = point.clientY;
+          anchorAmount = amount;
+          activePointerId = pointerId;
+        },
+        end: pointerId => {
+          if (activePointerId !== pointerId) return false;
+          activePointerId = -1;
+          return true;
+        },
+        isDragging: pointerId => activePointerId >= 0 && (pointerId === undefined || pointerId === activePointerId),
+      };
+      applyAmount(amount, true);
+    }
     return started;
   }
 
@@ -1025,11 +1104,8 @@ export class ViewportInteractionController {
   }
 
   private handleWindowPointerDown(ev: PointerEvent) {
-    if (
-      !this.operationManager.isKind('edit-bevel')
-      && !this.operationManager.isKind('edit-inset')
-      && !this.operationManager.isKind('edit-extrusion')
-    ) return;
+    if (!this.isScalarEditOperationActive()) return;
+    if (this.beginScalarEditHandleDrag(ev)) return;
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
     if (ev.button === 0) {
       this.finishOperationFromPointer(ev, true);
@@ -1061,6 +1137,12 @@ export class ViewportInteractionController {
       this.transformGizmoEndEvent = null;
       return;
     }
+    if (this.activeScalarEditDrag?.isDragging(ev.pointerId)) {
+      this.activeScalarEditDrag.end(ev.pointerId);
+      this.operationManager.finish(true);
+      ev.preventDefault();
+      return;
+    }
     if (this.operationManager.isKind('axis-shift')) this.operationManager.finish(true);
   }
 
@@ -1075,6 +1157,7 @@ export class ViewportInteractionController {
       || this.operationManager.isKind('edit-inset')
       || this.operationManager.isKind('edit-extrusion')
     ) {
+      this.activeScalarEditDrag?.end(ev.pointerId);
       this.operationManager.finish(false);
       ev.preventDefault();
       return;
