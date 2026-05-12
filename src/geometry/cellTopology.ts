@@ -1589,6 +1589,18 @@ export function bevelEdge(
   const cutFor = (endpoint: number, sideNeighbor: number) => (
     cutByEndpointNeighbor.get(cutKey(endpoint, sideNeighbor)) ?? -1
   );
+  const ensureEndpointCut = (endpoint: number, sideNeighbor: number, faceId: number) => {
+    if ((endpoint !== edgeA && endpoint !== edgeB) || sideNeighbor < 0 || sideNeighbor >= vertexCount || sideNeighbor === endpoint) {
+      return -1;
+    }
+    const key = cutKey(endpoint, sideNeighbor);
+    const existing = cutByEndpointNeighbor.get(key);
+    if (typeof existing === 'number') return existing;
+    const vertex = nextVertex++;
+    cutByEndpointNeighbor.set(key, vertex);
+    cuts.push({ vertex, endpoint, faceId, sideNeighbor });
+    return vertex;
+  };
   const profileKey = (endpoint: number, sideA: number, sideB: number) => `${endpoint}:${sideA}:${sideB}`;
   const profileSequence = (endpoint: number, sideA: number, sideB: number) => (
     profileByEndpointNeighbors.get(profileKey(endpoint, sideA, sideB))
@@ -1610,28 +1622,28 @@ export function bevelEdge(
     const sideA = selectedEdgeSideNeighbor(face, edgeA);
     const sideB = selectedEdgeSideNeighbor(face, edgeB);
     if (sideA < 0 || sideB < 0) return undefined;
-    let cutA = cutFor(edgeA, sideA);
-    if (cutA < 0) {
-      cutA = nextVertex++;
-      cutByEndpointNeighbor.set(cutKey(edgeA, sideA), cutA);
-      cuts.push({ vertex: cutA, endpoint: edgeA, faceId, sideNeighbor: sideA });
-    }
-    let cutB = cutFor(edgeB, sideB);
-    if (cutB < 0) {
-      cutB = nextVertex++;
-      cutByEndpointNeighbor.set(cutKey(edgeB, sideB), cutB);
-      cuts.push({ vertex: cutB, endpoint: edgeB, faceId, sideNeighbor: sideB });
-    }
+    const cutA = ensureEndpointCut(edgeA, sideA, faceId);
+    const cutB = ensureEndpointCut(edgeB, sideB, faceId);
+    if (cutA < 0 || cutB < 0) return undefined;
     const pair: [number, number] = [cutA, cutB];
     faceCutByFaceId.set(faceId, pair);
     return pair;
   };
 
+  for (const edge of sourceCellsByDim[1] ?? []) {
+    if (edge.length < 2) continue;
+    const [a, b] = edge;
+    if (a === edgeA && b !== edgeB) ensureEndpointCut(edgeA, b, -1);
+    else if (b === edgeA && a !== edgeB) ensureEndpointCut(edgeA, a, -1);
+    if (a === edgeB && b !== edgeA) ensureEndpointCut(edgeB, b, -1);
+    else if (b === edgeB && a !== edgeA) ensureEndpointCut(edgeB, a, -1);
+  }
+
   for (let faceId = 0; faceId < (sourceCellsByDim[2]?.length ?? 0); faceId++) {
     const face = sourceCellsByDim[2][faceId];
     if (hasSelectedEdge(face)) ensureFaceCuts(faceId, face);
   }
-  if (!cuts.length) return undefined;
+  if (!faceCutByFaceId.size) return undefined;
 
   const sideNeighborsByEndpoint = new Map<number, number[]>();
   const addEndpointSideNeighbor = (endpoint: number, sideNeighbor: number) => {
@@ -1670,8 +1682,11 @@ export function bevelEdge(
   };
 
   for (const [endpoint, neighbors] of sideNeighborsByEndpoint) {
-    if (neighbors.length !== 2) continue;
-    ensureEndpointProfile(endpoint, neighbors[0], neighbors[1]);
+    for (let first = 0; first < neighbors.length; first++) {
+      for (let second = first + 1; second < neighbors.length; second++) {
+        ensureEndpointProfile(endpoint, neighbors[first], neighbors[second]);
+      }
+    }
   }
 
   const faceIdsInCell = (cell: number[]) => {
@@ -1713,17 +1728,26 @@ export function bevelEdge(
     return ensureEndpointProfile(endpoint, firstSide, secondSide);
   };
 
-  const bevelStripFacesForFaceIds = (faceIds: number[]) => {
-    if (faceIds.length !== 2) return [];
-    const edgeAProfile = endpointProfileForFacePair(edgeA, faceIds[0], faceIds[1]);
-    const edgeBProfile = endpointProfileForFacePair(edgeB, faceIds[0], faceIds[1]);
+  const bevelStripFacesForFacePair = (firstFaceId: number, secondFaceId: number) => {
+    const edgeAProfile = endpointProfileForFacePair(edgeA, firstFaceId, secondFaceId);
+    const edgeBProfile = endpointProfileForFacePair(edgeB, firstFaceId, secondFaceId);
     if (!edgeAProfile || !edgeBProfile || edgeAProfile.length !== edgeBProfile.length || edgeAProfile.length < 2) {
-      const fallback = cutVerticesForFaceIds(faceIds);
+      const fallback = cutVerticesForFaceIds([firstFaceId, secondFaceId]);
       return fallback.length >= 3 ? [fallback] : [];
     }
     const faces: number[][] = [];
     for (let step = 0; step < edgeAProfile.length - 1; step++) {
       faces.push([edgeAProfile[step], edgeBProfile[step], edgeBProfile[step + 1], edgeAProfile[step + 1]]);
+    }
+    return faces;
+  };
+  const bevelStripFacesForFaceIds = (faceIds: number[]) => {
+    if (faceIds.length < 2) return [];
+    const faces: number[][] = [];
+    for (let first = 0; first < faceIds.length; first++) {
+      for (let second = first + 1; second < faceIds.length; second++) {
+        faces.push(...bevelStripFacesForFacePair(faceIds[first], faceIds[second]));
+      }
     }
     return faces;
   };
@@ -1876,7 +1900,7 @@ export function bevelEdge(
   }
 
   const surfaceStripSignatures = new Set((nextCellsByDim[2] ?? []).map(sortedCellSignature));
-  for (const stripFace of bevelStripFacesForFaceIds(selectedEdgeFaceIds().slice(0, 2))) {
+  for (const stripFace of bevelStripFacesForFaceIds(selectedEdgeFaceIds())) {
     pushUniqueCell(nextCellsByDim[2], stripFace, surfaceStripSignatures);
   }
 

@@ -111,7 +111,6 @@ export type PackedSceneUrlState = {
   bg: PackedBackgroundState;
   li?: PackedSceneLight[];
   tl?: PackedAnimationTimelineState;
-  pc: 0 | 1;
   ag?: ExtraAxisGizmoState;
 };
 

@@ -193,7 +193,6 @@ export class SceneStateService {
       bg: packBackgroundState(this.options.backgroundController.getUrlState()),
       li: this.options.getLights().map(packSceneLightState),
       tl: this.options.getTimeline() ? packTimelineState(this.options.getTimeline()!.getTimelineState()) : undefined,
-      pc: this.options.paneController.isCollapsed ? 1 : 0,
       ag: this.options.axisController.getExtraAxisState(),
     };
   }
@@ -219,7 +218,6 @@ export class SceneStateService {
       this.options.renderEffects.sync();
 
       this.options.axisController.applyExtraAxisState(state.ag);
-      this.options.paneController.setCollapsed(state.pc === 1);
       this.applyCameraState(state.c);
       this.options.setEditMode(state.em === 1);
       const packedEditSelection = Array.isArray(state.es) ? state.es : null;

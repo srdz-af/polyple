@@ -200,7 +200,6 @@ export const DEFAULT_SCENE_STATE: unknown = {
     "fv": 1,
     "k": []
   },
-  "pc": 0,
   "ag": {
     "perspectiveDims": [
       0,
