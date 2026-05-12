@@ -228,6 +228,39 @@ export class ExtraAxisGizmoController {
     requestAnimationFrame(this.handleBandScroll);
   }
 
+  private setAttr(el: Element, name: string, value: string) {
+    if (el.getAttribute(name) !== value) el.setAttribute(name, value);
+  }
+
+  private setText(el: HTMLElement, value: string) {
+    if (el.textContent !== value) el.textContent = value;
+  }
+
+  private setStyle(el: HTMLElement | SVGElement, property: string, value: string) {
+    if (el.style.getPropertyValue(property) !== value) el.style.setProperty(property, value);
+  }
+
+  private setTitle(el: HTMLElement, title: string) {
+    if (el.title !== title) el.title = title;
+    this.setAttr(el, 'aria-label', title);
+  }
+
+  private syncGizmoDomOrder(orderedRoots: HTMLDivElement[]) {
+    const root = this.options.rootEl;
+    if (!root) return;
+    const current = Array.from(root.children).filter((child): child is HTMLDivElement => (
+      child instanceof HTMLDivElement && child.classList.contains('extra-axis-gizmo')
+    ));
+    for (let idx = 0; idx < orderedRoots.length; idx++) {
+      const desired = orderedRoots[idx];
+      if (current[idx] === desired) continue;
+      root.insertBefore(desired, current[idx] ?? null);
+      const existingIndex = current.indexOf(desired);
+      if (existingIndex >= 0) current.splice(existingIndex, 1);
+      current.splice(idx, 0, desired);
+    }
+  }
+
   clearDynamicState() {
     this.autoRotateSpeeds.clear();
     this.pausedAutoRotateSpeeds.clear();
@@ -408,6 +441,7 @@ export class ExtraAxisGizmoController {
     this.ensureAnglesForPlanes(planes);
     const activeDepthDims = new Set(planes.map(plane => plane.depthDim));
     const freezeDomOrder = this.orderDrag.active;
+    const orderedRoots: HTMLDivElement[] = [];
 
     for (const [depthDim, ui] of this.uis) {
       if (!activeDepthDims.has(depthDim)) {
@@ -426,12 +460,16 @@ export class ExtraAxisGizmoController {
         ui = this.createUI(plane.depthDim);
         this.uis.set(plane.depthDim, ui);
       }
-      if (!freezeDomOrder) {
-        this.options.rootEl.appendChild(ui.root);
-      } else if (!ui.root.parentElement && ui.root !== this.orderDrag.source) {
+      orderedRoots.push(ui.root);
+      if (freezeDomOrder && !ui.root.parentElement && ui.root !== this.orderDrag.source) {
         this.options.rootEl.appendChild(ui.root);
       }
+    }
+    if (!freezeDomOrder) this.syncGizmoDomOrder(orderedRoots);
 
+    for (const plane of planes) {
+      const ui = this.uis.get(plane.depthDim);
+      if (!ui) continue;
       const color = AXIS_PALETTE[plane.depthDim % AXIS_PALETTE.length];
       const depthLabel = axisLabel(plane.depthDim);
       const planeLabel = axisLabel(plane.planeAxis);
@@ -444,34 +482,30 @@ export class ExtraAxisGizmoController {
       const endX = extraAxisGizmoCenter + dx * extraAxisGizmoRadius;
       const endY = extraAxisGizmoCenter + dy * extraAxisGizmoRadius;
 
-      ui.root.style.setProperty('--extra-axis-color', color);
-      ui.root.title = `Rotate global ${depthLabel} axis (${planeLabel}-${depthLabel} plane)`;
-      ui.root.setAttribute('aria-label', ui.root.title);
+      this.setStyle(ui.root, '--extra-axis-color', color);
+      this.setTitle(ui.root, `Rotate global ${depthLabel} axis (${planeLabel}-${depthLabel} plane)`);
       ui.root.classList.remove('disabled');
-      ui.posButton.disabled = false;
-      ui.negButton.disabled = false;
-      ui.orderHandleButton.title = `Reorder ${depthLabel} axis`;
-      ui.orderHandleButton.setAttribute('aria-label', ui.orderHandleButton.title);
-      ui.posButton.textContent = depthLabel;
-      ui.posButton.title = `Rotate ${planeLabel}-${depthLabel}`;
-      ui.negButton.title = `Rotate ${planeLabel}-${depthLabel}`;
-      ui.posButton.setAttribute('aria-label', ui.posButton.title);
-      ui.negButton.setAttribute('aria-label', ui.negButton.title);
+      if (ui.posButton.disabled) ui.posButton.disabled = false;
+      if (ui.negButton.disabled) ui.negButton.disabled = false;
+      this.setTitle(ui.orderHandleButton, `Reorder ${depthLabel} axis`);
+      this.setText(ui.posButton, depthLabel);
+      this.setTitle(ui.posButton, `Rotate ${planeLabel}-${depthLabel}`);
+      this.setTitle(ui.negButton, `Rotate ${planeLabel}-${depthLabel}`);
 
-      ui.line.setAttribute('x1', `${startX}`);
-      ui.line.setAttribute('y1', `${startY}`);
-      ui.line.setAttribute('x2', `${endX}`);
-      ui.line.setAttribute('y2', `${endY}`);
-      ui.line.style.opacity = '0.9';
+      this.setAttr(ui.line, 'x1', `${startX}`);
+      this.setAttr(ui.line, 'y1', `${startY}`);
+      this.setAttr(ui.line, 'x2', `${endX}`);
+      this.setAttr(ui.line, 'y2', `${endY}`);
+      this.setStyle(ui.line, 'opacity', '0.9');
 
-      ui.negButton.style.left = `${startX * buttonScale}px`;
-      ui.negButton.style.top = `${startY * buttonScale}px`;
-      ui.posButton.style.left = `${endX * buttonScale}px`;
-      ui.posButton.style.top = `${endY * buttonScale}px`;
+      this.setStyle(ui.negButton, 'left', `${startX * buttonScale}px`);
+      this.setStyle(ui.negButton, 'top', `${startY * buttonScale}px`);
+      this.setStyle(ui.posButton, 'left', `${endX * buttonScale}px`);
+      this.setStyle(ui.posButton, 'top', `${endY * buttonScale}px`);
       ui.posButton.classList.remove('back');
       ui.negButton.classList.remove('back');
-      ui.posButton.style.zIndex = '2';
-      ui.negButton.style.zIndex = '1';
+      this.setStyle(ui.posButton, 'z-index', '2');
+      this.setStyle(ui.negButton, 'z-index', '1');
       this.setAutoRotateSpeed(plane.depthDim, this.autoRotateSpeeds.get(plane.depthDim) ?? 0);
       this.setPerspectiveDepth(plane.depthDim, this.selectedPerspectiveDims.has(plane.depthDim));
     }
@@ -607,9 +641,8 @@ export class ExtraAxisGizmoController {
     const label = axisLabel(depthDim);
     const action = AUTO_ROTATE_BUTTON_ACTIONS[normalizedSpeed] ?? AUTO_ROTATE_BUTTON_ACTIONS[0];
     const title = `${action} ${label} axis`;
-    ui.autoToggleButton.title = title;
-    ui.autoToggleButton.setAttribute('aria-label', title);
-    ui.autoToggleButton.setAttribute('aria-pressed', String(active));
+    this.setTitle(ui.autoToggleButton, title);
+    this.setAttr(ui.autoToggleButton, 'aria-pressed', String(active));
   }
 
   private advanceAutoRotate(depthDim: number) {
@@ -650,8 +683,8 @@ export class ExtraAxisGizmoController {
 
     this.scrollBarEl.classList.remove('inactive');
     const left = metrics.trackInset + ((root.scrollLeft / metrics.maxScroll) * metrics.trackTravel);
-    this.scrollThumbEl.style.width = `${metrics.thumbWidth}px`;
-    this.scrollThumbEl.style.left = `${left}px`;
+    this.setStyle(this.scrollThumbEl, 'width', `${metrics.thumbWidth}px`);
+    this.setStyle(this.scrollThumbEl, 'left', `${left}px`);
   }
 
   private setPerspectiveDepth(depthDim: number, active: boolean) {
@@ -669,9 +702,8 @@ export class ExtraAxisGizmoController {
     const label = axisLabel(depthDim);
     const action = active ? 'Disable perspective depth' : 'Enable perspective depth';
     const title = `${action} for ${label} axis`;
-    ui.perspectiveToggleButton.title = title;
-    ui.perspectiveToggleButton.setAttribute('aria-label', title);
-    ui.perspectiveToggleButton.setAttribute('aria-pressed', String(active));
+    this.setTitle(ui.perspectiveToggleButton, title);
+    this.setAttr(ui.perspectiveToggleButton, 'aria-pressed', String(active));
   }
 
   private resetDragState() {
