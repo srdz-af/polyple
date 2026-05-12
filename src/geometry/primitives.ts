@@ -415,11 +415,34 @@ export function planeEdges(N: number): PrimitiveGeometry {
   };
 }
 
+const SPIKED_6_HYPERCUBE_DEFAULT_COS = -0.7133620381355286;
+const SPIKED_6_HYPERCUBE_DEFAULT_SIN = 0.7007959485054016;
+
+function applySpikedHypercubeDefaultOrientation(verts: Float32Array, N: number, V: number) {
+  if (N !== 6) return verts;
+  const c = SPIKED_6_HYPERCUBE_DEFAULT_COS;
+  const s = SPIKED_6_HYPERCUBE_DEFAULT_SIN;
+  const pairs = [[0, 3], [1, 4], [2, 5]] as const;
+  for (const [a, b] of pairs) {
+    for (let v = 0; v < V; v++) {
+      const av = verts[a * V + v];
+      const bv = verts[b * V + v];
+      verts[a * V + v] = (c * av) + (s * bv);
+      verts[b * V + v] = (-s * av) + (c * bv);
+    }
+  }
+  return verts;
+}
+
 export function spikedHypercubeEdges(N: number): PrimitiveGeometry {
   const base = hypercubeEdges(N);
   const verts = new Float32Array(base.verts);
   for (let i = 0; i < verts.length; i++) verts[i] *= 0.56;
-  return spikedPrimitive({ ...base, verts }, N, 0.22, 'spikedHypercube');
+  const spiked = spikedPrimitive({ ...base, verts }, N, 0.22, 'spikedHypercube');
+  return {
+    ...spiked,
+    verts: applySpikedHypercubeDefaultOrientation(new Float32Array(spiked.verts), N, spiked.V),
+  };
 }
 
 export function crossPolytopeEdges(N: number): PrimitiveGeometry {

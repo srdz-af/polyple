@@ -19,6 +19,16 @@ type ViewportCaptureControllerOptions = {
   onAnimationRenderStop?: () => void;
 };
 
+export function viewportCaptureElementsFromDocument() {
+  return {
+    cameraOverlayEl: document.getElementById('camera-view-overlay') as HTMLDivElement | null,
+    renderButton: document.getElementById('render-animation-button') as HTMLButtonElement | null,
+    recordButton: document.getElementById('record-viewport-button') as HTMLButtonElement | null,
+    captureButton: document.getElementById('capture-frame-button') as HTMLButtonElement | null,
+    timerEl: document.getElementById('record-viewport-timer') as HTMLSpanElement | null,
+  } satisfies Pick<ViewportCaptureControllerOptions, 'cameraOverlayEl' | 'renderButton' | 'recordButton' | 'captureButton' | 'timerEl'>;
+}
+
 type RecordingMode = 'viewport' | 'animation';
 
 type StartRecordingOptions = {

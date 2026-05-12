@@ -1,139 +1,46 @@
 import type { PrimitiveKind, PrimitiveSurfaceTopology } from './primitives';
+import type {
+  BevelEdgeCut,
+  BevelEdgeResult,
+  BevelFaceBoundaryResult,
+  BevelSelectedEdgesResult,
+  BevelVertexCut,
+  BevelVertexPatch,
+  BevelVertexPatchPoint,
+  BevelVertexResult,
+  CellTopology,
+  CellTopologyDim,
+  DeleteCellAndPruneResult,
+  ExtrudeCellResult,
+  ExtrudeCellsResult,
+  GeneratedCellTopologyKind,
+  InsetCellResult,
+  InsetCellsResult,
+  ProductCellTopologyFactor,
+  ProductCellTopologyLimits,
+} from './cellTopologyTypes';
 
-export type GeneratedCellTopologyKind = PrimitiveKind | 'fallback' | 'segment' | 'polygon' | 'edited';
-
-export type CellTopologyDim = {
-  offsets: Uint32Array;
-  vertices: Uint32Array;
-};
-
-export type CellTopology = {
-  cells: Array<CellTopologyDim | undefined>;
-  generatedKind?: GeneratedCellTopologyKind;
-  sourceDimension?: number;
-};
-
-export type ProductCellTopologyFactor = {
-  vertexCount: number;
-  cellTopology?: CellTopology;
-};
-
-export type ProductCellTopologyLimits = {
-  maxCells?: number;
-  maxVertexRefs?: number;
-  generatedKind?: GeneratedCellTopologyKind;
-};
-
-export type DeleteCellAndPruneResult = {
-  topology: CellTopology;
-  vertexMap: Int32Array;
-  vertexCount: number;
-  removedVertexCount: number;
-  edges: Uint32Array;
-};
-
-export type ExtrudeCellResult = {
-  topology: CellTopology;
-  vertexCount: number;
-  edges: Uint32Array;
-  sourceVertices: number[];
-  capVertices: number[];
-  capCellId: number;
-  extrudedCellId: number;
-};
-
-export type ExtrudeCellsResult = {
-  topology: CellTopology;
-  vertexCount: number;
-  edges: Uint32Array;
-  sourceVertices: number[];
-  capVertices: number[];
-  capCellIds: number[];
-  extrudedCellIds: number[];
-};
-
-export type InsetCellResult = {
-  topology: CellTopology;
-  vertexCount: number;
-  edges: Uint32Array;
-  sourceVertices: number[];
-  insetVertices: number[];
-  insetCellId: number;
-};
-
-export type InsetCellsResult = {
-  topology: CellTopology;
-  vertexCount: number;
-  edges: Uint32Array;
-  sourceVertices: number[];
-  insetVertices: number[];
-  insetCellIds: number[];
-};
-
-export type BevelVertexCut = {
-  vertex: number;
-  sourceVertex?: number;
-  neighbors: number[];
-  weights: number[];
-};
-
-export type BevelVertexPatchPoint = {
-  vertex: number;
-  side: number;
-  ring: number;
-  segment: number;
-};
-
-export type BevelVertexPatch = {
-  sourceVertex: number;
-  orderedNeighbors: number[];
-  segments: number;
-  points: BevelVertexPatchPoint[];
-};
-
-export type BevelVertexResult = {
-  topology: CellTopology;
-  vertexMap: Int32Array;
-  vertexCount: number;
-  edges: Uint32Array;
-  cuts: BevelVertexCut[];
-  patches: BevelVertexPatch[];
-  capCellId: number;
-  smoothness: number;
-};
-
-export type BevelEdgeCut = {
-  vertex: number;
-  endpoint: number;
-  faceId: number;
-  sideNeighbor: number;
-  sideNeighborB?: number;
-  profileOuterNeighbor?: number;
-  profileT?: number;
-  cornerMeet?: boolean;
-};
-
-export type BevelEdgeResult = {
-  topology: CellTopology;
-  vertexMap: Int32Array;
-  vertexCount: number;
-  edges: Uint32Array;
-  cuts: BevelEdgeCut[];
-  edgeVertices: [number, number];
-  smoothness: number;
-};
-
-export type BevelFaceBoundaryResult = {
-  topology: CellTopology;
-  vertexMap: Int32Array;
-  vertexCount: number;
-  edges: Uint32Array;
-  cuts: BevelEdgeCut[];
-  faceVertices: number[];
-  smoothness: number;
-};
-
-export type BevelSelectedEdgesResult = BevelEdgeResult | BevelFaceBoundaryResult;
+export { surfaceTopologyFromCellTopology } from './cellTopologySurface';
+export type {
+  BevelEdgeCut,
+  BevelEdgeResult,
+  BevelFaceBoundaryResult,
+  BevelSelectedEdgesResult,
+  BevelVertexCut,
+  BevelVertexPatch,
+  BevelVertexPatchPoint,
+  BevelVertexResult,
+  CellTopology,
+  CellTopologyDim,
+  DeleteCellAndPruneResult,
+  ExtrudeCellResult,
+  ExtrudeCellsResult,
+  GeneratedCellTopologyKind,
+  InsetCellResult,
+  InsetCellsResult,
+  ProductCellTopologyFactor,
+  ProductCellTopologyLimits,
+} from './cellTopologyTypes';
 
 const DEFAULT_PRODUCT_TOPOLOGY_MAX_CELLS = 250000;
 const DEFAULT_PRODUCT_TOPOLOGY_MAX_VERTEX_REFS = 2000000;
@@ -2700,31 +2607,6 @@ export function buildGeneratedCellTopology(
       ?? buildCellTopologyFromEdgesAndSurface(vertexCount, edges, surfaceTopology);
   }
   return buildCellTopologyFromEdgesAndSurface(vertexCount, edges, surfaceTopology);
-}
-
-export function surfaceTopologyFromCellTopology(topology?: CellTopology): PrimitiveSurfaceTopology | undefined {
-  const faces = topology?.cells[2];
-  if (!faces) return undefined;
-
-  const triangles: number[] = [];
-  const facetIds: number[] = [];
-  for (let cellId = 0; cellId < faces.offsets.length - 1; cellId++) {
-    const start = faces.offsets[cellId];
-    const end = faces.offsets[cellId + 1];
-    const count = end - start;
-    if (count < 3) continue;
-    const anchor = faces.vertices[start];
-    for (let i = start + 1; i < end - 1; i++) {
-      triangles.push(anchor, faces.vertices[i], faces.vertices[i + 1]);
-      facetIds.push(cellId & 0xffff);
-    }
-  }
-
-  if (triangles.length < 3 || facetIds.length * 3 !== triangles.length) return undefined;
-  return {
-    triangles: new Uint32Array(triangles),
-    facetIds: new Uint16Array(facetIds),
-  };
 }
 
 function surfaceTopologyToCellDim(topology?: PrimitiveSurfaceTopology): CellTopologyDim | undefined {

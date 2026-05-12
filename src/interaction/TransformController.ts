@@ -7,6 +7,7 @@ import { perspectiveScaleFrom, type AxisMap } from '../geometry/projectionUtils'
 import type { HypercubeRenderer } from '../rendering/HypercubeRenderer';
 import type { ObjectOrigin } from '../scene/objectOrigin';
 import type { EditCellDimension, Instance, TransformMode, TransformState } from '../scene/types';
+import { EditOverlayRenderer } from './EditOverlayRenderer';
 
 type TransformParams = {
   editMode: boolean;
@@ -101,7 +102,6 @@ type TransformGizmoConstraint = {
   extraDim: number;
 };
 
-const MARKER_GEOMETRY_RADIUS = 0.012;
 const VERTEX_MARKER_PIXEL_DIAMETER = 8;
 const CELL_CENTER_MARKER_PIXEL_DIAMETER = 6.5;
 const SELECTED_MARKER_PIXEL_DIAMETER = 11;
@@ -162,12 +162,7 @@ export class TransformController {
   private selectedEditVertices: number[] = [];
   private selectedCellId = -1;
   private selectedCellIds: number[] = [];
-  private selectionVertexMarker: THREE.InstancedMesh | null = null;
-  private vertexCloud: THREE.InstancedMesh | null = null;
-  private faceCenterCloud: THREE.InstancedMesh | null = null;
-  private editWireOverlay: THREE.LineSegments | null = null;
-  private editComponentOverlay: THREE.LineSegments | null = null;
-  private editFaceTintOverlay: THREE.Mesh | null = null;
+  private readonly editOverlays: EditOverlayRenderer;
   private axisGuide: THREE.Line | null = null;
   private extraPlaneGuide: THREE.Line | null = null;
   private activeTransformMode: TransformMode = 'none';
@@ -179,9 +174,6 @@ export class TransformController {
   private readonly transformGizmoCenter = new THREE.Vector3();
   private pendingGizmoConstraint: TransformGizmoConstraint | null = null;
   private readonly tmpVec = new THREE.Vector3();
-  private readonly markerMatrix = new THREE.Matrix4();
-  private readonly markerPosition = new THREE.Vector3();
-  private readonly markerQuaternion = new THREE.Quaternion();
   private readonly dragRotated = new Float32Array(32);
   private readonly dragRotatedNext = new Float32Array(32);
   private readonly dragZero = new THREE.Vector3();
@@ -232,7 +224,13 @@ export class TransformController {
     pointerCaptureTarget: null as HTMLElement | null,
   };
 
-  constructor(private readonly options: TransformControllerOptions) {}
+  constructor(private readonly options: TransformControllerOptions) {
+    this.editOverlays = new EditOverlayRenderer({
+      scene: options.scene,
+      camera: options.camera,
+      renderer: options.renderer,
+    });
+  }
 
   get mode() {
     return this.transformOp.mode;
@@ -375,60 +373,27 @@ export class TransformController {
   }
 
   clearVertexMarker() {
-    if (this.selectionVertexMarker) {
-      this.options.scene.remove(this.selectionVertexMarker);
-      if (Array.isArray(this.selectionVertexMarker.material)) this.selectionVertexMarker.material.forEach(material => material.dispose());
-      else this.selectionVertexMarker.material.dispose();
-      this.selectionVertexMarker = null;
-    }
+    this.editOverlays.clearSelectionVertexMarker();
   }
 
   clearVertexCloud() {
-    if (this.vertexCloud) {
-      this.options.scene.remove(this.vertexCloud);
-      if (Array.isArray(this.vertexCloud.material)) this.vertexCloud.material.forEach(material => material.dispose());
-      else this.vertexCloud.material.dispose();
-      this.vertexCloud = null;
-    }
+    this.editOverlays.clearVertexCloud();
   }
 
   clearFaceCenterCloud() {
-    if (this.faceCenterCloud) {
-      this.options.scene.remove(this.faceCenterCloud);
-      if (Array.isArray(this.faceCenterCloud.material)) this.faceCenterCloud.material.forEach(material => material.dispose());
-      else this.faceCenterCloud.material.dispose();
-      this.faceCenterCloud = null;
-    }
+    this.editOverlays.clearFaceCenterCloud();
   }
 
   clearEditWireOverlay() {
-    if (this.editWireOverlay) {
-      this.options.scene.remove(this.editWireOverlay);
-      if (Array.isArray(this.editWireOverlay.material)) this.editWireOverlay.material.forEach(material => material.dispose());
-      else this.editWireOverlay.material.dispose();
-      this.editWireOverlay = null;
-    }
+    this.editOverlays.clearEditWireOverlay();
   }
 
   clearEditComponentOverlay() {
-    if (this.editComponentOverlay) {
-      this.options.scene.remove(this.editComponentOverlay);
-      this.editComponentOverlay.geometry.dispose();
-      if (Array.isArray(this.editComponentOverlay.material)) this.editComponentOverlay.material.forEach(material => material.dispose());
-      else this.editComponentOverlay.material.dispose();
-      this.editComponentOverlay = null;
-    }
-    this.clearEditFaceTintOverlay();
+    this.editOverlays.clearEditComponentOverlay();
   }
 
   private clearEditFaceTintOverlay() {
-    if (this.editFaceTintOverlay) {
-      this.options.scene.remove(this.editFaceTintOverlay);
-      this.editFaceTintOverlay.geometry.dispose();
-      if (Array.isArray(this.editFaceTintOverlay.material)) this.editFaceTintOverlay.material.forEach(material => material.dispose());
-      else this.editFaceTintOverlay.material.dispose();
-      this.editFaceTintOverlay = null;
-    }
+    this.editOverlays.clearEditFaceTintOverlay();
   }
 
   clearAxisGuide() {
@@ -480,18 +445,18 @@ export class TransformController {
       depthTest: false,
       depthWrite: false,
     });
-    this.vertexCloud = new THREE.InstancedMesh(this.options.vertexGeo, mat, count);
+    const vertexCloud = new THREE.InstancedMesh(this.options.vertexGeo, mat, count);
     const dummy = new THREE.Object3D();
     const posArr = rendererRef.positions;
     for (let i = 0; i < count; i++) {
       const pIdx = i * 3;
       dummy.position.set(posArr[pIdx], posArr[pIdx + 1], posArr[pIdx + 2]);
       dummy.updateMatrix();
-      this.vertexCloud.setMatrixAt(i, dummy.matrix);
+      vertexCloud.setMatrixAt(i, dummy.matrix);
     }
-    this.vertexCloud.instanceMatrix.needsUpdate = true;
-    this.vertexCloud.renderOrder = 5;
-    this.options.scene.add(this.vertexCloud);
+    vertexCloud.instanceMatrix.needsUpdate = true;
+    vertexCloud.renderOrder = 5;
+    this.editOverlays.setVertexCloud(vertexCloud);
     if (this.selectedEditVertices.length) this.placeVertexMarkers(instIdx, this.selectedEditVertices);
   }
 
@@ -534,50 +499,30 @@ export class TransformController {
       depthTest: false,
       depthWrite: false,
     });
-    this.faceCenterCloud = new THREE.InstancedMesh(this.options.vertexGeo, mat, entries.length);
+    const faceCenterCloud = new THREE.InstancedMesh(this.options.vertexGeo, mat, entries.length);
     const dummy = new THREE.Object3D();
     entries.forEach((center, idx) => {
       dummy.position.copy(center.sum).multiplyScalar(1 / center.count);
       dummy.scale.setScalar(0.72);
       dummy.updateMatrix();
-      this.faceCenterCloud?.setMatrixAt(idx, dummy.matrix);
+      faceCenterCloud.setMatrixAt(idx, dummy.matrix);
     });
-    this.faceCenterCloud.instanceMatrix.needsUpdate = true;
-    this.faceCenterCloud.renderOrder = 23;
-    this.options.scene.add(this.faceCenterCloud);
+    faceCenterCloud.instanceMatrix.needsUpdate = true;
+    faceCenterCloud.renderOrder = 23;
+    this.editOverlays.setFaceCenterCloud(faceCenterCloud);
   }
 
   updateScreenSpaceMarkerScales() {
-    this.updateInstancedMarkerScale(this.vertexCloud, VERTEX_MARKER_PIXEL_DIAMETER);
-    this.updateInstancedMarkerScale(this.faceCenterCloud, CELL_CENTER_MARKER_PIXEL_DIAMETER);
-    this.updateInstancedMarkerScale(this.selectionVertexMarker, SELECTED_MARKER_PIXEL_DIAMETER);
+    this.editOverlays.updateScreenSpaceMarkerScales({
+      vertex: VERTEX_MARKER_PIXEL_DIAMETER,
+      faceCenter: CELL_CENTER_MARKER_PIXEL_DIAMETER,
+      selected: SELECTED_MARKER_PIXEL_DIAMETER,
+    });
     this.updateTransformGizmo();
   }
 
-  private updateInstancedMarkerScale(mesh: THREE.InstancedMesh | null, pixelDiameter: number) {
-    if (!mesh || mesh.count <= 0) return;
-    const scale = new THREE.Vector3();
-    for (let i = 0; i < mesh.count; i++) {
-      mesh.getMatrixAt(i, this.markerMatrix);
-      this.markerMatrix.decompose(this.markerPosition, this.markerQuaternion, scale);
-      const nextScale = this.screenSpaceMarkerScale(this.markerPosition, pixelDiameter);
-      this.markerMatrix.compose(
-        this.markerPosition,
-        this.markerQuaternion,
-        scale.setScalar(nextScale),
-      );
-      mesh.setMatrixAt(i, this.markerMatrix);
-    }
-    mesh.instanceMatrix.needsUpdate = true;
-  }
-
   private screenSpaceMarkerScale(position: THREE.Vector3, pixelDiameter: number) {
-    const viewportHeight = Math.max(1, this.options.renderer.domElement.clientHeight || this.options.renderer.domElement.height);
-    const cameraSpace = this.tmpVec.copy(position).applyMatrix4(this.options.camera.matrixWorldInverse);
-    const distance = Math.max(0.01, Math.abs(cameraSpace.z));
-    const visibleHeight = (2 * distance * Math.tan(THREE.MathUtils.degToRad(this.options.camera.fov) * 0.5)) / this.options.camera.zoom;
-    const worldDiameter = (pixelDiameter / viewportHeight) * visibleHeight;
-    return Math.max(0.01, worldDiameter / (MARKER_GEOMETRY_RADIUS * 2));
+    return this.editOverlays.screenSpaceMarkerScale(position, pixelDiameter);
   }
 
   private updateEditWireOverlay(instIdx: number) {
@@ -589,8 +534,8 @@ export class TransformController {
       return;
     }
 
-    if (this.editWireOverlay?.geometry === rendererRef.line.geometry) {
-      if (!this.options.scene.children.includes(this.editWireOverlay)) this.options.scene.add(this.editWireOverlay);
+    if (this.editOverlays.hasEditWireGeometry(rendererRef.line.geometry)) {
+      this.editOverlays.ensureEditWireOverlayInScene();
       return;
     }
 
@@ -602,9 +547,9 @@ export class TransformController {
       depthTest: false,
       depthWrite: false,
     });
-    this.editWireOverlay = new THREE.LineSegments(rendererRef.line.geometry, mat);
-    this.editWireOverlay.renderOrder = 18;
-    this.options.scene.add(this.editWireOverlay);
+    const editWireOverlay = new THREE.LineSegments(rendererRef.line.geometry, mat);
+    editWireOverlay.renderOrder = 18;
+    this.editOverlays.setEditWireOverlay(editWireOverlay);
   }
 
   private updateEditComponentOverlay(instIdx: number) {
@@ -704,9 +649,9 @@ export class TransformController {
       depthTest: false,
       depthWrite: false,
     });
-    this.editComponentOverlay = new THREE.LineSegments(geom, mat);
-    this.editComponentOverlay.renderOrder = 22;
-    this.options.scene.add(this.editComponentOverlay);
+    const editComponentOverlay = new THREE.LineSegments(geom, mat);
+    editComponentOverlay.renderOrder = 22;
+    this.editOverlays.setEditComponentOverlay(editComponentOverlay);
   }
 
   private createFaceTintOverlay(points: THREE.Vector3[]) {
@@ -720,9 +665,9 @@ export class TransformController {
       depthWrite: false,
       side: THREE.DoubleSide,
     });
-    this.editFaceTintOverlay = new THREE.Mesh(geom, mat);
-    this.editFaceTintOverlay.renderOrder = 21;
-    this.options.scene.add(this.editFaceTintOverlay);
+    const editFaceTintOverlay = new THREE.Mesh(geom, mat);
+    editFaceTintOverlay.renderOrder = 21;
+    this.editOverlays.setEditFaceTintOverlay(editFaceTintOverlay);
   }
 
   placeVertexMarker(instIdx: number, vertexIdx: number) {
@@ -747,18 +692,18 @@ export class TransformController {
       depthTest: false,
       depthWrite: false,
     });
-    this.selectionVertexMarker = new THREE.InstancedMesh(this.options.vertexGeo, mat, vertices.length);
+    const selectionVertexMarker = new THREE.InstancedMesh(this.options.vertexGeo, mat, vertices.length);
     const dummy = new THREE.Object3D();
     vertices.forEach((vertex, idx) => {
       const pIdx = vertex * 3;
       dummy.position.set(posArr[pIdx], posArr[pIdx + 1], posArr[pIdx + 2]);
       dummy.scale.setScalar(this.screenSpaceMarkerScale(dummy.position, SELECTED_MARKER_PIXEL_DIAMETER));
       dummy.updateMatrix();
-      this.selectionVertexMarker?.setMatrixAt(idx, dummy.matrix);
+      selectionVertexMarker.setMatrixAt(idx, dummy.matrix);
     });
-    this.selectionVertexMarker.instanceMatrix.needsUpdate = true;
-    this.selectionVertexMarker.renderOrder = 20;
-    this.options.scene.add(this.selectionVertexMarker);
+    selectionVertexMarker.instanceMatrix.needsUpdate = true;
+    selectionVertexMarker.renderOrder = 20;
+    this.editOverlays.setSelectionVertexMarker(selectionVertexMarker);
   }
 
   updateActionButtons() {
