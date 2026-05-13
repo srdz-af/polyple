@@ -1435,6 +1435,8 @@ export class PolypleApp {
       setCellDimension: setEditCellDimension,
       canStartOperation: request => geometryEditOperationFactory?.canStartOperation(request) ?? false,
       startOperation: request => viewportInteraction.startEditOperationFromLastPointer(request, true),
+      getOperationLevelState: () => viewportInteraction?.getActiveEditOperationLevelState() ?? null,
+      changeOperationLevel: delta => viewportInteraction?.changeActiveEditOperationLevel(delta),
     });
     
     function updateDimensionControl() {
@@ -1570,6 +1572,7 @@ export class PolypleApp {
       getM: () => M,
       getBaseVisible: () => baseVisible,
       getSelectedInstance: () => selectionService.primary,
+      getSelectedCellTopology: selectedObjectCellTopology,
       getRendererND: () => rendererND,
       getExtraInstances: () => extraInstances,
       selectObject,
@@ -1582,6 +1585,9 @@ export class PolypleApp {
       createEditBevelOperation: (smoothness, kind, inward, mode, setSmoothness) => (
         geometryEditOperationFactory.createBevelOperation(smoothness, kind, inward, mode, setSmoothness)
       ),
+      createEditLoopCutOperation: (cutCount, setCutCount) => (
+        geometryEditOperationFactory.createLoopCutOperation(cutCount, setCutCount)
+      ),
       createSceneLightDragOperation,
       insertKeyframe: insertKeyframeOperation,
       removeLastKeyframe: removeKeyframeOperation,
@@ -1593,6 +1599,7 @@ export class PolypleApp {
       recalculateSelectedOrigin: () => recalculateObjectOrigin(selectionService.primary),
       focusObjectOrigin,
       cycleAxes,
+      onOperationStateChange: updateTransformActionButtons,
     });
     
     function createPrimitiveData(kind: PrimitiveKind, dimension: number): InstanceGeometryData {

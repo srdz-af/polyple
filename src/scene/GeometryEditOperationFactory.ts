@@ -1,6 +1,6 @@
 import { BEVEL_MAX_AMOUNT, appendDimensionMajorDuplicateVertices, batchEdgeBevelDistance, buildBeveledEdgeData, buildBeveledVertexData, edgeListFromCellTopology, findEdgeWithOrigins, initialVertexOrigins, remapOriginsAfterEdgeBevel, remapOriginsAfterVertexBevel } from '../geometry/bevelGeometry';
-import { cellVertexSignature, collectEditBevelTargets, extrusionDirectionsForCells, findCellIdByVertexSignature, selectedCellComponentSignatures, writeInsetVertices, INSET_MAX_AMOUNT } from '../geometry/editOperationGeometry';
-import { bevelEdge, bevelSelectedEdges, bevelVertices, extrudeCell, extrudeCells, getCellVertices, insetCell, insetCells, type CellTopology } from '../geometry/cellTopology';
+import { buildLoopCutVertexData, cellVertexSignature, collectEditBevelTargets, extrusionDirectionsForCells, findCellIdByVertexSignature, selectedCellComponentSignatures, writeInsetVertices, INSET_MAX_AMOUNT } from '../geometry/editOperationGeometry';
+import { bevelEdge, bevelSelectedEdges, bevelVertices, extrudeCell, extrudeCells, getCellVertices, insetCell, insetCells, loopCutEdges, type CellTopology, type LoopCutEdge } from '../geometry/cellTopology';
 import { clonePrimitiveSurfaceTopology, type PrimitiveSurfaceTopology } from '../geometry/primitives';
 import { cloneCellTopology } from '../geometry/cellTopology';
 import { surfaceTopologyForEditedCellTopology, surfaceTopologyFromPositionedCellTopology } from './topologyState';
@@ -84,6 +84,21 @@ type EditBevelToken<TUndoSnapshot> = {
   original: EditGeometrySnapshot;
 };
 
+type EditLoopCutToken<TUndoSnapshot> = {
+  undoSnapshot: TUndoSnapshot;
+  instIdx: number;
+  dimension: 1;
+  cellId: number;
+  cellIds: number[];
+  amount: number;
+  cutCount: number;
+  seedEdgeIds: number[];
+  loopEdgeIds: number[];
+  cuts: LoopCutEdge[];
+  applied: boolean;
+  original: EditGeometrySnapshot;
+};
+
 type GeometryEditOperationFactoryOptions<TUndoSnapshot> = {
   baseSelection: number;
   getSelectedInstance: () => number;
@@ -143,6 +158,15 @@ function isEditBevelToken<TUndoSnapshot>(token: unknown): token is EditBevelToke
     && 'smoothness' in token;
 }
 
+function isEditLoopCutToken<TUndoSnapshot>(token: unknown): token is EditLoopCutToken<TUndoSnapshot> {
+  return typeof token === 'object'
+    && token !== null
+    && 'seedEdgeIds' in token
+    && 'loopEdgeIds' in token
+    && 'cutCount' in token
+    && 'original' in token;
+}
+
 export class GeometryEditOperationFactory<TUndoSnapshot> {
   constructor(private readonly options: GeometryEditOperationFactoryOptions<TUndoSnapshot>) {}
 
@@ -165,9 +189,18 @@ export class GeometryEditOperationFactory<TUndoSnapshot> {
     return collectEditBevelTargets(context.topology, context.selection, kind) !== null;
   }
 
+  canStartLoopCut() {
+    const context = this.options.selectedEditOperationContext();
+    const selection = context?.selection;
+    if (!context || !selection || selection.dimension !== 1) return false;
+    const edgeIds = selection.cellIds.length ? selection.cellIds : [selection.cellId];
+    return edgeIds.some(edgeId => getCellVertices(context.topology, 1, edgeId).length >= 2);
+  }
+
   canStartOperation(request: EditOperationRequest) {
     if (request.type === 'extrude') return this.canStartExtrusion();
     if (request.type === 'inset') return this.canStartInset();
+    if (request.type === 'loopCut') return this.canStartLoopCut();
     return this.canStartBevel(request.kind ?? 'edge');
   }
 
@@ -205,29 +238,74 @@ export class GeometryEditOperationFactory<TUndoSnapshot> {
     let currentSmoothness = Math.max(BEVEL_MIN_SMOOTHNESS, Math.floor(smoothness));
     const token = this.startEditBevel(currentSmoothness, kind, inward, mode);
     if (!token) return null;
+    const adjustSmoothness = (delta: number, amount: number) => {
+      const nextSmoothness = Math.max(
+        BEVEL_MIN_SMOOTHNESS,
+        Math.min(BEVEL_MAX_SMOOTHNESS, currentSmoothness + delta),
+      );
+      if (nextSmoothness === currentSmoothness) return true;
+
+      currentSmoothness = nextSmoothness;
+      setSmoothness?.(currentSmoothness);
+      this.updateEditBevel(token, amount, currentSmoothness);
+      return true;
+    };
     return {
       kind: 'edit-bevel',
       scope: 'edit',
       updateAmount: amount => this.updateEditBevel(token, amount, currentSmoothness),
+      levelControl: {
+        label: 'Bevel levels',
+        min: BEVEL_MIN_SMOOTHNESS,
+        max: BEVEL_MAX_SMOOTHNESS,
+        getValue: () => currentSmoothness,
+        adjust: adjustSmoothness,
+      },
       updateWheel: (ev, amount) => {
         ev.preventDefault();
         ev.stopPropagation();
         ev.stopImmediatePropagation();
-
-        const step = ev.deltaY < 0 ? 1 : -1;
-        const nextSmoothness = Math.max(
-          BEVEL_MIN_SMOOTHNESS,
-          Math.min(BEVEL_MAX_SMOOTHNESS, currentSmoothness + step),
-        );
-        if (nextSmoothness === currentSmoothness) return true;
-
-        currentSmoothness = nextSmoothness;
-        setSmoothness?.(currentSmoothness);
-        this.updateEditBevel(token, amount, currentSmoothness);
-        return true;
+        return adjustSmoothness(ev.deltaY < 0 ? 1 : -1, amount);
       },
       commit: () => this.commitEditBevel(token),
       cancel: () => this.cancelEditBevel(token),
+    };
+  }
+
+  createLoopCutOperation(
+    cutCount: number,
+    setCutCount?: (cutCount: number) => void,
+  ): ViewportAmountOperation | null {
+    let currentCutCount = Math.max(1, Math.floor(cutCount));
+    const token = this.startEditLoopCut(currentCutCount);
+    if (!token) return null;
+    const adjustCutCount = (delta: number, amount: number) => {
+      const nextCutCount = Math.max(1, Math.min(32, currentCutCount + delta));
+      if (nextCutCount === currentCutCount) return true;
+      currentCutCount = nextCutCount;
+      setCutCount?.(currentCutCount);
+      this.updateEditLoopCut(token, amount, currentCutCount);
+      return true;
+    };
+    return {
+      kind: 'edit-loop-cut',
+      scope: 'edit',
+      updateAmount: amount => this.updateEditLoopCut(token, amount, currentCutCount),
+      levelControl: {
+        label: 'Loop cuts',
+        min: 1,
+        max: 32,
+        getValue: () => currentCutCount,
+        adjust: adjustCutCount,
+      },
+      updateWheel: (ev, amount) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        ev.stopImmediatePropagation();
+        return adjustCutCount(ev.deltaY < 0 ? 1 : -1, amount);
+      },
+      commit: () => this.commitEditLoopCut(token),
+      cancel: () => this.cancelEditLoopCut(token),
     };
   }
 
@@ -522,6 +600,95 @@ export class GeometryEditOperationFactory<TUndoSnapshot> {
     if (this.options.getEditMode() && this.options.getObjectVisible(token.instIdx)) this.options.updateVertexCloud(token.instIdx);
     this.options.updateSelectionOutline();
     this.options.updateTransformActionButtons();
+  }
+
+  private startEditLoopCut(cutCount: number): EditLoopCutToken<TUndoSnapshot> | null {
+    const instIdx = this.validEditTarget();
+    if (instIdx === null) return null;
+    const context = this.options.selectedEditOperationContext();
+    const selection = context?.selection;
+    if (!context || !selection || selection.dimension !== 1 || selection.cellId < 0) return null;
+
+    const seedEdgeIds = (selection.cellIds.length ? selection.cellIds : [selection.cellId])
+      .filter(edgeId => getCellVertices(context.topology, 1, edgeId).length >= 2)
+      .filter((edgeId, index, arr) => arr.indexOf(edgeId) === index);
+    if (!seedEdgeIds.length) return null;
+
+    const original = this.options.editService.captureSnapshot(instIdx);
+    if (!original) return null;
+    const token: EditLoopCutToken<TUndoSnapshot> = {
+      undoSnapshot: this.options.captureUndoSnapshot(),
+      instIdx,
+      dimension: 1,
+      cellId: selection.cellId,
+      cellIds: [...selection.cellIds],
+      amount: 0.5,
+      cutCount: Math.max(1, Math.floor(cutCount)),
+      seedEdgeIds,
+      loopEdgeIds: [],
+      cuts: [],
+      applied: false,
+      original,
+    };
+    if (!this.applyEditLoopCutPreview(token)) {
+      this.restoreEditGeometrySnapshot(instIdx, original);
+      return null;
+    }
+    return token;
+  }
+
+  private applyEditLoopCutPreview(token: EditLoopCutToken<TUndoSnapshot>) {
+    this.restoreEditGeometrySnapshot(token.instIdx, token.original);
+    const target = this.targetState(token.instIdx);
+    if (!target || !target.cellTopology || target.M <= 0) return false;
+    const cut = loopCutEdges(target.cellTopology, token.seedEdgeIds, target.M, token.cutCount);
+    if (!cut) return false;
+
+    token.loopEdgeIds = cut.loopEdgeIds;
+    token.cuts = cut.cuts;
+    const nextState: GeometryTargetState = {
+      ...target,
+      X: buildLoopCutVertexData(target.X, target.M, cut.vertexCount, cut.cuts, token.amount),
+      M: cut.vertexCount,
+      E: new Uint32Array(cut.edges),
+      cellTopology: cut.topology,
+      surfaceTopology: surfaceTopologyForEditedCellTopology(cut.topology),
+    };
+    this.setTargetState(token.instIdx, nextState);
+    this.options.rebuildGeometryRenderer(token.instIdx);
+    const selectedEdges = cut.cutLineEdgeIds.length
+      ? cut.cutLineEdgeIds
+      : cut.cuts.flatMap(entry => entry.segmentEdgeIds);
+    this.options.setSelectedEditCells(1, selectedEdges, cut.topology);
+    this.options.refreshAfterGeometryChange(token.instIdx, { dirtyUrl: false });
+    token.applied = true;
+    return true;
+  }
+
+  private updateEditLoopCut(token: unknown, amount: number, cutCount: number) {
+    if (!isEditLoopCutToken<TUndoSnapshot>(token)) return;
+    token.amount = Math.max(0, Math.min(1, amount));
+    token.cutCount = Math.max(1, Math.floor(cutCount));
+    this.applyEditLoopCutPreview(token);
+  }
+
+  private commitEditLoopCut(token: unknown) {
+    if (!isEditLoopCutToken<TUndoSnapshot>(token)) return;
+    if (!token.applied) {
+      this.restoreEditGeometrySnapshot(token.instIdx, token.original);
+      this.options.refreshAfterGeometryChange(token.instIdx, { dirtyUrl: false });
+      return;
+    }
+    this.options.editService.commit(token.undoSnapshot, token.instIdx);
+  }
+
+  private cancelEditLoopCut(token: unknown) {
+    if (!isEditLoopCutToken<TUndoSnapshot>(token)) return;
+    this.restoreEditGeometrySnapshot(token.instIdx, token.original);
+    const topology = this.targetState(token.instIdx)?.cellTopology;
+    const cellIds = token.cellIds.length ? token.cellIds : [token.cellId];
+    this.options.setSelectedEditCells(1, cellIds, topology);
+    this.options.refreshAfterGeometryChange(token.instIdx, { dirtyUrl: false });
   }
 
   private startEditBevel(

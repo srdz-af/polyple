@@ -38,10 +38,19 @@ export class KeyboardShortcutController {
   constructor(private readonly options: KeyboardShortcutControllerOptions) {}
 
   bind() {
+    window.addEventListener('keydown', ev => this.handleBrowserReloadShortcut(ev), { capture: true });
     window.addEventListener('keydown', ev => this.handleUndoRedo(ev));
     window.addEventListener('keydown', ev => this.handleTransformConstraint(ev));
     window.addEventListener('keydown', ev => this.handleGeneralShortcut(ev));
     window.addEventListener('keyup', ev => this.options.keyboardCamera.handleKeyUp(ev));
+  }
+
+  private isBrowserReloadShortcut(ev: KeyboardEvent) {
+    return (ev.ctrlKey || ev.metaKey) && !ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === 'r';
+  }
+
+  private handleBrowserReloadShortcut(ev: KeyboardEvent) {
+    if (this.isBrowserReloadShortcut(ev)) ev.preventDefault();
   }
 
   private handleUndoRedo(ev: KeyboardEvent) {
@@ -70,7 +79,7 @@ export class KeyboardShortcutController {
   private handleGeneralShortcut(ev: KeyboardEvent) {
     if (this.options.isModalOpen()) return;
     if (isTextEntryTarget(ev.target)) return;
-    if (ev.defaultPrevented) return;
+    if (ev.defaultPrevented && !this.isBrowserReloadShortcut(ev)) return;
     const key = ev.key.toLowerCase();
     const hasSystemMod = ev.ctrlKey || ev.metaKey || ev.altKey;
     const transformMode = this.options.getTransformMode();
@@ -118,6 +127,11 @@ export class KeyboardShortcutController {
     if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && !ev.altKey && transformMode === 'none' && key === 'd') {
       ev.preventDefault();
       this.options.togglePerfOverlay();
+      return;
+    }
+    if ((ev.ctrlKey || ev.metaKey) && !ev.shiftKey && !ev.altKey && canReplaceOperation && this.options.isEditMode() && key === 'r') {
+      ev.preventDefault();
+      this.options.startEditOperationFromPointer({ type: 'loopCut' }, operationActive);
       return;
     }
 

@@ -70,6 +70,23 @@ export type InsetCellsResult = {
   insetCellIds: number[];
 };
 
+export type LoopCutEdge = {
+  edgeId: number;
+  sourceA: number;
+  sourceB: number;
+  cutVertices: number[];
+  segmentEdgeIds: number[];
+};
+
+export type LoopCutEdgesResult = {
+  topology: CellTopology;
+  vertexCount: number;
+  edges: Uint32Array;
+  loopEdgeIds: number[];
+  cutLineEdgeIds: number[];
+  cuts: LoopCutEdge[];
+};
+
 export type BevelVertexCut = {
   vertex: number;
   sourceVertex?: number;

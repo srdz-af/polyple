@@ -1,4 +1,5 @@
 import { cellCount, getCellVertices, type CellTopology } from './cellTopology';
+import type { LoopCutEdge } from './cellTopologyTypes';
 
 export const INSET_MAX_AMOUNT = 0.85;
 
@@ -355,6 +356,50 @@ export function writeInsetVertices(
   });
 }
 
+export function loopCutFractions(cutCount: number, amount: number) {
+  const count = Math.max(1, Math.floor(cutCount));
+  const spacing = 1 / (count + 1);
+  const first = spacing;
+  const last = count * spacing;
+  const requestedSlide = Math.max(0, Math.min(1, amount)) - 0.5;
+  const epsilon = 1e-4;
+  const slide = Math.max(epsilon - first, Math.min((1 - epsilon) - last, requestedSlide));
+  return Array.from({ length: count }, (_entry, idx) => ((idx + 1) * spacing) + slide);
+}
+
+export function buildLoopCutVertexData(
+  original: Float32Array,
+  originalVertexCount: number,
+  vertexCount: number,
+  cuts: LoopCutEdge[],
+  amount: number,
+) {
+  const dimension = originalVertexCount > 0 ? Math.floor(original.length / originalVertexCount) : 0;
+  const data = new Float32Array(dimension * vertexCount);
+  if (dimension <= 0 || vertexCount <= 0) return data;
+
+  for (let dim = 0; dim < dimension; dim++) {
+    for (let vertex = 0; vertex < originalVertexCount; vertex++) {
+      data[(dim * vertexCount) + vertex] = original[(dim * originalVertexCount) + vertex] ?? 0;
+    }
+  }
+
+  for (const cut of cuts) {
+    const fractions = loopCutFractions(cut.cutVertices.length, amount);
+    cut.cutVertices.forEach((cutVertex, idx) => {
+      if (cutVertex < originalVertexCount || cutVertex >= vertexCount) return;
+      const t = fractions[idx] ?? 0.5;
+      for (let dim = 0; dim < dimension; dim++) {
+        const a = original[(dim * originalVertexCount) + cut.sourceA] ?? 0;
+        const b = original[(dim * originalVertexCount) + cut.sourceB] ?? 0;
+        data[(dim * vertexCount) + cutVertex] = a + ((b - a) * t);
+      }
+    });
+  }
+
+  return data;
+}
+
 
 export function collectEditBevelTargets(
   topology: CellTopology | undefined,
@@ -410,4 +455,3 @@ export function collectEditBevelTargets(
 
   return targetEdges.length ? { targetVertices: [] as number[], targetEdges, targetEdgeIds } : null;
 }
-

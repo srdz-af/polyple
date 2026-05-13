@@ -30,10 +30,18 @@ export type EditOperationMode = 'grouped' | 'individual';
 export type EditOperationRequest =
   | { type: 'extrude' }
   | { type: 'inset' }
+  | { type: 'loopCut' }
   | { type: 'bevel'; kind?: 'vertex' | 'edge'; inward?: boolean };
 export type ViewportAmountOperation = Omit<ViewportOperation, 'updatePointer' | 'updateWheel'> & {
   updateAmount: (amount: number) => void;
   updateWheel?: (ev: WheelEvent, amount: number) => boolean | void;
+  levelControl?: {
+    label: string;
+    min: number;
+    max: number;
+    getValue: () => number;
+    adjust: (delta: number, amount: number) => boolean | void;
+  };
 };
 
 const OBJECT_FOCUS_DOUBLE_CLICK_MS = 220;
@@ -51,6 +59,8 @@ const INSET_INITIAL_AMOUNT = 0.18;
 const INSET_POINTER_SCALE = 0.0025;
 const BEVEL_POINTER_SCALE = 0.004;
 const EXTRUSION_POINTER_SCALE = 0.01;
+const LOOP_CUT_INITIAL_AMOUNT = 0.5;
+const LOOP_CUT_POINTER_SCALE = 0.0025;
 const OPERATION_HANDLE_BASE_LENGTH = 42;
 const OPERATION_HANDLE_MAX_EXTRA_LENGTH = 58;
 const OPERATION_HANDLE_DOT_SIZE = 10;
@@ -102,6 +112,7 @@ type ViewportInteractionControllerOptions = {
   getM: () => number;
   getBaseVisible: () => boolean;
   getSelectedInstance: () => number;
+  getSelectedCellTopology: () => CellTopology | undefined;
   getRendererND: () => HypercubeRenderer;
   getExtraInstances: () => Instance[];
   selectObject: (idx: number, additive?: boolean) => void;
@@ -121,6 +132,10 @@ type ViewportInteractionControllerOptions = {
     mode?: EditOperationMode,
     setSmoothness?: (smoothness: number) => void,
   ) => ViewportAmountOperation | null;
+  createEditLoopCutOperation: (
+    cutCount: number,
+    setCutCount?: (cutCount: number) => void,
+  ) => ViewportAmountOperation | null;
   createSceneLightDragOperation?: (ev: PointerEvent) => ViewportOperation | null;
   insertKeyframe: () => void;
   removeLastKeyframe: () => void;
@@ -132,6 +147,7 @@ type ViewportInteractionControllerOptions = {
   recalculateSelectedOrigin: () => void;
   focusObjectOrigin: (idx: number) => void;
   cycleAxes: (step: number) => void;
+  onOperationStateChange?: () => void;
 };
 
 export class ViewportInteractionController {
@@ -158,6 +174,7 @@ export class ViewportInteractionController {
   private transformGizmoPrevControlsEnabled = true;
   private transformGizmoEndEvent: PointerEvent | null = null;
   private lastBevelSmoothness = BEVEL_MIN_SMOOTHNESS;
+  private lastLoopCutCount = 1;
   private suppressNextContextMenu = false;
   private pointerLockReleaseRequested = false;
   private readonly pointerLockStart = { x: this.lastPointer.x, y: this.lastPointer.y };
@@ -170,6 +187,14 @@ export class ViewportInteractionController {
   } | null = null;
   private scalarEditHandleHit: { start: THREE.Vector2; end: THREE.Vector2 } | null = null;
   private activeScalarEditDrag: ActiveScalarEditDrag | null = null;
+  private activeScalarLevelControl: {
+    kind: string;
+    label: string;
+    min: number;
+    max: number;
+    getValue: () => number;
+    adjust: (delta: number) => boolean | void;
+  } | null = null;
 
   constructor(private readonly options: ViewportInteractionControllerOptions) {}
 
@@ -409,7 +434,8 @@ export class ViewportInteractionController {
   private isScalarEditOperationActive() {
     return this.operationManager.isKind('edit-bevel')
       || this.operationManager.isKind('edit-inset')
-      || this.operationManager.isKind('edit-extrusion');
+      || this.operationManager.isKind('edit-extrusion')
+      || this.operationManager.isKind('edit-loop-cut');
   }
 
   private coarsePointer(ev: PointerEvent) {
@@ -482,6 +508,11 @@ export class ViewportInteractionController {
     objectCenter.multiplyScalar(1 / target.count);
 
     const rect = this.options.renderer.domElement.getBoundingClientRect();
+    if (kind === 'edit-loop-cut') {
+      const geometry = this.loopCutHandleGeometry(selection.cellIds, target.positions, target.count, rect, amount);
+      if (geometry) return geometry;
+    }
+
     const start = this.projectWorldToClient(center, rect);
     if (!start) return null;
     const objectScreen = this.projectWorldToClient(objectCenter, rect);
@@ -494,10 +525,75 @@ export class ViewportInteractionController {
     if (amount < 0) direction.multiplyScalar(-1);
     const normalizedAmount = kind === 'edit-extrusion'
       ? Math.min(1, Math.abs(amount) / 2.4)
+      : kind === 'edit-loop-cut'
+        ? Math.min(1, Math.abs(amount - 0.5) * 2)
       : Math.min(1, Math.abs(amount));
     const length = OPERATION_HANDLE_BASE_LENGTH + (normalizedAmount * OPERATION_HANDLE_MAX_EXTRA_LENGTH);
     const end = start.clone().add(direction.multiplyScalar(length));
     return { start, end };
+  }
+
+  private loopCutHandleGeometry(
+    cellIds: number[],
+    positions: Float32Array,
+    count: number,
+    rect: DOMRect,
+    amount: number,
+  ) {
+    const topology = this.options.getSelectedCellTopology();
+    const edgeIds = cellIds.length ? cellIds : [];
+    if (!topology || !edgeIds.length || count <= 0) return null;
+
+    const anchor = new THREE.Vector2();
+    const cutDirection = new THREE.Vector2();
+    let edgeCount = 0;
+    for (const edgeId of edgeIds) {
+      const edge = getCellVertices(topology, 1, edgeId);
+      if (edge.length < 2) continue;
+      const a = this.projectVertexToClient(positions, count, edge[0], rect);
+      const b = this.projectVertexToClient(positions, count, edge[1], rect);
+      if (!a || !b) continue;
+      const direction = b.clone().sub(a);
+      if (direction.lengthSq() < 1) continue;
+      const midpoint = a.clone().add(b).multiplyScalar(0.5);
+      anchor.add(midpoint);
+      direction.normalize();
+      if (cutDirection.lengthSq() > 1e-6 && direction.dot(cutDirection) < 0) direction.multiplyScalar(-1);
+      cutDirection.add(direction);
+      edgeCount++;
+    }
+    if (!edgeCount || cutDirection.lengthSq() < 1e-6) return null;
+    anchor.multiplyScalar(1 / edgeCount);
+    cutDirection.normalize();
+
+    let direction = new THREE.Vector2(-cutDirection.y, cutDirection.x);
+    const objectCenter = new THREE.Vector3();
+    for (let vertex = 0; vertex < count; vertex++) {
+      const pIdx = vertex * 3;
+      objectCenter.x += positions[pIdx];
+      objectCenter.y += positions[pIdx + 1];
+      objectCenter.z += positions[pIdx + 2];
+    }
+    objectCenter.multiplyScalar(1 / count);
+    const objectScreen = this.projectWorldToClient(objectCenter, rect);
+    if (objectScreen && direction.dot(anchor.clone().sub(objectScreen)) < 0) direction.multiplyScalar(-1);
+    if (amount < 0.5) direction.multiplyScalar(-1);
+
+    const normalizedAmount = Math.min(1, Math.abs(amount - 0.5) * 2);
+    const length = OPERATION_HANDLE_BASE_LENGTH + (normalizedAmount * OPERATION_HANDLE_MAX_EXTRA_LENGTH);
+    return {
+      start: anchor,
+      end: anchor.clone().add(direction.multiplyScalar(length)),
+    };
+  }
+
+  private projectVertexToClient(positions: Float32Array, count: number, vertex: number, rect: DOMRect) {
+    if (vertex < 0 || vertex >= count) return null;
+    const pIdx = vertex * 3;
+    return this.projectWorldToClient(
+      this.tmpVec.set(positions[pIdx] ?? 0, positions[pIdx + 1] ?? 0, positions[pIdx + 2] ?? 0),
+      rect,
+    );
   }
 
   private projectWorldToClient(point: THREE.Vector3, rect: DOMRect) {
@@ -588,17 +684,35 @@ export class ViewportInteractionController {
         ? ev => {
           const handled = operation.updateWheel?.(ev, amount);
           this.updateScalarEditHandle(operation.kind, amount);
+          this.options.onOperationStateChange?.();
           return handled;
         }
         : undefined,
       cleanup: () => {
         this.hideScalarEditHandle();
         this.activeScalarEditDrag = null;
+        this.activeScalarLevelControl = null;
+        this.options.onOperationStateChange?.();
         if (this.options.contextMenuEl) this.options.contextMenuEl.style.display = 'none';
         operation.cleanup?.();
       },
     });
     if (started) {
+      this.activeScalarLevelControl = operation.levelControl
+        ? {
+            kind: operation.kind,
+            label: operation.levelControl.label,
+            min: operation.levelControl.min,
+            max: operation.levelControl.max,
+            getValue: operation.levelControl.getValue,
+            adjust: delta => {
+              const handled = operation.levelControl?.adjust(delta, amount);
+              this.updateScalarEditHandle(operation.kind, amount);
+              this.options.onOperationStateChange?.();
+              return handled;
+            },
+          }
+        : null;
       this.activeScalarEditDrag = {
         get pointerId() {
           return activePointerId;
@@ -617,8 +731,27 @@ export class ViewportInteractionController {
         isDragging: pointerId => activePointerId >= 0 && (pointerId === undefined || pointerId === activePointerId),
       };
       applyAmount(amount, true);
+      this.options.onOperationStateChange?.();
     }
     return started;
+  }
+
+  getActiveEditOperationLevelState() {
+    const control = this.activeScalarLevelControl;
+    if (!control) return null;
+    const value = control.getValue();
+    return {
+      kind: control.kind,
+      label: control.label,
+      value,
+      min: control.min,
+      max: control.max,
+    };
+  }
+
+  changeActiveEditOperationLevel(delta: number) {
+    if (!this.activeScalarLevelControl || !Number.isFinite(delta) || delta === 0) return false;
+    return this.activeScalarLevelControl.adjust(Math.trunc(delta)) !== false;
   }
 
   startEditExtrusionFromLastPointer(replaceActive = false) {
@@ -682,6 +815,28 @@ export class ViewportInteractionController {
     }
   }
 
+  startEditLoopCutFromLastPointer(replaceActive = false) {
+    if (!this.prepareOperationStart(replaceActive)) return;
+    if (!this.options.getParams().editMode) return;
+    if (this.options.transformController.isActive() || this.options.transformController.isGizmoDragging()) return;
+    const operation = this.options.createEditLoopCutOperation(
+      this.lastLoopCutCount,
+      nextCutCount => {
+        this.lastLoopCutCount = nextCutCount;
+      },
+    );
+    if (!operation) return;
+    if (!this.startScalarEditOperation(operation, {
+      initialAmount: LOOP_CUT_INITIAL_AMOUNT,
+      scale: LOOP_CUT_POINTER_SCALE,
+      min: 0,
+      max: 1,
+    })) {
+      operation.cancel?.();
+      operation.cleanup?.();
+    }
+  }
+
   startEditOperationFromLastPointer(request: EditOperationRequest, replaceActive = false) {
     if (request.type === 'extrude') {
       this.startEditExtrusionFromLastPointer(replaceActive);
@@ -689,6 +844,10 @@ export class ViewportInteractionController {
     }
     if (request.type === 'inset') {
       this.startEditInsetFromLastPointer(replaceActive);
+      return;
+    }
+    if (request.type === 'loopCut') {
+      this.startEditLoopCutFromLastPointer(replaceActive);
       return;
     }
     this.startEditBevelFromLastPointer(request.kind ?? 'edge', request.inward ?? false, replaceActive);
@@ -1105,6 +1264,7 @@ export class ViewportInteractionController {
 
   private handleWindowPointerDown(ev: PointerEvent) {
     if (!this.isScalarEditOperationActive()) return;
+    if (this.isOperationLevelControlTarget(ev.target)) return;
     if (this.beginScalarEditHandleDrag(ev)) return;
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
     if (ev.button === 0) {
@@ -1114,6 +1274,10 @@ export class ViewportInteractionController {
     } else {
       return;
     }
+  }
+
+  private isOperationLevelControlTarget(target: EventTarget | null) {
+    return target instanceof Element && Boolean(target.closest('#edit-operation-level-controls'));
   }
 
   private handleWindowPointerMove(ev: PointerEvent) {
@@ -1156,6 +1320,7 @@ export class ViewportInteractionController {
       this.operationManager.isKind('edit-bevel')
       || this.operationManager.isKind('edit-inset')
       || this.operationManager.isKind('edit-extrusion')
+      || this.operationManager.isKind('edit-loop-cut')
     ) {
       this.activeScalarEditDrag?.end(ev.pointerId);
       this.operationManager.finish(false);

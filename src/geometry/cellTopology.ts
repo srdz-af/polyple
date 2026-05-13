@@ -16,6 +16,8 @@ import type {
   GeneratedCellTopologyKind,
   InsetCellResult,
   InsetCellsResult,
+  LoopCutEdge,
+  LoopCutEdgesResult,
   ProductCellTopologyFactor,
   ProductCellTopologyLimits,
 } from './cellTopologyTypes';
@@ -38,6 +40,8 @@ export type {
   GeneratedCellTopologyKind,
   InsetCellResult,
   InsetCellsResult,
+  LoopCutEdge,
+  LoopCutEdgesResult,
   ProductCellTopologyFactor,
   ProductCellTopologyLimits,
 } from './cellTopologyTypes';
@@ -310,6 +314,10 @@ function edgeListFromCells(edges: number[][] | undefined) {
   return new Uint32Array(packed);
 }
 
+function edgeSignature(a: number, b: number) {
+  return a < b ? `${a}:${b}` : `${b}:${a}`;
+}
+
 function addFaceBoundaryEdges(edgeCellsTarget: number[][], edgeSignatures: Set<string>, face: number[]) {
   for (let idx = 0; idx < face.length; idx++) {
     const a = face[idx];
@@ -317,6 +325,206 @@ function addFaceBoundaryEdges(edgeCellsTarget: number[][], edgeSignatures: Set<s
     if (a === b) continue;
     pushUniqueCell(edgeCellsTarget, [a, b], edgeSignatures);
   }
+}
+
+function loopCutEdgePath(topology: CellTopology, seedEdgeIds: number[]) {
+  const edgeCount = cellCount(topology, 1);
+  const edgeIdBySignature = new Map<string, number>();
+  for (let edgeId = 0; edgeId < edgeCount; edgeId++) {
+    const edge = getCellVertices(topology, 1, edgeId);
+    if (edge.length < 2) continue;
+    edgeIdBySignature.set(edgeSignature(edge[0], edge[1]), edgeId);
+  }
+
+  const oppositeEdgesById = new Map<number, Set<number>>();
+  const faceCount = cellCount(topology, 2);
+  for (let faceId = 0; faceId < faceCount; faceId++) {
+    const face = getCellVertices(topology, 2, faceId);
+    if (face.length !== 4) continue;
+    for (let idx = 0; idx < 4; idx++) {
+      const edgeId = edgeIdBySignature.get(edgeSignature(face[idx], face[(idx + 1) % 4]));
+      const oppositeId = edgeIdBySignature.get(edgeSignature(face[(idx + 2) % 4], face[(idx + 3) % 4]));
+      if (edgeId === undefined || oppositeId === undefined || edgeId === oppositeId) continue;
+      let links = oppositeEdgesById.get(edgeId);
+      if (!links) {
+        links = new Set();
+        oppositeEdgesById.set(edgeId, links);
+      }
+      links.add(oppositeId);
+    }
+  }
+
+  const visited = new Set<number>();
+  const queue = seedEdgeIds.filter(edgeId => Number.isInteger(edgeId) && edgeId >= 0 && edgeId < edgeCount);
+  for (const edgeId of queue) visited.add(edgeId);
+  for (let read = 0; read < queue.length; read++) {
+    const edgeId = queue[read];
+    const links = oppositeEdgesById.get(edgeId);
+    if (!links) continue;
+    for (const nextId of links) {
+      if (visited.has(nextId)) continue;
+      visited.add(nextId);
+      queue.push(nextId);
+    }
+  }
+  return Array.from(visited).sort((a, b) => a - b);
+}
+
+export function loopCutEdges(
+  topology: CellTopology | undefined,
+  seedEdgeIds: number[],
+  vertexCount: number,
+  cutCount: number,
+): LoopCutEdgesResult | undefined {
+  if (!topology || vertexCount < 0) return undefined;
+  const levels = Math.max(1, Math.floor(cutCount));
+  const edgeCount = cellCount(topology, 1);
+  const validSeeds = seedEdgeIds
+    .filter(edgeId => Number.isInteger(edgeId) && edgeId >= 0 && edgeId < edgeCount)
+    .filter((edgeId, index, arr) => arr.indexOf(edgeId) === index);
+  if (!validSeeds.length) return undefined;
+
+  const loopEdgeIds = loopCutEdgePath(topology, validSeeds);
+  if (!loopEdgeIds.length) return undefined;
+
+  const highestDimension = maxCellDimension(topology);
+  const cutEdgeSet = new Set(loopEdgeIds);
+  const cutByEdgeId = new Map<number, LoopCutEdge>();
+  let nextVertex = vertexCount;
+  for (const edgeId of loopEdgeIds) {
+    const edge = getCellVertices(topology, 1, edgeId);
+    if (edge.length < 2) continue;
+    const cutVertices: number[] = [];
+    for (let level = 0; level < levels; level++) cutVertices.push(nextVertex++);
+    cutByEdgeId.set(edgeId, {
+      edgeId,
+      sourceA: edge[0],
+      sourceB: edge[1],
+      cutVertices,
+      segmentEdgeIds: [],
+    });
+  }
+  if (!cutByEdgeId.size) return undefined;
+
+  const cutForBoundary = (a: number, b: number) => {
+    for (const cut of cutByEdgeId.values()) {
+      if (cut.sourceA === a && cut.sourceB === b) return cut.cutVertices;
+      if (cut.sourceA === b && cut.sourceB === a) return cut.cutVertices.slice().reverse();
+    }
+    return [];
+  };
+  const isCutBoundary = (a: number, b: number) => cutForBoundary(a, b).length > 0;
+
+  const edgeCells: number[][] = [];
+  const edgeIdBySignature = new Map<string, number>();
+  const pushEdge = (a: number, b: number) => {
+    const signature = edgeSignature(a, b);
+    const existing = edgeIdBySignature.get(signature);
+    if (existing !== undefined) return existing;
+    const edgeId = edgeCells.length;
+    edgeCells.push([a, b]);
+    edgeIdBySignature.set(signature, edgeId);
+    return edgeId;
+  };
+
+  const oldEdges = cellVerticesForMutation(topology, 1);
+  oldEdges.forEach((edge, edgeId) => {
+    if (edge.length < 2) return;
+    const cut = cutByEdgeId.get(edgeId);
+    if (!cut) {
+      pushEdge(edge[0], edge[1]);
+      return;
+    }
+    const chain = [cut.sourceA, ...cut.cutVertices, cut.sourceB];
+    for (let idx = 0; idx < chain.length - 1; idx++) {
+      cut.segmentEdgeIds.push(pushEdge(chain[idx], chain[idx + 1]));
+    }
+  });
+
+  const faceCells: number[][] = [];
+  const faceSignatures = new Set<string>();
+  const cutLineEdgeSignatures = new Set<string>();
+  const pushFace = (face: number[]) => pushUniqueCell(faceCells, face, faceSignatures);
+  const splitQuadFace = (face: number[]) => {
+    const cutIndices: number[] = [];
+    for (let idx = 0; idx < 4; idx++) {
+      if (isCutBoundary(face[idx], face[(idx + 1) % 4])) cutIndices.push(idx);
+    }
+    if (cutIndices.length !== 2) return false;
+    const [first, second] = cutIndices;
+    if ((first + 2) % 4 !== second && (second + 2) % 4 !== first) return false;
+    const idx = first;
+    const a = face[idx];
+    const b = face[(idx + 1) % 4];
+    const c = face[(idx + 2) % 4];
+    const d = face[(idx + 3) % 4];
+    const sideA = [a, ...cutForBoundary(a, b), b];
+    const sideB = [d, ...cutForBoundary(d, c), c];
+    if (sideA.length !== sideB.length || sideA.length < 2) return false;
+    for (let segment = 0; segment < sideA.length - 1; segment++) {
+      pushFace([sideA[segment], sideA[segment + 1], sideB[segment + 1], sideB[segment]]);
+      if (segment < sideA.length - 2) {
+        cutLineEdgeSignatures.add(edgeSignature(sideA[segment + 1], sideB[segment + 1]));
+      }
+    }
+    return true;
+  };
+
+  const oldFaces = cellVerticesForMutation(topology, 2);
+  for (const face of oldFaces) {
+    if (face.length === 4 && splitQuadFace(face)) continue;
+    const expanded: number[] = [];
+    for (let idx = 0; idx < face.length; idx++) {
+      const a = face[idx];
+      const b = face[(idx + 1) % face.length];
+      expanded.push(a, ...cutForBoundary(a, b));
+    }
+    pushFace(expanded);
+  }
+  const cutLineEdgeIds: number[] = [];
+  for (const face of faceCells) {
+    for (let idx = 0; idx < face.length; idx++) {
+      const a = face[idx];
+      const b = face[(idx + 1) % face.length];
+      const edgeId = pushEdge(a, b);
+      if (cutLineEdgeSignatures.has(edgeSignature(a, b)) && !cutLineEdgeIds.includes(edgeId)) {
+        cutLineEdgeIds.push(edgeId);
+      }
+    }
+  }
+
+  const cellsByDim: number[][][] = Array.from({ length: Math.max(2, highestDimension) + 1 }, () => []);
+  cellsByDim[0] = Array.from({ length: nextVertex }, (_entry, vertex) => [vertex]);
+  cellsByDim[1] = edgeCells;
+  cellsByDim[2] = faceCells;
+  for (let dim = 3; dim <= highestDimension; dim++) {
+    const cells = cellVerticesForMutation(topology, dim);
+    cellsByDim[dim] = cells.map(cell => {
+      const cellSet = new Set(cell);
+      const next = [...cell];
+      for (const edgeId of cutEdgeSet) {
+        const cut = cutByEdgeId.get(edgeId);
+        if (!cut || !cellSet.has(cut.sourceA) || !cellSet.has(cut.sourceB)) continue;
+        for (const vertex of cut.cutVertices) {
+          if (!next.includes(vertex)) next.push(vertex);
+        }
+      }
+      return next;
+    });
+  }
+
+  return {
+    topology: {
+      cells: cellsByDim.map(cells => cells.length ? makeCellDim(cells) : undefined),
+      generatedKind: 'edited',
+      sourceDimension: topology.sourceDimension,
+    },
+    vertexCount: nextVertex,
+    edges: edgeListFromCells(edgeCells),
+    loopEdgeIds,
+    cutLineEdgeIds,
+    cuts: Array.from(cutByEdgeId.values()),
+  };
 }
 
 export function deleteCellAndPrune(

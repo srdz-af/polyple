@@ -11,6 +11,13 @@ type EditToolbarControllerOptions = {
   setCellDimension: (dimension: number) => void;
   canStartOperation: (request: EditOperationRequest) => boolean;
   startOperation: (request: EditOperationRequest) => void;
+  getOperationLevelState: () => {
+    label: string;
+    value: number;
+    min: number;
+    max: number;
+  } | null;
+  changeOperationLevel: (delta: number) => void;
 };
 
 function editCellDimensionIcon(dimension: number) {
@@ -35,6 +42,11 @@ export class EditToolbarController {
   private readonly bevelButton = document.getElementById('edit-bevel-button') as HTMLButtonElement | null;
   private readonly insetButton = document.getElementById('edit-inset-button') as HTMLButtonElement | null;
   private readonly extrudeButton = document.getElementById('edit-extrude-button') as HTMLButtonElement | null;
+  private readonly loopCutButton = document.getElementById('edit-loop-cut-button') as HTMLButtonElement | null;
+  private readonly levelControls = document.getElementById('edit-operation-level-controls') as HTMLDivElement | null;
+  private readonly levelDecreaseButton = document.getElementById('edit-level-decrease-button') as HTMLButtonElement | null;
+  private readonly levelIncreaseButton = document.getElementById('edit-level-increase-button') as HTMLButtonElement | null;
+  private readonly levelValue = document.getElementById('edit-operation-level-value') as HTMLSpanElement | null;
   private bound = false;
 
   constructor(private readonly options: EditToolbarControllerOptions) {}
@@ -45,6 +57,15 @@ export class EditToolbarController {
     this.bevelButton?.addEventListener('click', () => this.options.startOperation({ type: 'bevel', kind: 'edge' }));
     this.insetButton?.addEventListener('click', () => this.options.startOperation({ type: 'inset' }));
     this.extrudeButton?.addEventListener('click', () => this.options.startOperation({ type: 'extrude' }));
+    this.loopCutButton?.addEventListener('click', () => this.options.startOperation({ type: 'loopCut' }));
+    this.levelDecreaseButton?.addEventListener('click', () => {
+      this.options.changeOperationLevel(-1);
+      this.syncOperationButtons();
+    });
+    this.levelIncreaseButton?.addEventListener('click', () => {
+      this.options.changeOperationLevel(1);
+      this.syncOperationButtons();
+    });
   }
 
   sync() {
@@ -59,6 +80,27 @@ export class EditToolbarController {
     if (this.bevelButton) this.bevelButton.disabled = !this.options.canStartOperation({ type: 'bevel', kind: 'edge' });
     if (this.insetButton) this.insetButton.disabled = !this.options.canStartOperation({ type: 'inset' });
     if (this.extrudeButton) this.extrudeButton.disabled = !this.options.canStartOperation({ type: 'extrude' });
+    if (this.loopCutButton) this.loopCutButton.disabled = !this.options.canStartOperation({ type: 'loopCut' });
+    this.syncOperationLevelControls(visible);
+  }
+
+  private syncOperationLevelControls(visible: boolean) {
+    const state = visible ? this.options.getOperationLevelState() : null;
+    if (!this.levelControls) return;
+    this.levelControls.hidden = !state;
+    if (!state) return;
+
+    this.levelControls.title = state.label;
+    this.levelControls.setAttribute('aria-label', state.label);
+    if (this.levelValue) this.levelValue.textContent = String(state.value);
+    if (this.levelDecreaseButton) {
+      this.levelDecreaseButton.disabled = state.value <= state.min;
+      this.levelDecreaseButton.title = `Decrease ${state.label}`;
+    }
+    if (this.levelIncreaseButton) {
+      this.levelIncreaseButton.disabled = state.value >= state.max;
+      this.levelIncreaseButton.title = `Increase ${state.label}`;
+    }
   }
 
   private syncCellDimensionButtons() {
